@@ -1,0 +1,10 @@
+{
+  "board": "",
+  "phase": "0 intent",
+  "doing": "Waiting to hear what the board should do.",
+  "needs_user": "Describe the board: what it does, what plugs into it, how it is powered.",
+  "checks": {},
+  "gates_passed": [],
+  "links": [],
+  "updated": ""
+}

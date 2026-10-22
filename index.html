@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Board project</title>
+<style>
+:root {
+  --bg: #f6f7f9; --card: #ffffff; --line: #e2e5ea; --fg: #14171c;
+  --muted: #5f6875; --accent: #2f6feb; --up: #1a9c5b; --warn: #b7791f;
+  --down: #98a1ae; --chip: #eef1f5;
+  --shadow: 0 1px 2px rgba(16,20,28,.06), 0 4px 12px rgba(16,20,28,.05);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1116; --card: #171b22; --line: #262c36; --fg: #e6e9ee;
+    --muted: #8b94a3; --accent: #5b9bff; --up: #35c07d; --warn: #d9a441;
+    --down: #4d5563; --chip: #222833; --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  padding: 0 0 3rem;
+}
+header, main, footer { max-width: 1100px; margin: 0 auto; padding: 0 16px; }
+header { padding-top: 1.75rem; padding-bottom: 1rem; }
+.title { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+h1 { font-size: 1.5rem; margin: 0; letter-spacing: -.015em; }
+h2 {
+  font-size: .78rem; margin: 0 0 .6rem; text-transform: uppercase;
+  letter-spacing: .08em; color: var(--muted); font-weight: 650;
+}
+.state {
+  display: inline-flex; align-items: center; gap: .4rem; border-radius: 999px;
+  padding: .2rem .65rem; font-size: .76rem; font-weight: 600;
+  background: var(--chip); border: 1px solid var(--line); color: var(--muted);
+}
+.state .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--up); }
+.lede { color: var(--muted); margin: .55rem 0 0; }
+main { display: grid; gap: .9rem; }
+.card {
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 1rem 1.1rem 1.1rem; box-shadow: var(--shadow); min-width: 0;
+}
+.needs { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+.needs h2 { color: var(--warn); }
+.needs p { margin: 0; font-size: 1.05rem; }
+.cols { display: grid; gap: .9rem; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.gates { display: grid; grid-template-columns: repeat(11, 1fr); gap: 4px; }
+.gate {
+  text-align: center; padding: .35rem 0; border-radius: 6px; font-size: .78rem;
+  font-variant-numeric: tabular-nums; background: var(--chip); color: var(--muted);
+  border: 1px solid var(--line);
+}
+.gate.done { background: color-mix(in srgb, var(--up) 18%, var(--card)); color: var(--up); border-color: color-mix(in srgb, var(--up) 40%, var(--line)); font-weight: 650; }
+.gate.now { border-color: var(--accent); color: var(--accent); font-weight: 650; }
+.gate-names { color: var(--muted); font-size: .8rem; margin: .5rem 0 0; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: .25rem .9rem; margin: 0; }
+dt { color: var(--muted); }
+dd { margin: 0; font-variant-numeric: tabular-nums; }
+ul { margin: 0; padding-left: 1.15rem; }
+li { margin: .25rem 0; }
+.empty { color: var(--muted); font-style: italic; }
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em;
+  background: var(--chip); border: 1px solid var(--line);
+  border-radius: 5px; padding: .06em .35em;
+}
+a { color: var(--accent); }
+.viewer-head { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
+footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
+@media (max-width: 520px) { .gates { grid-template-columns: repeat(6, 1fr); } }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="title">
+    <h1 id="board">Board project</h1>
+    <span class="state"><span class="dot"></span><span id="phase">phase …</span></span>
+  </div>
+  <p class="lede" id="doing"></p>
+</header>
+
+<main>
+
+  <section class="card needs" id="needs-card" hidden>
+    <h2>Needs you</h2>
+    <p id="needs"></p>
+  </section>
+
+  <section class="card">
+    <h2>Gates</h2>
+    <div class="gates" id="gates"></div>
+    <p class="gate-names">0 intent · 1 parts · 2 schematic · 3 nets · 4 brief · 5 rules ·
+      6 placement · 7 routing · 8 simulation · 9 silkscreen · 10 release</p>
+  </section>
+
+  <div class="cols">
+    <section class="card">
+      <h2>Latest checks</h2>
+      <dl id="checks"></dl>
+    </section>
+    <section class="card">
+      <h2>Documents</h2>
+      <ul id="links">
+        <li><a href="design/intent.md">Design intent</a></li>
+        <li><a href="design/decisions.md">Decision log</a></li>
+        <li><a href="design/gates/">Gate files</a></li>
+      </ul>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="viewer-head">
+      <h2>Board</h2>
+      <a href="viewer/">All boards and variants →</a>
+    </div>
+    <!-- pcbview:begin -->
+    <p class="empty">No board yet. Once <code>hw/</code> has a KiCad project and
+    <code>pcbview.toml</code> lists it with <code>embed = "index.html"</code>,
+    <code>scripts/view.sh build pcbview.toml</code> puts the viewer here.</p>
+    <!-- pcbview:end -->
+  </section>
+
+</main>
+
+<footer>
+  Status from <code>design/status.json</code><span id="updated"></span>.
+  Built with the pcb-design skill and <a href="https://github.com/sequoia-hope/pcbview">pcbview</a>.
+</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+const text = (el, s) => { el.textContent = s; return el; };
+
+function render(s) {
+  if (s.board) { text($("board"), s.board); document.title = s.board; }
+  text($("phase"), "phase " + (s.phase || "?"));
+  text($("doing"), s.doing || "");
+  $("needs-card").hidden = !s.needs_user;
+  text($("needs"), s.needs_user || "");
+
+  const passed = new Set(s.gates_passed || []);
+  const now = parseInt(s.phase, 10);
+  for (let i = 0; i <= 10; i++) {
+    const g = text(document.createElement("div"), i);
+    g.className = "gate" + (passed.has(i) ? " done" : i === now ? " now" : "");
+    $("gates").append(g);
+  }
+
+  const checks = Object.entries(s.checks || {});
+  if (!checks.length) $("checks").append(text(document.createElement("dd"), "Nothing run yet."));
+  for (const [k, v] of checks) {
+    $("checks").append(text(document.createElement("dt"), k), text(document.createElement("dd"), v));
+  }
+
+  for (const l of s.links || []) {
+    const a = text(document.createElement("a"), l.label);
+    a.href = l.href;
+    const li = document.createElement("li");
+    li.append(a);
+    $("links").append(li);
+  }
+  if (s.updated) text($("updated"), ", updated " + s.updated);
+}
+
+fetch("design/status.json", { cache: "no-store" })
+  .then(r => r.json())
+  .then(render)
+  .catch(() => text($("doing"), "Couldn't read design/status.json. Serve the project with ./serve.sh rather than opening the file directly."));
+</script>
+</body>
+</html>

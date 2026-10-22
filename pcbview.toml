@@ -1,0 +1,22 @@
+# pcbview.toml -- every board and variant the viewer builds.
+#
+#     scripts/view.sh build pcbview.toml        ->  viewer/ (and the embed in index.html)
+#     scripts/view.sh models pcbview.toml       which parts lack a 3D model, and why
+#
+# Full option list: vendor/pcbview/README.md, "The config file".
+
+title = "My board"                     # the viewer's top bar
+subtitle = ""                          # e.g. your name or org
+out = "viewer"
+back = { href = "../index.html", label = "Project page" }
+# repo = "https://github.com/you/your-board"   # open-source projects only
+
+# One [[boards]] entry per board variant. Uncomment once hw/main/a/ exists.
+#
+# [[boards]]
+# id = "main-a"
+# name = "Main board, variant A"
+# pcb = "hw/main/a/main.kicad_pcb"
+# sch = "hw/main/a/main.kicad_sch"
+# note = "First layout."
+# embed = "index.html"                 # the board the project page shows

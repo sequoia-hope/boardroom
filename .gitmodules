@@ -1,0 +1,3 @@
+[submodule "vendor/pcbview"]
+	path = vendor/pcbview
+	url = https://github.com/sequoia-hope/pcbview
