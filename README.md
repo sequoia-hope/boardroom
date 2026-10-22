@@ -39,9 +39,9 @@ The details are in `.claude/skills/pcb-design/SKILL.md` and its `references/`.
 
 ## Start a board
 
-1. **Make your copy.** Click *Use this template* on GitHub, or:
+1. **Make your copy.** Click *Use this template* on [GitHub](https://github.com/sequoia-hope/easy_pcb) to create your own repo, then clone it:
    ```sh
-   git clone --recurse-submodules https://github.com/<you>/easy_pcb my-board
+   git clone --recurse-submodules https://github.com/<you>/<your-board> my-board
    cd my-board
    ```
    If you cloned without `--recurse-submodules`, run `git submodule update --init`.
@@ -86,3 +86,7 @@ git add vendor/pcbview && git commit -m "Bump pcbview"
 ## The skill learns
 
 When you correct Claude, it adds the correction to `.claude/skills/pcb-design/LESSONS.md` as a rule, and reads that file at the start of every session. Commit it with the rest of the project. If a lesson applies to every board, consider sending it upstream.
+
+## License
+
+MIT, see `LICENSE`. The license covers this template; the boards you make from it are yours to license as you like.
