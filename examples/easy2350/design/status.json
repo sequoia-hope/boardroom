@@ -1,0 +1,78 @@
+{
+  "board": "easy2350",
+  "phase": "10 release",
+  "doing": "Release review re-check: \"send it\". Fab files are ready in hw/easy2350/a/fab/.",
+  "needs_user": "Approve the release. Before ordering: get the JLC quote (economic vs standard PCBA, cost vs the US$15 target), select stackup JLC04161H-7628, check pin 1 of D3–D6, L1 and the ICs in JLC's preview (gate 10), and order while L1 is in stock.",
+  "checks": {
+    "DRC": "0 errors, 0 unconnected; 53 lib_footprint_mismatch warnings (board-local footprint copies), explained in gate 7",
+    "sync_check (sch/pcb/BOM/CPL)": "PASS, 54 parts to build",
+    "nets_check --rules --routed": "PASS (XIN 9.86 mm / 10, no vias)",
+    "placement_check": "PASS",
+    "silk_check": "PASS (overlaps, silk over vias, pin-1 marks)",
+    "stock": "all in stock, lifecycle normal; L1 128 (2026-10-24)",
+    "gerbers": "13 files parsed and rendered outside KiCad (gerbonara)"
+  },
+  "gates_passed": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9
+  ],
+  "links": [
+    {
+      "label": "Design intent",
+      "href": "design/intent.md"
+    },
+    {
+      "label": "Decisions",
+      "href": "design/decisions.md"
+    },
+    {
+      "label": "Gate 6 placement",
+      "href": "design/gates/phase6.md"
+    },
+    {
+      "label": "Gate 7 routing",
+      "href": "design/gates/phase7.md"
+    },
+    {
+      "label": "Gate 8 SI",
+      "href": "design/gates/phase8.md"
+    },
+    {
+      "label": "Gate 9 silkscreen",
+      "href": "design/gates/phase9.md"
+    },
+    {
+      "label": "Gate 10 release",
+      "href": "design/gates/phase10.md"
+    },
+    {
+      "label": "Release review",
+      "href": "design/gates/review-release.md"
+    },
+    {
+      "label": "Bring-up plan",
+      "href": "design/bringup.md"
+    },
+    {
+      "label": "Assembly drawing",
+      "href": "design/renders/assembly-top.pdf"
+    },
+    {
+      "label": "Renders",
+      "href": "design/renders/"
+    },
+    {
+      "label": "Fab files",
+      "href": "hw/easy2350/a/fab/"
+    }
+  ],
+  "updated": "2026-10-24"
+}

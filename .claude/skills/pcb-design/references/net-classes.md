@@ -36,7 +36,9 @@ Unnamed local nets inherit `SIGNAL` unless they connect to a power pin or carry 
 
 ## Derived values (computed by script from the CSV and stackup)
 
-- **Trace width** from i_cont using IPC-2152 with a temperature rise target (default 10 °C), for the actual copper weight and layer (internal layers run hotter).
+`python3 .claude/skills/pcb-design/scripts/nets_check.py hw/<board>/<variant>` checks coverage and prints the derived table for the gate file; from phase 5 add `--rules` so KiCad's net classes must match. From phase 7 add `--routed`: every `length_limit` is measured on the board (all the net's track copper) and a row whose reason says "no vias" fails if the net has one. Copper weights, via size and temperature rise come from `design/checks.toml` (set them from `stackup.md`).
+
+- **Trace width** from i_cont using IPC-2152 (Brooks & Adam fit, as KiCad's calculator) with a temperature rise target (default 10 °C), for the actual copper weight and layer (internal layers run hotter).
 - **Via count**: per-via current capacity from drill size and plating thickness; count = ceil(i_peak / per-via capacity × safety factor 1.5). Record this per net.
 - **Clearance** from v_max per IPC-2221 (and fab minimums).
 - **Simulation triggers**: any DIFF_HS, SE_HS over a length threshold, RF, SWITCH_HI near ANALOG, or POWER_HI with tight drop budget.

@@ -31,14 +31,39 @@ Placement determines most of the board's quality. Good placement makes routing n
 
 ## Placement check script (`scripts/placement_check.py`)
 
-Fails on:
-- passives whose position clusters on a single line or grid unrelated to their connected IC (detect: many same-type passives with collinear centroids and nearest-connected-pad distance above threshold)
-- decoupling cap farther than X mm (default 3 mm) from the nearest power pin on its net
-- crystal and load caps farther than X mm from oscillator pins
-- courtyard overlaps
-- parts outside board or in keepouts
-- ratsnest: total and per-net ratsnest length as a placement quality score (compare variants)
-- parts in `nets.csv` SWITCH/SWITCH_HI loops with loop area above threshold (approximate from pad positions)
+```sh
+python3 .claude/skills/pcb-design/scripts/placement_check.py hw/<board>/<variant>
+```
+
+- **decoupler**: each capacitor whose `Decouples` field (set in the schematic,
+  e.g. `U1.11`) names a pin has a pad within `[placement].decoupler_mm` of it.
+  The field is how the schematic says which pin a cap serves when the symbol
+  stacks pins.
+- **crystal**: each crystal pad within `[placement].crystal_mm` of its IC pin,
+  through one series resistor.
+- **row**: four or more same-footprint passives evenly spaced in a line (a
+  warning: a row of LEDs can be right).
+- **keep-apart**: pairs in `[placement].keep_apart`, body to body (e.g. an LDO
+  away from a crystal).
+- **outside**: every part inside the outline. Prints the total ratsnest length
+  to compare placements.
+
+## Placement for routability
+
+The router fails where placement left no way out. Before routing a fine-pitch
+IC, look at every pin's escape:
+
+- Nothing sits in front of a signal pin within ~1.5 mm: a decoupler placed at
+  its own pin can block the next pin's escape (keep it, move it a pad over,
+  or share it as the vendor does).
+- Copying a vendor layout? Copy its escape directions too: put nothing on the
+  diagonal a vendor route takes out of a corner pin.
+- Keep channels to the connectors: count the signals that must pass between
+  the IC and each header and leave them room on the outer layers, which are
+  the only routing layers when the inner two are planes.
+- Small parts with no position constraint (SWD resistors, status LEDs, test
+  points) go where nothing needs to pass, not in the nearest gap. A test
+  point with no part can go on the bottom.
 
 ## Visual review
 
@@ -57,3 +82,18 @@ Render top/bottom 2D and 3D with the ratsnest visible. Reviewer answers:
 - [ ] Datasheet layout guidelines followed per part (list)
 - [ ] Visual review passed
 - [ ] User reviewed placement render in PCB view
+
+## Layout rules from the audits become rule areas
+
+Every "no copper under …", "keep … clear" or "nothing within … of …" line in
+a part audit's layout guidance goes onto the board as a rule area when the
+part is placed, so DRC enforces it on every route. Text in an audit is not
+checked by anything: on the example, "no copper under the pixel's centre
+strip" (WS2812B-2020 metal polarity mark) was in the audit and the brief but
+not drawn, and every route put copper under all four pixels; no check or
+review caught it until a release fix looked.
+
+Also orient parts for their own signal flow: the pixels' DOUT faced away from
+the next DIN, so every hop had to cross under two bodies. Turned 180°, each
+hop is 2 mm on the top layer.
+

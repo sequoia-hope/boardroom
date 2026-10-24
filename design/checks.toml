@@ -1,0 +1,33 @@
+# checks.toml -- thresholds for the check scripts in .claude/skills/pcb-design/scripts/.
+#
+# Every key is optional; the defaults are in kicad_files.py (DEFAULTS). Change
+# one only with a comment giving the reason, and log it in decisions.md.
+
+# [fab]
+# min_track_mm = 0.127
+# min_clearance_mm = 0.127
+# min_silk_height_mm = 0.8
+# min_silk_width_mm = 0.15
+
+# [copper]                    # from stackup.md
+# outer_oz = 1.0
+# inner_oz = 0.5
+# via_drill_mm = 0.3
+# via_plating_mm = 0.020
+
+# [nets]
+# temp_rise_c = 10.0
+# via_safety = 1.5
+# clearance_table = "B2"      # IPC-2221 Table 6-1
+# extra_classes = []
+
+# [sync]
+# require_fields = ["LCSC"]   # every assembled part needs these
+
+# [silk]
+# designators = "all"         # all | selective | none, from brief.md
+# max_rotations = 2
+# connector_label_mm = 6.0
+# connector_prefixes = ["J", "P", "CN", "USB"]
+# identity = ["name", "rev", "date"]   # add "repo", "license" for open source
+# board_name = ""             # default: the board's title block title

@@ -1,0 +1,54 @@
+# checks.toml -- thresholds for the check scripts in .claude/skills/pcb-design/scripts/.
+#
+# Every key is optional; the defaults are in kicad_files.py (DEFAULTS). Change
+# one only with a comment giving the reason, and log it in decisions.md.
+
+# [fab]
+# min_track_mm = 0.127
+# min_clearance_mm = 0.127
+# min_silk_height_mm = 0.8
+# min_silk_width_mm = 0.15
+
+# [copper]                    # from stackup.md
+# outer_oz = 1.0
+# inner_oz = 0.5
+# via_drill_mm = 0.3
+# via_plating_mm = 0.020
+
+# [nets]
+# temp_rise_c = 10.0
+# via_safety = 1.5
+# clearance_table = "B2"      # IPC-2221 Table 6-1
+# extra_classes = []
+
+# [sync]
+# require_fields = ["LCSC"]   # every assembled part needs these
+
+# [silk]
+# designators = "all"         # all | selective | none, from brief.md
+# max_rotations = 2
+# connector_label_mm = 6.0
+# connector_prefixes = ["J", "P", "CN", "USB"]
+# identity = ["name", "rev", "date"]   # add "repo", "license" for open source
+# board_name = ""             # default: the board's title block title
+
+# ---- easy2350 settings (stackup.md, brief.md) ----
+
+[fab]
+min_track_mm = 0.09          # JLC 4-layer 1 oz: 0.09 (capabilities page, 2026-10-23); router neck-downs at QFN pads
+min_clearance_mm = 0.1       # JLC 4-layer 1 oz: 0.09
+min_via_drill_mm = 0.2       # 0.5/0.2 signal vias: JLC no surcharge with a >= 0.45 pad (stackup.md)
+
+[copper]
+outer_oz = 1.0               # JLC04161H-7628
+inner_oz = 0.5
+via_drill_mm = 0.3           # default via 0.6/0.3
+
+[silk]
+designators = "none"         # decisions.md: the top is too dense; labels + assembly drawing instead
+identity = ["name", "rev", "date", "repo", "license"]
+
+[placement]
+decoupler_mm = 4.5           # centre to centre; the vendor RP2350 layout we copy puts C12 (our C11) 4.1 mm from pin 53
+crystal_mm = 8.0             # vendor layout: Y1 12.4 mm below U1's centre; ours is 10 mm, XIN pad 7.4 mm from pin 21
+keep_apart = [["U3", "Y1", 5.0], ["U3", "D3", 5.0], ["U3", "J1", 0.5]]   # ldo-3v3.md: LDO heat away from crystal and pixels; J1 see decisions.md

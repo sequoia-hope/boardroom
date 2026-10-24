@@ -75,7 +75,7 @@ Detail for each phase lives in `references/`. Read the reference file for a phas
 ## At every gate
 
 1. Run the checks for the phase. Paste the actual output into the gate file. Never write "passed" for a check you did not run.
-2. Export renders (schematic SVG/PDF, per-layer copper, 3D) for anything visual.
+2. Export renders (schematic PDF, per-layer copper, top/bottom with silk, 3D) for anything visual: `scripts/render.py <hw dir> design/renders`. Look at them yourself before the reviewer does.
 3. Spawn an independent reviewer (see "Model routing" below) with only the artifacts and the checklist.
 4. Fix findings, or dispute them in `decisions.md` with reasoning. Re-review if anything significant changed.
 5. Update `design/status.json` and regenerate the viewer (`scripts/view.sh build pcbview.toml`) so the user can see the new state from their phone.

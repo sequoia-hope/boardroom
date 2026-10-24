@@ -17,7 +17,11 @@ vendor/pcbview/              the viewer, pinned as a git submodule
 scripts/doctor.sh            checks KiCad, Python and the rest are installed
 scripts/view.sh              builds the viewer
 serve.sh                     serves the project page
+examples/easy2350/           a worked example: an RP2350A board taken through the gates
 ```
+
+New to the flow? Read [`examples/easy2350/`](examples/easy2350/) first: it shows what each gate
+produces on a real board.
 
 ## The phases
 

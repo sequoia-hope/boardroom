@@ -1,0 +1,62 @@
+net,class,v_max,i_cont,i_peak,impedance,length_limit,reason
+VBUS,POWER,5.5,0.5,0.75,,,"USB input: 500 mA budget (intent.md); peak covers hot-plug charging of the 7.5 uF on VBUS (ldo-3v3.md; C2 raised to 2.2 uF, decisions.md)"
++3V3,POWER,3.6,0.28,0.4,,,"LDO output: 277 mA max load budget (intent.md, ldo-3v3.md)"
++1V1,POWER,1.3,0.2,0.4,,,RP2350 core from its own regulator; regulator rated 200 mA (rp2350-core.md); copper copied from the vendor layout
+VLED,POWER,5.3,0.16,0.2,,,"Pixel rail, 4 x 36 mA at full white +10 % (rgb-leds.md)"
+GND,POWER,0,0.5,1.0,,,Return for everything; plane
+VREG_LX,SWITCH,3.6,0.2,0.4,,5,"RP2350 regulator switch node: smallest area, vendor zone geometry, layer-2 cut-out (chips/rp2350.md)"
+VREG_AVDD,POWER,3.6,0.01,0.02,,10,Regulator analog supply behind the 33 R / 4.7 uF RC (rp2350-core.md)
+USB_DP_C,DIFF_HS,3.6,,,90 diff,20,"USB FS D+, connector to ESD array; pair with USB_DM_C"
+USB_DM_C,DIFF_HS,3.6,,,90 diff,20,"USB FS D-, connector to ESD array"
+USB_DP,DIFF_HS,3.6,,,90 diff,20,"USB FS D+, ESD array to 27 R"
+USB_DM,DIFF_HS,3.6,,,90 diff,20,"USB FS D-, ESD array to 27 R"
+USB_DP_MCU,DIFF_HS,3.6,,,90 diff,5,"27 R to RP2350 pin 52; resistor at the chip (hardware design guide); 5 mm: the vendor copy measures 4.10 mm (si-review.md §3)"
+USB_DM_MCU,DIFF_HS,3.6,,,90 diff,5,"27 R to RP2350 pin 51; 5 mm as D+"
+QSPI_SCLK,SE_HS,3.6,,,,25,"Flash clock, up to 133 MHz (flash.md); short, over solid ground"
+QSPI_SD0,SE_HS,3.6,,,,25,Flash data
+QSPI_SD1,SE_HS,3.6,,,,25,Flash data
+QSPI_SD2,SE_HS,3.6,,,,25,Flash data
+QSPI_SD3,SE_HS,3.6,,,,25,Flash data
+QSPI_SS,SE_HS,3.6,,,,25,Flash chip select; also BOOTSEL through 1 k
+XIN,CLOCK,3.6,,,,10,"12 MHz crystal: L1 only over solid L2, no vias; 10 mm because Y1 pad 1 sits 7.4 mm from pin 21 (decisions.md)"
+XOUT,CLOCK,3.6,,,,5,XOUT to the 1 k at the chip
+XOUT_R,CLOCK,3.6,,,,5,Crystal side of the 1 k
+CC1,SIGNAL,5.5,,,,,Type-C Rd; may see 5 V VCONN from a cable (usb-front-end.md)
+CC2,SIGNAL,5.5,,,,,Type-C Rd
+RUN,SIGNAL,3.6,,,,,"Reset, slow; header pin 30 and SW2"
+SWCLK,SIGNAL,3.6,,,,,"SWD clock to J4, direct (series resistors removed, decisions.md)"
+SWDIO,SIGNAL,3.6,,,,,SWD data to J4
+LED_DIN,SIGNAL,5.3,,,,,"Pixel data at VLED logic, 800 kb/s"
+PIX12,SIGNAL,5.3,,,,,Pixel 1 to 2 data
+PIX23,SIGNAL,5.3,,,,,Pixel 2 to 3 data
+PIX34,SIGNAL,5.3,,,,,Pixel 3 to 4 data
+GPIO0,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO1,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO2,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO3,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO4,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO5,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO6,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO7,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO8,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO9,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO10,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO11,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO12,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO13,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO14,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO15,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO16,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO17,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO18,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO19,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO20,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO21,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO22,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO23,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO24,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO25,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO26,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO27,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO28,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+GPIO29,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)

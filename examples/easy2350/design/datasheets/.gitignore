@@ -1,0 +1,3 @@
+# Datasheets are the manufacturers' copyright: fetch them, do not commit them.
+# scripts/jlc_parts.py fetch-list design/datasheets/sources.csv
+*.pdf

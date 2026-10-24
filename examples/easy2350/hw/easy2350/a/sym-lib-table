@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "easy2350")(type "KiCad")(uri "${KIPRJMOD}/lib/easy2350.kicad_sym")(options "")(descr "easy2350 project symbols"))
+)

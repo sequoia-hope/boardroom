@@ -1,1 +1,1 @@
-net,class,current_a,voltage_v,reason
+net,class,v_max,i_cont,i_peak,impedance,length_limit,reason

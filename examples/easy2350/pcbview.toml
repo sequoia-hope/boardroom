@@ -1,0 +1,17 @@
+# pcbview.toml -- the example board's viewer. From the repo root:
+#
+#     scripts/view.sh build examples/easy2350/pcbview.toml
+
+title = "easy2350"
+subtitle = "easy_pcb worked example"
+out = "viewer"
+back = { href = "../index.html", label = "Project page" }
+repo = "https://github.com/sequoia-hope/easy_pcb"
+
+[[boards]]
+id = "easy2350-a"
+name = "easy2350, variant A"
+pcb = "hw/easy2350/a/easy2350.kicad_pcb"
+sch = "hw/easy2350/a/easy2350.kicad_sch"
+note = "First layout: 4-layer, parts on top, RP2350 power block copied from Raspberry Pi's minimal board."
+embed = "index.html"

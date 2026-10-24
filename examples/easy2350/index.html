@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>easy2350</title>
+<style>
+:root {
+  --bg: #f6f7f9; --card: #ffffff; --line: #e2e5ea; --fg: #14171c;
+  --muted: #5f6875; --accent: #2f6feb; --up: #1a9c5b; --warn: #b7791f;
+  --down: #98a1ae; --chip: #eef1f5;
+  --shadow: 0 1px 2px rgba(16,20,28,.06), 0 4px 12px rgba(16,20,28,.05);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1116; --card: #171b22; --line: #262c36; --fg: #e6e9ee;
+    --muted: #8b94a3; --accent: #5b9bff; --up: #35c07d; --warn: #d9a441;
+    --down: #4d5563; --chip: #222833; --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  padding: 0 0 3rem;
+}
+header, main, footer { max-width: 1100px; margin: 0 auto; padding: 0 16px; }
+header { padding-top: 1.75rem; padding-bottom: 1rem; }
+.title { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+h1 { font-size: 1.5rem; margin: 0; letter-spacing: -.015em; }
+h2 {
+  font-size: .78rem; margin: 0 0 .6rem; text-transform: uppercase;
+  letter-spacing: .08em; color: var(--muted); font-weight: 650;
+}
+.state {
+  display: inline-flex; align-items: center; gap: .4rem; border-radius: 999px;
+  padding: .2rem .65rem; font-size: .76rem; font-weight: 600;
+  background: var(--chip); border: 1px solid var(--line); color: var(--muted);
+}
+.state .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--up); }
+.lede { color: var(--muted); margin: .55rem 0 0; }
+main { display: grid; gap: .9rem; }
+.card {
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 1rem 1.1rem 1.1rem; box-shadow: var(--shadow); min-width: 0;
+}
+.needs { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+.needs h2 { color: var(--warn); }
+.needs p { margin: 0; font-size: 1.05rem; }
+.cols { display: grid; gap: .9rem; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.gates { display: grid; grid-template-columns: repeat(11, 1fr); gap: 4px; }
+.gate {
+  text-align: center; padding: .35rem 0; border-radius: 6px; font-size: .78rem;
+  font-variant-numeric: tabular-nums; background: var(--chip); color: var(--muted);
+  border: 1px solid var(--line);
+}
+.gate.done { background: color-mix(in srgb, var(--up) 18%, var(--card)); color: var(--up); border-color: color-mix(in srgb, var(--up) 40%, var(--line)); font-weight: 650; }
+.gate.now { border-color: var(--accent); color: var(--accent); font-weight: 650; }
+.gate-names { color: var(--muted); font-size: .8rem; margin: .5rem 0 0; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: .25rem .9rem; margin: 0; }
+dt { color: var(--muted); }
+dd { margin: 0; font-variant-numeric: tabular-nums; }
+ul { margin: 0; padding-left: 1.15rem; }
+li { margin: .25rem 0; }
+.empty { color: var(--muted); font-style: italic; }
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em;
+  background: var(--chip); border: 1px solid var(--line);
+  border-radius: 5px; padding: .06em .35em;
+}
+a { color: var(--accent); }
+.viewer-head { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
+footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
+@media (max-width: 520px) { .gates { grid-template-columns: repeat(6, 1fr); } }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="title">
+    <h1 id="board">Board project</h1>
+    <span class="state"><span class="dot"></span><span id="phase">phase …</span></span>
+  </div>
+  <p class="lede" id="doing"></p>
+</header>
+
+<main>
+
+  <section class="card needs" id="needs-card" hidden>
+    <h2>Needs you</h2>
+    <p id="needs"></p>
+  </section>
+
+  <section class="card">
+    <h2>Gates</h2>
+    <div class="gates" id="gates"></div>
+    <p class="gate-names">0 intent · 1 parts · 2 schematic · 3 nets · 4 brief · 5 rules ·
+      6 placement · 7 routing · 8 simulation · 9 silkscreen · 10 release</p>
+  </section>
+
+  <div class="cols">
+    <section class="card">
+      <h2>Latest checks</h2>
+      <dl id="checks"></dl>
+    </section>
+    <section class="card">
+      <h2>Documents</h2>
+      <ul id="links">
+        <li><a href="design/intent.md">Design intent</a></li>
+        <li><a href="design/decisions.md">Decision log</a></li>
+        <li><a href="design/gates/">Gate files</a></li>
+      </ul>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="viewer-head">
+      <h2>Board</h2>
+      <a href="viewer/">All boards and variants →</a>
+    </div>
+    <!-- pcbview:begin -->
+<!-- written by pcbview (python3 -m pcbview build pcbview.toml): change the config, not this -->
+<link rel="stylesheet" href="viewer/assets/viewer.css">
+<section class="vw" data-pv-embed aria-label="easy2350, variant A: schematic, PCB and 3D">
+  <div class="vw-bar">
+    <div class="vw-left"><button data-vw="layers" aria-pressed="true"
+      title="show or hide the side panel"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8 14.2 5 8 8.2 1.8 5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M1.8 8 8 11.2 14.2 8M1.8 11 8 14.2 14.2 11" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg><span>Panel</span></button></div>
+    <div class="vw-tabs" role="tablist" aria-label="view"><button role="tab" data-tab="schematic" aria-controls="schematic" aria-selected="false">SCH</button><button role="tab" data-tab="copper" aria-controls="copper" aria-selected="true">PCB</button><button role="tab" data-tab="board3d" aria-controls="board3d" aria-selected="false">3D</button></div>
+    <div class="vw-tools">
+      <button data-vw="info" title="about this board" aria-label="about this board"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 7.2v4.2M8 4.6v.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
+      <button data-vw="full" title="full screen" aria-label="full screen"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 2h4.5v4.5M14 2 9 7M6.5 14H2V9.5M2 14l5-5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    </div>
+  </div>
+  
+  <div class="vw-panel" id="schematic" data-dir="viewer/easy2350-a/sch/" role="tabpanel" hidden>
+    <div class="cu sch">
+      <div class="cu-panel">
+        <p class="cu-head">Sheets</p>
+        <div id="sch-sheets"></div>
+        <div class="cu-row">
+          <button data-sch="out" title="zoom out">&minus;</button>
+          <button data-sch="fit" title="the whole sheet">fit</button>
+          <button data-sch="in" title="zoom in">+</button>
+          <span class="sub" id="sch-zoom">1.0&times;</span>
+        </div>
+        <div class="cu-row"><a class="a3-btn" id="sch-pdf" download hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8v8.4M4.4 6.8 8 10.4l3.6-3.6M2 12v2.2h12V12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg><span>PDF, every sheet</span></a></div>
+        <p class="sub cu-note" id="sch-cap"></p>
+        <p class="cu-hint">Keys: <b>+</b> and <b>&minus;</b> zoom, <b>0</b> fit.
+        Drag to pan; scroll or double-click to zoom.</p>
+      </div>
+      <div class="cu-canvas">
+        <div class="sch-plate" id="sch-plate">
+          <div class="sch-pan" id="sch-pan"><img id="sch-img" alt="" draggable="false"></div>
+          <p class="b3-msg" id="sch-msg" hidden></p>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <div class="vw-panel" id="copper" data-dir="viewer/easy2350-a/layers/" data-parts="viewer/easy2350-a/3d/parts.json" role="tabpanel">
+    <div class="cu">
+      <div class="cu-panel">
+        <div id="cu-layers"></div>
+        <p class="cu-hint" style="margin-top:.3rem">The dot puts a layer on top at full
+        opacity; the box says whether it is drawn at all.</p>
+        <div class="cu-row">
+          <button data-act="all" title="show every layer">all</button>
+          <button data-act="none" title="show only the selected layer">none</button>
+          <button data-act="solo" title="the selected layer and the outline only">solo</button>
+          <button data-act="grid" title="the copper layers side by side">grid</button>
+        </div>
+        <label class="cu-ctl">opacity of the unselected copper
+          <input type="range" id="cu-dim" min="0" max="60" value="16"></label>
+        <label class="cu-ctl"><input type="checkbox" id="cu-mirror">
+          view from the back (mirrored)</label>
+        <div class="cu-row">
+          <button data-act="out" title="zoom out">&minus;</button>
+          <button data-act="fit" title="fit the board">fit</button>
+          <button data-act="in" title="zoom in">+</button>
+          <span class="sub" id="cu-zoom">1.0&times;</span>
+        </div>
+        <p class="cu-note" id="cu-note"></p>
+        <p class="cu-read" id="cu-read"></p>
+        <p class="cu-hint">Keys: <b>1</b>&ndash;<b>9</b> pick a layer, <b>s</b> solo,
+        <b>a</b> all, <b>m</b> mirror, <b>0</b> fit. Click a part for its pane;
+        coordinates are pcbnew&rsquo;s, in millimetres.</p>
+        <p class="cu-hint" id="cu-stats"></p>
+      </div>
+      <div class="cu-canvas">
+        <div class="cu-plate" id="cu-plate">
+          <div class="cu-pan" id="cu-pan"><div class="cu-flip" id="cu-flip"></div></div>
+          <div class="cu-scale"><i id="cu-bar"></i><span id="cu-barlab"></span></div>
+          <div class="cu-back" id="cu-back"></div>
+          <p class="b3-msg" id="cu-fallback" hidden></p>
+        </div>
+        <div class="cu-grid" id="cu-gridbox" hidden></div>
+      </div>
+      <aside class="b3-info pv-pane" id="cu-info" aria-label="the selected part" hidden>
+        <div class="b3-ih"><b class="pv-iref"></b><button class="b3-x" title="close"
+          aria-label="close the part pane">&times;</button></div>
+        <div class="b3-ib pv-ib"></div>
+      </aside>
+    </div>
+  </div>
+  
+  <div class="vw-panel" id="board3d" data-dir="viewer/easy2350-a/3d/" role="tabpanel" hidden>
+    <div class="b3">
+      <div class="b3-bar">
+        <div class="cu-row" role="group" aria-label="view">
+          <button data-view="front" title="the front face, as pcbnew draws it">front</button>
+          <button data-view="back" title="the back face, turned over left to right">back</button>
+          <button data-view="tilt" title="from the front, tilted towards you">tilted</button>
+          <button data-view="edge" title="edge on: how tall each face stands">edge</button>
+        </div>
+        <div class="b3-layers" id="b3-layers"></div>
+        <label class="b3-find">find <input id="b3-find" list="b3-refs" placeholder="U1"
+          disabled spellcheck="false" autocomplete="off" title="a reference, e.g. U1"></label>
+        <datalist id="b3-refs"></datalist>
+      </div>
+      <div class="b3-body">
+        <div class="b3-stage" id="b3-stage">
+          <p class="b3-msg" id="b3-msg">The model loads when this tab is open.</p>
+          <div class="b3-tag" id="b3-tag" hidden></div>
+        </div>
+        <aside class="b3-info pv-pane" id="b3-info" aria-label="the selected part" hidden>
+          <div class="b3-ih"><b class="pv-iref"></b><button class="b3-x" title="close"
+            aria-label="close the part pane">&times;</button></div>
+          <div class="b3-ib pv-ib"></div>
+        </aside>
+      </div>
+      <p class="b3-facts" id="b3-facts"></p>
+    </div>
+  </div>
+  
+  <div class="vw-panel pv-over" id="overview" role="tabpanel" hidden>
+    <div class="pv-card">
+      <h1>easy2350, variant A</h1>
+      <p class="pv-lede">First layout: 4-layer, parts on top, RP2350 power block copied from Raspberry Pi's minimal board.</p>
+      <dl class="pv-facts"><dt>Source</dt><dd><code>hw/easy2350/a/easy2350.kicad_pcb</code><br><code>hw/easy2350/a/easy2350.kicad_sch</code></dd><dt>Board</dt><dd>21 &times; 51 mm<small>4 copper layers, 1.6 mm thick</small></dd><dt>Parts</dt><dd>58 footprints<small>55 on the front, 3 on the back</small></dd><dt>Copper</dt><dd>72 nets, 819 track segments, 138 vias<small>1,017 mm of routed track</small></dd><dt>Schematic</dt><dd>1 sheet<small>A3</small></dd><dt>3D</dt><dd>51 of 58 parts drawn from a model<small>3 through an older KiCad&rsquo;s library variable (<code>${KICAD6_3DMODEL_DIR}</code> and so on), read as KiCad 9&rsquo;s library</small><small>1 name no model (TP3)</small></dd><dt>Drawn as boxes</dt><dd><span class="warn">D3&ndash;D6</span><small><code>${KICAD9_3DMODEL_DIR}/LED_SMD.3dshapes/LED_WS2812B-2020_PLCC4_2.0x2.0mm.step</code>: no such file</small><span class="warn">J1</span><small><code>${KICAD9_3DMODEL_DIR}/Connector_USB.3dshapes/USB_C_Receptacle_HRO_TYPE-C-31-M-12.step</code>: no such file</small><span class="warn">L1</span><small><code>${KICAD7_3DMODEL_DIR}/Inductor_SMD.3dshapes/AOTA-B201610SR47MT.STEP</code>: no such file</small><small>a box the size of the courtyard stands in for each; a <code>[models]</code> entry in the project file can name a stand-in model</small></dd></dl>
+      <p class="cu-hint">Built 2026-10-24 09:20 by pcbview from the KiCad files above:
+      <code>python3 -m pcbview build pcbview.toml</code>. Nothing here is drawn by hand &mdash; the layer plots, the model and the
+      sheets are KiCad&rsquo;s own exports.</p>
+    </div>
+  </div>
+</section>
+<script src="viewer/assets/parts.js" defer></script>
+<script src="viewer/assets/gesture.js" defer></script>
+<script src="viewer/assets/viewer.js" defer></script>
+<script src="viewer/assets/copper.js" defer></script>
+<script src="viewer/assets/sch.js" defer></script>
+<script type="importmap">{"imports": {"three": "./viewer/assets/vendor/three.module.js"}}</script>
+<script type="module" src="viewer/assets/board3d.js"></script>
+<!-- pcbview:end -->
+  </section>
+
+</main>
+
+<footer>
+  Status from <code>design/status.json</code><span id="updated"></span>.
+  Built with the pcb-design skill and <a href="https://github.com/sequoia-hope/pcbview">pcbview</a>.
+</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+const text = (el, s) => { el.textContent = s; return el; };
+
+function render(s) {
+  if (s.board) { text($("board"), s.board); document.title = s.board; }
+  text($("phase"), "phase " + (s.phase || "?"));
+  text($("doing"), s.doing || "");
+  $("needs-card").hidden = !s.needs_user;
+  text($("needs"), s.needs_user || "");
+
+  const passed = new Set(s.gates_passed || []);
+  const now = parseInt(s.phase, 10);
+  for (let i = 0; i <= 10; i++) {
+    const g = text(document.createElement("div"), i);
+    g.className = "gate" + (passed.has(i) ? " done" : i === now ? " now" : "");
+    $("gates").append(g);
+  }
+
+  const checks = Object.entries(s.checks || {});
+  if (!checks.length) $("checks").append(text(document.createElement("dd"), "Nothing run yet."));
+  for (const [k, v] of checks) {
+    $("checks").append(text(document.createElement("dt"), k), text(document.createElement("dd"), v));
+  }
+
+  for (const l of s.links || []) {
+    const a = text(document.createElement("a"), l.label);
+    a.href = l.href;
+    const li = document.createElement("li");
+    li.append(a);
+    $("links").append(li);
+  }
+  if (s.updated) text($("updated"), ", updated " + s.updated);
+}
+
+fetch("design/status.json", { cache: "no-store" })
+  .then(r => r.json())
+  .then(render)
+  .catch(() => text($("doing"), "Couldn't read design/status.json. Serve the project with ./serve.sh rather than opening the file directly."));
+</script>
+</body>
+</html>

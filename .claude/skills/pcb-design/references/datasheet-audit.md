@@ -52,7 +52,28 @@ Anything where a value is chosen: feedback dividers, current-sense shunts and th
 
 ## Sourcing
 
-Default to JLCPCB assembly. Prefer basic parts; each extended part adds a setup fee, so note it. Record LCSC number, stock count, and the date checked. Flag anything with low stock or "not recommended for new designs". For work projects, follow the user's internal part library instead.
+Default to JLCPCB assembly. Prefer basic parts; each extended part adds a setup fee, so note it. For work projects, follow the user's internal part library instead.
+
+Look every part up with the script, never from memory or a search-result snippet:
+
+```sh
+S=.claude/skills/pcb-design/scripts
+python3 $S/jlc_parts.py search "WS2812B-2020"        # candidates, most stock first
+python3 $S/jlc_parts.py show C52917434 C1525         # the line for the audit's Supplier field
+```
+
+`show` prints the library type (basic or extended), JLC stock, the LCSC lifecycle and today's date, and flags anything not orderable. Paste that line into the audit. The first search hit is often not the part to use: for "WS2812B-2020" it was the original part number, discontinued with zero stock, while the -V6 successor had 800k in stock. A part whose lifecycle isn't `normal`, or whose stock is under what the build needs, fails phase 1 however good its datasheet is.
+
+### Getting the datasheet
+
+In order, before giving up on a part:
+
+1. `jlc_parts.py fetch C123 -o design/datasheets/part.pdf`: LCSC's copy. It works for most parts, including those whose maker's site blocks scripts (ST, onsemi, LCSC's own product pages).
+2. `jlc_parts.py fetch https://maker.example/part.pdf -o ...`: the maker's URL; it retries with `wget`, which some sites accept when they refuse other clients.
+3. `wget -U Mozilla/5.0 -O design/datasheets/part.pdf <url>` by hand, for a page that needs a redirect followed.
+4. Only then ask the user to attach it. A part audit that says "UNVERIFIED: couldn't fetch the datasheet" is not a finished audit.
+
+List every datasheet in `design/datasheets/sources.csv` (`file,source`, where source is an LCSC number or URL). `jlc_parts.py fetch-list design/datasheets/sources.csv` re-downloads them all. In an open-source repo, gitignore the PDFs (they are the makers' copyright) and commit `sources.csv`. Anyone who clones the repo gets the same set back with that one command.
 
 ## Gate checklist (phase 1)
 
@@ -62,5 +83,6 @@ Default to JLCPCB assembly. Prefer basic parts; each extended part adds a setup 
 - [ ] Every chosen value has a shown calculation
 - [ ] MLCC derating checked
 - [ ] Every footprint matches the exact package suffix of the MPN
-- [ ] Sourcing confirmed with date
+- [ ] Sourcing confirmed with `jlc_parts.py show` output and date; no part flagged
+- [ ] Every datasheet listed in `datasheets/sources.csv`
 - [ ] Independent reviewer re-read each datasheet and recomputed each calculation (see review-protocol.md)
