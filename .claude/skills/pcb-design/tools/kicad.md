@@ -8,7 +8,7 @@ Default for the user's open-source boards. Check the installed version first (`k
 - **IPC API (kipy, KiCad 9+)** or legacy `pcbnew` Python: placement, zones, via arrays, net classes, footprint edits. Prefer the IPC API where available.
 - **File formats**: `.kicad_sch` / `.kicad_pcb` are S-expressions. Parsing them directly is fine for checks (style, silk, sync scripts). For writes, prefer the API; if editing files directly, use a proper S-expression library, preserve UUIDs, and re-open in KiCad to validate.
 - **Custom DRC rules**: `.kicad_dru` file with net class and area conditions. Put every derived rule here with a comment citing its source.
-- **Freerouting** for autorouting: export DSN, run Freerouting headless, import SES. Lock pre-routed tracks first. Always run it governed: `nice`, `-mt` of half the cores or fewer, a heap and memory cap, and a time budget (see `references/routing.md`).
+- **ultraroute** for autorouting (`vendor/ultraroute`, run through `scripts/route.sh` and the skill's `autoroute.py`): it reads and writes `.kicad_pcb` directly, takes rules and net classes from the `.kicad_pro`, keeps locked copper and honours rule areas. No DSN/SES round trip. Lock pre-routed tracks first. Always run it governed (see `references/routing.md`). Freerouting is no longer used.
 - **Image converter / bitmap2component** for silk art.
 - **JLC**: use the JLC fields (`LCSC`) on symbols and a rotation correction (e.g. the JLCPCB fabrication plugin or a per-part rotation offset field) for CPL.
 
@@ -39,7 +39,8 @@ Each of these cost time on the example board; the scripts work around them.
 - **Flipped footprints rotate the other way.** A header flipped to the back
   needs 180° where the front needed 0° to run in the same direction.
 - **`ImportSpecctraSES` takes a via's drill from the net class,** not the
-  padstack Freerouting chose. `autoroute.py` repairs thin rings.
+  padstack the session chose (thin rings). Only matters if a Specctra router
+  is ever used again; ultraroute writes the board itself.
 - **KiCad 7 boards keep reference and value as `fp_text`,** not properties;
   `kicad_files.load_board` reads both.
 - **`NETINFO_ITEM.GetNetClass()` is not wrapped.** Read net classes and

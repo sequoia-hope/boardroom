@@ -60,3 +60,7 @@ GPIO26,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
 GPIO27,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
 GPIO28,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
 GPIO29,SIGNAL,3.6,,,,,GPIO to header; 12 mA max per pin (intent.md)
+Net-(D1-A),SIGNAL,3.6,0.002,,,,"R9 to the status LED D1's anode, about 2 mA (intent.md)"
+Net-(R7-Pad2),SIGNAL,3.6,,,,,"BOOTSEL: SW1 through R7 (1 k) to QSPI_SS"
+Net-(R8-Pad2),SIGNAL,3.6,,,,,"RESET: SW2 through R8 (1 k) to RUN"
+Net-(U4-Y),SIGNAL,5.3,,,,,"Level shifter U4 output to the 33 R series resistor R10, VLED logic (as LED_DIN)"

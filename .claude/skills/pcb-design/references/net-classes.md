@@ -15,7 +15,7 @@ USB_DP,DIFF_HS,3.3,,,90 diff,,"USB FS/HS"
 I2C_SDA,SIGNAL,3.3,,,,,"Slow bus"
 ```
 
-Unnamed local nets inherit `SIGNAL` unless they connect to a power pin or carry significant current; check them.
+Every net that joins two or more pins gets a row, including the ones KiCad names itself (`Net-(D1-A)`): name it in the schematic if it matters, or give the row KiCad's name. Most are `SIGNAL`; one on a power pin or carrying real current is not. nets_check fails a missing row.
 
 ## Classes
 

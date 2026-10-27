@@ -234,6 +234,20 @@ class Nets(Case):
         self.csv().write_text(self.csv().read_text() + 'BOGUS,SIGNAL,3.3,,,,,"not a net"\n')
         self.assert_fails(self.run_check("nets_check.py"), "coverage")
 
+    def test_unnamed_net(self):
+        # Without its label LED_A is a net KiCad names itself; it still needs a row.
+        sch = self.root / "hw" / "blinky" / "a" / "blinky.kicad_sch"
+        text = sch.read_text()
+        start = text.index('\t(label "LED_A"')
+        sch.write_text(text[:start] + text[text.index("\n\t)\n", start) + 4:])
+        self.replace(self.csv(), 'LED_A,SIGNAL,5.5,,,,,"Resistor to LED anode"\n', "")
+        self.assert_fails(self.run_check("nets_check.py"), "coverage")
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from kicad_files import load_schematic
+        auto = [n.name for n in load_schematic(sch).nets if n.name.startswith("Net-(") and len(n.nodes) > 1]
+        self.csv().write_text(self.csv().read_text() + f'{auto[0]},SIGNAL,5.5,,,,,"Resistor to LED anode"\n')
+        self.assert_pass(self.run_check("nets_check.py"))
+
     def test_unknown_class(self):
         self.replace(self.csv(), "LED_A,SIGNAL", "LED_A,WIGGLY")
         self.assert_fails(self.run_check("nets_check.py"), "class")

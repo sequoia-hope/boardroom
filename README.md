@@ -14,6 +14,7 @@ hw/                          KiCad projects, one per board variant: hw/<board>/<
 pcbview.toml                 which boards the viewer builds
 index.html                   the project page: status plus the embedded board viewer
 vendor/pcbview/              the viewer, pinned as a git submodule
+vendor/ultraroute/           the autorouter, pinned as a git submodule (scripts/route.sh builds it)
 scripts/doctor.sh            checks KiCad, Python and the rest are installed
 scripts/view.sh              builds the viewer
 serve.sh                     serves the project page
@@ -54,7 +55,7 @@ The details are in `.claude/skills/pcb-design/SKILL.md` and its `references/`.
    ```sh
    scripts/doctor.sh
    ```
-   You need KiCad 9+ (`kicad-cli`), Python 3.11+ and numpy. KiCad's Python module, Java (for the Freerouting autorouter) and ngspice are recommended.
+   You need KiCad 9+ (`kicad-cli`), Python 3.11+ and numpy. KiCad's Python module and ngspice are recommended. Routing needs Rust (`cargo`): the autorouter, [ultraroute](https://github.com/sequoia-hope/ultraroute), is pinned as a submodule and `scripts/route.sh` builds it on first use.
 
 3. **Serve the project page** in a second terminal, on any free port:
    ```sh
@@ -80,12 +81,17 @@ scripts/view.sh models pcbview.toml      # which parts have no 3D model, and why
 
 `viewer/` is gitignored. To publish the page with GitHub Pages, remove that line from `.gitignore` and commit the build.
 
-## Updating pcbview
+## Updating pcbview and ultraroute
 
 ```sh
 git -C vendor/pcbview pull
 git add vendor/pcbview && git commit -m "Bump pcbview"
+git -C vendor/ultraroute pull                  # scripts/route.sh rebuilds on the next run
+git add vendor/ultraroute && git commit -m "Bump ultraroute"
 ```
+
+A new ultraroute can route a board differently: re-run phase 7 and its gate
+after bumping it, rather than mixing a new router with an old route.
 
 ## The skill learns
 

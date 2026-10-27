@@ -1,7 +1,7 @@
 {
   "board": "easy2350",
   "phase": "10 release",
-  "doing": "Release review re-check: \"send it\". Fab files are ready in hw/easy2350/a/fab/.",
+  "doing": "Routing moves to ultraroute (vendor/ultraroute, pinned 574caac). The board here is still the Freerouting route that passed gates 7-9. ultraroute now routes it completely with VBUS at full width (.kicad_dru rule), but its vias beside J2 pins 7-11 leave no room for the GP7/GP8 bottom labels (silk_check). Reserving those spots as hard keepouts leaves 3-4 connections open, so a soft via-avoid area has been asked of ultraroute; then re-route and re-run gates 7-10.",
   "needs_user": "Approve the release. Before ordering: get the JLC quote (economic vs standard PCBA, cost vs the US$15 target), select stackup JLC04161H-7628, check pin 1 of D3–D6, L1 and the ICs in JLC's preview (gate 10), and order while L1 is in stock.",
   "checks": {
     "DRC": "0 errors, 0 unconnected; 53 lib_footprint_mismatch warnings (board-local footprint copies), explained in gate 7",
@@ -74,5 +74,5 @@
       "href": "hw/easy2350/a/fab/"
     }
   ],
-  "updated": "2026-10-24"
+  "updated": "2026-10-26"
 }

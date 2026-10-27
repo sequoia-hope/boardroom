@@ -4,7 +4,7 @@
     python3 scripts/board.py sync        Update PCB from Schematic (keeps placement)
     python3 scripts/board.py outline     outline, 4 layers, connectors (phase 4)
     python3 scripts/board.py place       every part at its planned position (phase 6)
-    python3 scripts/board.py route       planes, then Freerouting via autoroute.py (phase 7)
+    python3 scripts/board.py route       planes, then ultraroute via autoroute.py (phase 7)
     python3 scripts/board.py finish      pours, stitching vias, fill (phase 7)
 
 Each stage re-runs the earlier ones it depends on; every number comes from
@@ -404,14 +404,16 @@ def stage_place():
 # ---------------------------------------------------------------- planes (phase 7)
 
 PLANE_TAG = "plane"
+SOFT_TAG = "soft-novia"   # ultraroute: vias cost a detour here but are allowed
 
 
 def stage_zones(pours: bool = True, keepouts: bool = True):
     """Ground on L2 (and filling L1/L4), 3V3 on L3 under the RP2350 and flash,
     and the layer-2 cut-out under VREG_LX (stackup.md, chips/rp2350.md).
-    With pours=False only the L2 plane and the cut-out: Freerouting treats
-    every zone as an obstacle to other nets, so the L1/L3/L4 pours go in after
-    routing."""
+    With pours=False only the L2 and L3 planes and the cut-out, for routing:
+    the router keeps tracks off the plane layers and joins their nets through
+    the fill, and the L1/L4 pours go in after routing (a full-board outer pour
+    is copper every other net must route round)."""
     b = pcbnew.LoadBoard(str(PCB))
     zones = list(b.Zones())
     fps = {fp.GetReference(): fp for fp in b.GetFootprints()}
@@ -437,7 +439,7 @@ def stage_zones(pours: bool = True, keepouts: bool = True):
     cut.BooleanAdd(pad_poly)
     cut.Inflate(pcbnew.FromMM(0.3), pcbnew.CORNER_STRATEGY_ROUND_ALL_CORNERS, pcbnew.FromMM(0.01))
     for z in zones:
-        if z.GetZoneName().startswith(PLANE_TAG):
+        if z.GetZoneName().startswith((PLANE_TAG, SOFT_TAG)):
             b.Remove(z)
 
     def box(x0, y0, x1, y1):
@@ -514,12 +516,13 @@ def stage_zones(pours: bool = True, keepouts: bool = True):
         bb = ps.BBox()
         bb.Inflate(pcbnew.FromMM(0.15))
         p = tx.GetPosition()
-        if tx.GetHorizJustify() == pcbnew.GR_TEXT_H_ALIGN_RIGHT and pcbnew.ToMM(p.y) - Y0 < PIN1 + 2.54 * 10.5:
-            # J2 pins 1-11: GPIO0-5 drop to L4 beside these labels to get past
-            # the flash. Reserved (even at 0.6 mm wide, tight) the router left
-            # GPIO0/1 unrouted, twice. Unreserved; finish moves any via that
-            # lands under one (via_nudge.py) and the silk stage nudges the text
-            continue
+        # J2 pins 1-11: GPIO0-5 drop to L4 beside these labels to get past
+        # the flash. As no-via areas the router left 3-4 connections open on
+        # every seed (Freerouting twice, ultraroute 574caac seeds 0-3), so
+        # they are soft: a via there costs the router a detour but is allowed
+        # (KiCad ignores the area). finish moves any via that still lands
+        # under one (via_nudge.py) and the silk stage nudges the text
+        soft = tx.GetHorizJustify() == pcbnew.GR_TEXT_H_ALIGN_RIGHT and pcbnew.ToMM(p.y) - Y0 < PIN1 + 2.54 * 10.5
         poly = pcbnew.SHAPE_POLY_SET()
         poly.NewOutline()
         for x, y in ((bb.GetLeft(), bb.GetTop()), (bb.GetRight(), bb.GetTop()),
@@ -537,12 +540,12 @@ def stage_zones(pours: bool = True, keepouts: bool = True):
                     hole.Append(x, y)
                 poly.BooleanSubtract(hole)
         z = pcbnew.ZONE(b)
-        z.SetZoneName(f"{PLANE_TAG} silk {tx.GetText()}")
+        z.SetZoneName(f"{SOFT_TAG if soft else PLANE_TAG} silk {tx.GetText()}")
         z.SetLayerSet(pcbnew.LSET.AllCuMask())
         z.SetIsRuleArea(True)
         z.SetDoNotAllowCopperPour(False)
         z.SetDoNotAllowTracks(False)
-        z.SetDoNotAllowVias(True)
+        z.SetDoNotAllowVias(not soft)
         z.SetDoNotAllowPads(False)
         z.SetDoNotAllowFootprints(False)
         poly.thisown = False
@@ -675,55 +678,37 @@ def stage_padvias():
             sys.exit(r.stderr[-2000:])
 
 
-def stage_route(tries: int = 1):
+def stage_route():
     """Autoroute everything not already copper (routing.md) with the skill's
-    autoroute.py: L2 is the GND plane and L3 the 3V3 plane, signals on L1 and
-    L4; then finish_route.py for what Freerouting leaves. autoroute.py tries
-    its settings variants one at a time (governed) and keeps the best.
-    Each step runs in its own process (pcbnew loads one board per process)."""
-    import shutil
+    autoroute.py, which runs ultraroute (vendor/ultraroute) governed, a few
+    seeds in turn, judged by KiCad: L2 is the GND plane and L3 the 3V3 plane,
+    signals on L1 and L4. Each step runs in its own process (pcbnew loads one
+    board per process)."""
     import subprocess
 
     def run(cmd):
         r = subprocess.run(cmd, capture_output=True, text=True)
-        print("\n".join(l for l in r.stdout.splitlines()
-                        if "leak" not in l and "Debug" not in l and "note:" not in l
-                        and not l.rstrip().endswith("(Freerouting's count)")))
+        print("\n".join(l for l in r.stdout.splitlines() if "leak" not in l and "Debug" not in l))
         return r.returncode
 
     # Finish-stage copper from an earlier run (the locked VBUS twins) must not
     # be routed through: the next finish replaces it and cuts the route.
     run([sys.executable, str(SKILL / "stitch.py"), str(HW), "--net", "VBUS", "--tag", "twin VBUS"])
-    best, keep = None, PCB.with_suffix(".best")
-    for attempt in range(1, tries + 1):
-        run([sys.executable, __file__, "unroute"])    # the old route would block pad-via spots
-        run([sys.executable, __file__, "zones-for-routing"])
-        run([sys.executable, __file__, "padvias"])
-        if run([sys.executable, str(SKILL / "autoroute.py"), str(HW), "--planes", "In1.Cu,In2.Cu",
-                "--variants", "16"]):
-            # Finish what Freerouting left with the maze router, with the routing
-            # keepouts gone (they stop the copied zones filling) and before the
-            # outer pours (obstacles to every other net).
-            run([sys.executable, __file__, "zones-bare"])
-            run([sys.executable, __file__, "fill"])
-            run([sys.executable, str(SKILL / "finish_route.py"), str(HW), "--clear"])
-        else:
-            run([sys.executable, __file__, "zones-bare"])
-        left = signals_unrouted()
-        print(f"route: attempt {attempt}: {left} signal connections unrouted")
-        if best is None or left < best:
-            best = left
-            shutil.copy(PCB, keep)
-        if left == 0:
-            break
-    shutil.copy(keep, PCB)
-    keep.unlink()
-    print(f"route: best attempt leaves {best} signal connections unrouted")
+    run([sys.executable, __file__, "unroute"])    # the old route would block pad-via spots
+    run([sys.executable, __file__, "zones-for-routing"])
+    run([sys.executable, __file__, "padvias"])
+    run([sys.executable, __file__, "fill"])       # the router joins plane nets through the fill
+    # A 35 um grid: the default 50 um left the QFN's 0.4 mm pitch escapes short of room.
+    run([sys.executable, str(SKILL / "autoroute.py"), str(HW), "--planes", "In1.Cu,In2.Cu",
+         "--extra", "--cell 0.035"])
+    # The routing keepouts go before the outer pours (they stop the copied zones filling).
+    run([sys.executable, __file__, "zones-bare"])
+    print(f"route: {signals_unrouted()} signal connections unrouted")
 
 
 def stage_unroute():
     """Remove every unlocked track and via (an earlier route) before the pad vias
-    go in: they must find their spots on the pre-route board, as autoroute.py
+    go in: they must find their spots on the pre-route board, as the router
     clears it anyway (an old route once left C25/C27 without a ground via)."""
     b = pcbnew.LoadBoard(str(PCB))
     gone = [t for t in b.GetTracks() if not t.IsLocked()]

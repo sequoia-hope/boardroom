@@ -6,9 +6,9 @@
     nets_check.py hw/main/a --nets path.csv --json out.json
     nets_check.py hw/main/a --rules --routed  phase 7+: routed lengths too
 
-Checks every named schematic net has a row and every row names a real net,
-every row has a known class and a reason, and unnamed nets don't touch power
-pins. Then derives, per row, the trace width (IPC-2152, Brooks & Adam fit),
+Checks every schematic net has a row (KiCad's own Net-(...) names too, where
+they join two or more pins) and every row names a real net, every row has a
+known class and a reason, and unnamed nets don't touch power pins. Then derives, per row, the trace width (IPC-2152, Brooks & Adam fit),
 via count and clearance (IPC-2221 Table 6-1) and prints the table for the
 gate file. With --rules, each net's KiCad net class must equal its CSV class
 and that class's track width and clearance must cover the derived values;
@@ -137,6 +137,9 @@ def main() -> int:
     named = {n.name: n for n in sch.nets if n.named}
     # /VCC may be written VCC, unless a separate global VCC exists too.
     by_norm = {norm(n): net for n, net in named.items() if norm(n) == n or norm(n) not in named}
+    # Nets KiCad named itself (Net-(D1-A)) that join two or more pins: classified
+    # too, under KiCad's name, unless the schematic gives them one.
+    auto = {n.name: n for n in sch.nets if not n.named and len(n.nodes) > 1}
     table = {}
     for row in rows:
         name = row["net"].strip()
@@ -150,8 +153,13 @@ def main() -> int:
     for name in sorted(named):
         if name not in table and not (by_norm.get(norm(name)) is named[name] and norm(name) in table):
             rep.error("coverage", f"schematic net {name} has no row in {nets_path.name}")
+    for name in sorted(auto):
+        if name not in table:
+            refs = ", ".join(f"{r}.{p}" for r, p, _ in auto[name].nodes)
+            rep.error("coverage", f"unnamed net {name} ({refs}) has no row in {nets_path.name}; "
+                                  "name it in the schematic, or add a row under this name")
     for name in sorted(table):
-        if name not in named and name not in by_norm:
+        if name not in named and name not in by_norm and name not in auto:
             rep.error("coverage", f"{nets_path.name} row {name} is not a net in the schematic")
 
     # Unnamed nets on power pins should be named and classified.
@@ -191,7 +199,7 @@ def main() -> int:
         vias = math.ceil((ipk or i) * nc["via_safety"] / per_via) if (ipk or i) else 1
         clr = max(spacing_mm(v or 0, nc["clearance_table"]), fab["min_clearance_mm"])
 
-        sch_net = named.get(name) or by_norm.get(name)
+        sch_net = named.get(name) or by_norm.get(name) or auto.get(name)
         assigned = kicad_classes(sch_net) if sch_net else []
         if cls == "SIGNAL" and assigned == ["Default"]:
             assigned = ["SIGNAL"]  # KiCad's Default class is the SIGNAL class

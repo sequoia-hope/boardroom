@@ -27,12 +27,20 @@ if [[ -x "$root/vendor/pcbview/bin/pcbview" || -n "${PCBVIEW:-}" ]]; then
 else
   bad "pcbview" "git submodule update --init"
 fi
+if [[ -f "$root/vendor/ultraroute/core/Cargo.toml" || -n "${ULTRAROUTE:-}" ]]; then
+  ok "ultraroute ($(git -C "$root/vendor/ultraroute" describe --always 2>/dev/null || echo "\$ULTRAROUTE"))"
+else
+  bad "ultraroute" "git submodule update --init"
+fi
+if [[ -n "${ULTRAROUTE:-}" ]] || command -v cargo >/dev/null; then
+  ok "cargo (builds ultraroute, the autorouter)"
+else
+  bad "cargo" "install Rust (https://rustup.rs): scripts/route.sh builds the autorouter with it"
+fi
 
 echo "Recommended"
 python3 -c 'import pcbnew' 2>/dev/null && ok "KiCad python module (pcbnew)" \
   || warn "pcbnew" "KiCad's python module: without it the viewer falls back to the Edge.Cuts bounding box"
-command -v java >/dev/null && ok "java (for Freerouting)" \
-  || warn "java" "the autorouter (Freerouting) needs a JRE 21+"
 command -v ngspice >/dev/null && ok "ngspice" \
   || warn "ngspice" "needed for phase 8 simulations"
 

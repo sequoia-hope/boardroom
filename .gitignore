@@ -21,3 +21,6 @@ __pycache__/
 
 # per-machine launcher
 launch.sh
+
+# ultraroute, built by scripts/route.sh
+build/

@@ -8,7 +8,7 @@ Claude is bad at hand-routing by picking coordinates. So route in this order, an
 2. **Via arrays** for every net with a via count from `nets.csv`: stitch power pours between layers at the points where current transfers, with the computed count. Place as arrays (script-generated grids within a zone), not single vias.
 3. **Short critical connections by hand, only when short.** Gate drive, crystal, shunt Kelvin sense, switch node: these should be a few mm thanks to placement. Route them directly with straight or single-bend tracks.
 4. **Differential and impedance-controlled pairs** with the tool's diff pair router or interactive router; keep on one layer over solid reference; length match per rules.
-5. **Autorouter for everything else** (Freerouting for KiCad, Situs/ActiveRoute for Altium) with full net class rules loaded. Lock everything routed in steps 1–4 first so the autorouter can't disturb it. Always run it governed; see "Running the autorouter without hurting the host" below.
+5. **Autorouter for everything else** (ultraroute for KiCad, Situs/ActiveRoute for Altium) with full net class rules loaded. Lock everything routed in steps 1–4 first so the autorouter can't disturb it. Always run it governed; see "Running the autorouter without hurting the host" below.
 6. **Cleanup**: remove autorouter artifacts (acute angles, unnecessary vias, long detours), re-pour zones.
 7. **Ground stitching vias** around the board edge and between ground pours, and around RF/sensitive areas.
 
@@ -19,12 +19,15 @@ What routed the example board (`examples/easy2350`, RP2350A QFN-60, 4 layers,
 
 1. **Copy what the vendor says to copy** before anything routes:
    `transplant.py` (power blocks, zones, spokes, short critical pairs such as
-   USB from pin to series resistor). Locked. Freerouting does not know a
-   differential pair; the vendor's copper does.
+   USB from pin to series resistor). Locked. The vendor's copper is the
+   reference layout; the router's own pair routing (`--diff-pairs`) does
+   the rest of a pair.
 2. **Planes first, and only planes.** Whole-board GND and power planes on the
    inner layers, present while routing, so the router drops vias into them.
    A power pour added after routing leaves islands the router never joined.
-   Mark plane layers so nothing routes on them (`autoroute.py --planes`).
+   Mark plane layers so nothing routes on them (`autoroute.py --planes`),
+   and fill the planes before routing: ultraroute joins a plane net's pads
+   and vias through the fill.
 3. **Routing-only keepouts** where the vendor layout must stay clean (inside
    an MCU's pad ring, the regulator corner): tracks-only rule areas, removed
    before the pours. A no-pour rule area also stops the protected zones
@@ -34,8 +37,8 @@ What routed the example board (`examples/easy2350`, RP2350A QFN-60, 4 layers,
 4a. **Critical connections drawn, locked, in a group** (step 3 above): the
    crystal pins to the crystal and its load caps on L1 only, the USB pair
    from the receptacle to the ESD array, any net the placement makes short
-   but the router would wander on. Freerouting cost-optimises: on the
-   example it took XIN through two vias and 6 mm of L4, looped D+ 7 mm past
+   but the router would wander on. A router cost-optimises: on the
+   example Freerouting took XIN through two vias and 6 mm of L4, looped D+ 7 mm past
    the flash clock, and ran a pixel-to-pixel link 25 mm under the MCU. Draw
    them from pad positions, not typed coordinates, and re-run DRC on the
    locked copper alone (delete unlocked tracks in a scratch copy) before
@@ -71,13 +74,22 @@ What routed the example board (`examples/easy2350`, RP2350A QFN-60, 4 layers,
    Every capacitor's pad on a plane net needs one too (the router leaves
    plane-net pads to vias, and after routing there may be no room: the
    example's flash decoupler C22 ended up unconnected).
-5. `autoroute.py`: Freerouting with several layer-cost settings, one at a
-   time, governed (below), keeping the best. It routes to the clearances plus
-   0.01 mm (`--clearance-margin`): Freerouting lands a few microns under the
-   rule it was given, which DRC reports. 0.02 mm cost the example a net. Its defaults can leave a layer
-   almost unused while signals fail for room.
-6. `finish_route.py`: a small maze router (with rip-up) for the last one or
-   two connections Freerouting stalls on.
+5. `autoroute.py`: ultraroute (`vendor/ultraroute`, pinned; `scripts/route.sh`
+   builds it) with locked copper kept (`--strip` takes only unlocked
+   tracks), negotiated congestion, rip-up, fan-out of fine-pitch parts, the
+   plough search for trapped pins, differential pairs and pull-tight. Seeds
+   are tried one at a time until KiCad, after a zone refill, reports no
+   signal open and no error the route added; the best is kept. Judge by
+   KiCad, never by the router's own count (it counts plane nets as open
+   before the fill). Parts don't move unless `--nudge` is given: placement
+   passed its gate, and a move goes back to it.
+   On the example, Freerouting needed 16 settings variants and a maze
+   finisher, about 50 minutes a route; ultraroute takes about a minute a seed.
+6. Changing ultraroute's pin (`git -C vendor/ultraroute pull`) can change the
+   route: re-run phase 7 after a bump. Results depend on `--threads` (1 is
+   one negotiation order, 2+ another, the same for any count) and on
+   `--timeout` (later stages share out the time): keep both fixed for a
+   board, as `autoroute.py` does.
 7. Pours, then `stitch.py --grid --fix`: ground stitching on a grid, a via in
    every pour fragment, and vias for pads and tracks the router left on a
    plane net without one, all clear of the silk (place silk first). Then
@@ -97,31 +109,23 @@ stuck and where they leave the IC, and move what blocks them.
 
 ## Running the autorouter without hurting the host
 
-Autorouters default to taking the whole machine: Freerouting's `-mt` defaults to one fewer than the number of cores, with no memory or time bound. Run it unthrottled on every new project and it pegs the desktop. Every autorouter run is governed. No exceptions, including "just a quick test".
+Autorouters default to taking the whole machine. Run one unthrottled on every new project and it pegs the desktop. Every autorouter run is governed. No exceptions, including "just a quick test".
 
-- **One autorouter run at a time per machine.** Never launch routes in parallel to try variants; queue them. `autoroute.py` tries its variants in turn and stops at the first complete route.
+- **One autorouter run at a time per machine.** Never launch routes in parallel to try variants; queue them. `autoroute.py` tries its seeds in turn and stops at the first complete route.
 - **Low priority:** `nice -n 15`.
-- **Threads:** at most half the cores, e.g. `-mt $(( $(nproc) / 2 ))`. Use `-mt 1` unless you have a measured reason.
-- **Memory:** a hard ceiling via a systemd scope, plus a JVM heap cap for Freerouting.
-- **Time:** a wall-clock budget (`timeout`). Start with 10 minutes; raise it only if a run times out with progress still being made.
-- **Good enough is done:** stop at 0 unrouted and a clean DRC. Don't burn extra passes chasing via counts.
+- **Threads:** at most half the cores. Use 1 unless you have a measured reason (and see step 6: the thread count changes the route).
+- **Memory:** a hard ceiling via a systemd scope, with swap off so a runaway dies alone. The example board peaks at ~0.5 GB.
+- **Time:** a wall-clock budget. The router's own `--timeout` (240 s by default in `autoroute.py`) plus a `timeout` two minutes longer as the backstop.
+- **Good enough is done:** stop at 0 open and no new errors. Don't burn seeds chasing via counts.
 
-Freerouting:
-
-```bash
-systemd-run --user --scope --quiet -p MemoryMax=6G -p CPUQuota=$(( $(nproc) / 2 * 100 ))% \
-  nice -n 15 timeout 600 \
-  java -Xmx4g -jar freerouting.jar -de board.dsn -do board.ses -mp 100 -mt 1
-```
-
-If copperroute is installed, it governs itself by default: niceness 10, half the cores, and a memory ceiling of half the RAM available at start. At that ceiling it stops routing and still writes the session. Give it an explicit budget anyway:
+By hand (what `autoroute.py` runs):
 
 ```bash
-copperroute route board.kicad_pcb --kicad-project board.kicad_pro -o board.ses \
-  --timeout 600 --max-passes 100 --max-memory 4G
+systemd-run --user --scope --quiet -p MemoryMax=6G -p MemorySwapMax=0 -p CPUQuota=100% \
+  nice -n 15 timeout 360 \
+  scripts/route.sh route board.kicad_pcb -o out.kicad_pcb --strip --negotiate --rip-up --tighten \
+    --prefanout --diff-pairs --planes In1.Cu,In2.Cu --seed 0 --threads 1 --timeout 240
 ```
-
-Its environment overrides are `COPPERROUTE_NICE`, `COPPERROUTE_MAX_MEMORY` and `COPPERROUTE__ROUTER__MAX_THREADS`. Never set them to remove the limits (`--max-memory off`, `--nice 0`) unless the user asks.
 
 If a run hits its time or memory budget, report that, along with the unrouted count. Don't silently retry with bigger limits. Usually the fix is placement, rules or layer count, not more compute.
 
