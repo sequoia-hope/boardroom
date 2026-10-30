@@ -3,6 +3,7 @@
   import Overview from './lib/Overview.svelte';
   import Docs from './lib/Docs.svelte';
   import Renders from './lib/Renders.svelte';
+  import BoardView from './lib/board/BoardView.svelte';
 
   // ---- remembered per viewer (window mode, last project, theme) ----
   const remember = (key, fallback) => {
@@ -80,7 +81,7 @@
       if (msg.type === 'select') {
         if (msg.project === selId) {
           selection = msg;
-          if (msg.from !== 'composer') composerFrame?.contentWindow?.postMessage({ type: 'select', board: msg.board, refs: msg.refs }, location.origin);
+          if (msg.from !== 'composer') composerFrame?.contentWindow?.postMessage({ type: 'select', board: msg.board, refs: msg.refs }, '*');
         }
         return;
       }
@@ -95,7 +96,8 @@
   // server joins the bus, Boardroom relays it there for every other window.
   $effect(() => {
     const onMessage = (e) => {
-      if (e.origin !== location.origin || e.data?.source !== 'circuit-composer' || e.data.type !== 'select') return;
+      const composerOrigin = new URL(api.COMPOSER, location.href).origin;
+      if (e.origin !== composerOrigin || e.data?.source !== 'circuit-composer' || e.data.type !== 'select') return;
       const msg = { type: 'select', from: 'composer', project: selId, board: e.data.board, refs: e.data.refs ?? [] };
       selection = msg;
       sendBus(msg);
@@ -103,6 +105,15 @@
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
   });
+
+  // A selection made in Boardroom itself (the Board tab): shown, sent to the
+  // bus for other windows, and passed to an embedded Composer.
+  function select(refs, from = 'boardroom') {
+    const msg = { type: 'select', from, project: selId, board: sel?.boards[0]?.board ?? sel?.name, refs };
+    selection = msg;
+    sendBus(msg);
+    composerFrame?.contentWindow?.postMessage({ type: 'select', board: msg.board, refs }, '*');
+  }
 
   const composerBoard = $derived(sel?.boards[0]?.board ?? sel?.board ?? sel?.name);
   const composerUrl = (embed) =>
@@ -125,7 +136,7 @@
   function choose(p) {
     selId = p.id;
     view = 'project';
-    if (tab === 'viewer' && !p.viewer) tab = 'overview';
+    if ((tab === 'viewer' || tab === 'board') && !p.viewer) tab = 'overview';
   }
 
   async function act(what) {
@@ -203,6 +214,7 @@
 
   const tabs = $derived([
     ['overview', 'Overview'],
+    ...(sel?.viewer ? [['board', 'Board']] : []),
     ['gates', 'Gates'],
     ['documents', 'Documents'],
     ['renders', 'Renders'],
@@ -359,7 +371,7 @@
         {/each}
       </nav>
 
-      <div class="body" class:flush={tab === 'viewer' || tab === 'composer'}>
+      <div class="body" class:flush={tab === 'viewer' || tab === 'composer' || tab === 'board'}>
         {#if !sel.exists}
           <p class="err">This folder is missing: <span class="mono">{sel.path}</span></p>
         {:else if sel.error}
@@ -372,6 +384,8 @@
             <Docs project={sel} filter={(f) => f.startsWith('design/gates/') && !f.endsWith('README.md')} bind:selected={gateDoc} titles={gateTitles} />
           {:else if tab === 'documents'}
             <Docs project={sel} filter={(f) => !f.startsWith('design/gates/')} bind:selected={doc} titles={docTitles} />
+          {:else if tab === 'board'}
+            <BoardView project={sel} selected={selection?.project === sel.id ? (selection.refs ?? []) : []} onselect={(refs) => select(refs)} />
           {:else if tab === 'renders'}
             <Renders project={sel} />
           {:else if tab === 'composer'}
@@ -663,6 +677,8 @@
   .body.flush {
     padding: 0;
     display: flex;
+    min-height: 0;
+    overflow: hidden;
   }
 
   .viewer {

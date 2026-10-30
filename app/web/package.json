@@ -6,14 +6,17 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "build:pages": "VITE_STATIC=1 vite build --outDir dist-pages"
+    "build:pages": "VITE_STATIC=1 vite build --outDir dist-pages",
+    "smoke": "node tests/smoke.mjs"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "playwright-core": "1.48.2",
     "svelte": "5.57.2",
     "vite": "8.3.4"
   },
   "dependencies": {
-    "marked": "15.0.12"
+    "marked": "15.0.12",
+    "three": "0.169.0"
   }
 }
