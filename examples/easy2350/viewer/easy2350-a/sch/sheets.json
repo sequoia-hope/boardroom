@@ -1,0 +1,20 @@
+{
+ "schematic": "easy2350.kicad_sch",
+ "pdf": "easy2350.pdf",
+ "sheets": [
+  {
+   "sheet": "root",
+   "title": "easy2350",
+   "desc": "RP2350A dev board, 21 x 51 mm \u00b7 58 symbols",
+   "file": "easy2350.svg",
+   "source": "easy2350.kicad_sch",
+   "paper": "A3",
+   "page": "1",
+   "symbols": 58,
+   "size_mm": [
+    419.989,
+    297.0022
+   ]
+  }
+ ]
+}

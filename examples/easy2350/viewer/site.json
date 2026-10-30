@@ -1,0 +1,18 @@
+{
+ "title": "easy2350",
+ "built": "2026-10-26T19:51:23",
+ "config": "pcbview.toml",
+ "boards": [
+  {
+   "id": "easy2350-a",
+   "name": "easy2350, variant A",
+   "page": "index.html",
+   "embed": "index.html",
+   "source": {
+    "kind": "file",
+    "pcb": "hw/easy2350/a/easy2350.kicad_pcb",
+    "sch": "hw/easy2350/a/easy2350.kicad_sch"
+   }
+  }
+ ]
+}

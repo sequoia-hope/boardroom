@@ -1,0 +1,81 @@
+{
+ "board": "easy2350.kicad_pcb",
+ "generated": "2026-10-26",
+ "glb": "board.glb",
+ "bytes": 2703540,
+ "kicad_bytes": 13400160,
+ "parts": 58,
+ "modelled": 51,
+ "no_model": [
+  "TP3"
+ ],
+ "missing": [
+  "D3",
+  "D4",
+  "D5",
+  "D6",
+  "J1",
+  "L1"
+ ],
+ "empty": [],
+ "substituted": [],
+ "resolved": [
+  "C14",
+  "C15",
+  "U1"
+ ],
+ "flattened": [],
+ "boxed": [
+  "D3",
+  "D4",
+  "D5",
+  "D6",
+  "J1",
+  "L1"
+ ],
+ "why": {
+  "D5": "no such file",
+  "D3": "no such file",
+  "D6": "no such file",
+  "J1": "no such file",
+  "L1": "no such file",
+  "D4": "no such file"
+ },
+ "missing_models": [
+  "${KICAD7_3DMODEL_DIR}/Inductor_SMD.3dshapes/AOTA-B201610SR47MT.STEP",
+  "${KICAD9_3DMODEL_DIR}/Connector_USB.3dshapes/USB_C_Receptacle_HRO_TYPE-C-31-M-12.step",
+  "${KICAD9_3DMODEL_DIR}/LED_SMD.3dshapes/LED_WS2812B-2020_PLCC4_2.0x2.0mm.step"
+ ],
+ "boxes": [
+  {
+   "model": "${KICAD9_3DMODEL_DIR}/LED_SMD.3dshapes/LED_WS2812B-2020_PLCC4_2.0x2.0mm.step",
+   "why": "no such file",
+   "refs": [
+    "D3",
+    "D4",
+    "D5",
+    "D6"
+   ]
+  },
+  {
+   "model": "${KICAD9_3DMODEL_DIR}/Connector_USB.3dshapes/USB_C_Receptacle_HRO_TYPE-C-31-M-12.step",
+   "why": "no such file",
+   "refs": [
+    "J1"
+   ]
+  },
+  {
+   "model": "${KICAD7_3DMODEL_DIR}/Inductor_SMD.3dshapes/AOTA-B201610SR47MT.STEP",
+   "why": "no such file",
+   "refs": [
+    "L1"
+   ]
+  }
+ ],
+ "resolved_how": {
+  "legacy": 3,
+  "found": 0
+ },
+ "triangles": 232224,
+ "primitives": 139
+}
