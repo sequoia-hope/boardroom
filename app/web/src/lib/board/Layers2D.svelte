@@ -13,10 +13,12 @@
   let error = $state('');
   let layers = $state([]); // [{name, slug, kind, color, note, stats…, visible, own}]
   let active = $state(null); // slug
-  let mode = $state('dim'); // dim | solo | grey
+  // ?side=back, ?others=grey|solo, ?bg=light|black open the view that way.
+  const params = new URLSearchParams(location.search);
+  let mode = $state(['dim', 'grey', 'solo'].includes(params.get('others')) ? params.get('others') : 'dim'); // dim | solo | grey
   let dim = $state(0.3);
-  let mirror = $state(false);
-  let background = $state('dark');
+  let mirror = $state(params.get('side') === 'back');
+  let background = $state(['dark', 'black', 'light'].includes(params.get('bg')) ? params.get('bg') : 'dark');
   let showBody = $state(true);
   let vb = $state(null); // {x, y, w, h}
   let cursor = $state(null); // [x, y] in board mm
@@ -291,7 +293,11 @@
 
   const selBoxes = $derived(selected.map((r) => parts[r]).filter((p) => p?.box));
   const hoverPart = $derived(hover ? parts[hover] : null);
-  const copper = $derived(layers.filter((L) => L.kind === 'copper'));
+  // Listed nearest first: from the back, B.Cu leads.
+  const copper = $derived.by(() => {
+    const list = layers.filter((L) => L.kind === 'copper');
+    return mirror ? list.reverse() : list;
+  });
   const others = $derived(layers.filter((L) => L.kind !== 'copper'));
 </script>
 
