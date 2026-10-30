@@ -1,0 +1,135 @@
+/* Boardroom. Colours start from UltraRoute Studio's, so the suite reads as one
+   family until the shared suite-ui package exists. */
+:root {
+  --bg: #eef2f4;
+  --panel: #ffffff;
+  --panel-2: #f5f8fa;
+  --line: #d3dde3;
+  --text: #15232c;
+  --muted: #5b6f7b;
+  --accent: #2e8a6d;
+  --accent-soft: #2e8a6d1f;
+  --warn: #b25b00;
+  --warn-soft: #b25b001f;
+  --bad: #c0392b;
+  --bad-soft: #c0392b1a;
+  --stale: #8a6d00;
+  --shadow: 0 1px 2px #15232c14;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #0b141b;
+    --panel: #111d26;
+    --panel-2: #0e1921;
+    --line: #22323e;
+    --text: #d8e2e8;
+    --muted: #8aa0ad;
+    --accent: #83c5af;
+    --accent-soft: #83c5af24;
+    --warn: #ffb36b;
+    --warn-soft: #ffb36b1f;
+    --bad: #ff7b6b;
+    --bad-soft: #ff7b6b1f;
+    --stale: #e3c45a;
+    --shadow: none;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --bg: #0b141b;
+  --panel: #111d26;
+  --panel-2: #0e1921;
+  --line: #22323e;
+  --text: #d8e2e8;
+  --muted: #8aa0ad;
+  --accent: #83c5af;
+  --accent-soft: #83c5af24;
+  --warn: #ffb36b;
+  --warn-soft: #ffb36b1f;
+  --bad: #ff7b6b;
+  --bad-soft: #ff7b6b1f;
+  --stale: #e3c45a;
+  --shadow: none;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+a {
+  color: var(--accent);
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+}
+
+.btn {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 6px;
+  padding: 5px 11px;
+  box-shadow: var(--shadow);
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.mono {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 12.5px;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}

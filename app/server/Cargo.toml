@@ -1,0 +1,19 @@
+[package]
+name = "boardroom"
+version = "0.1.0"
+edition = "2024"
+description = "Boardroom: the project manager and main window of the board design suite"
+license = "MIT"
+
+[[bin]]
+name = "boardroom"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "net", "fs"] }
+tower-http = { version = "0.6", features = ["fs", "set-header"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+notify = "8"

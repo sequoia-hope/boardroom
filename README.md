@@ -1,4 +1,12 @@
-# easy_pcb
+# Boardroom
+
+> **Boardroom** is becoming the main window of a board design suite with Circuit Composer and
+> UltraRoute Studio: see [`docs/platform-spec.md`](docs/platform-spec.md) and
+> [`docs/shell-spec.md`](docs/shell-spec.md). The app is in [`app/`](app/): build it with
+> `app/build.sh`, run it with `app/serve.sh --port N`, and open its window with
+> `app/server/target/release/boardroom open --port N`. A read-only, single-window version runs on
+> [GitHub Pages](https://sequoia-hope.github.io/boardroom/). Below is the board-project template
+> it grew from (formerly easy_pcb).
 
 A starting point for designing a circuit board with [Claude Code](https://claude.com/claude-code) and KiCad.
 
