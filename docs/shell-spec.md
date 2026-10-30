@@ -339,12 +339,17 @@ answer items one by one, and a key per app so apps don't collide:
   "apps": {
     "composer": {"easy2350": {"stage": "handed_off", "open_fields": 0, "findings": {"error": 0, "warning": 2},
                               "placement": {"wire_mm": 790, "board_mm": [50, 30], "legal": true}, "updated": "…"}},
-    "studio":   {"easy2350": {"opens": 0, "drc_ok": true, "findings": {"error": 0, "warning": 1},
+    "studio":   {"easy2350": {"opens": 0, "connections": 414, "routed": 414, "drc_ok": true,
+                              "findings": {"error": 0, "warning": 1}, "report": "route/easy2350/report.json",
                               "last_route": "…", "router": "<commit>", "updated": "…"}}
   },
   "updated": "2026-10-29T14:02:00Z"
 }
 ```
+
+Studio's counts come from ultraroute's `--report` JSON; `report` points at that file, which the
+checks panel reads for the individual findings. A run that crashed or hit its deadline adds
+`"failed": "crash"` or `"deadline"`, which raises a needs-you item.
 
 `needs_user` as a plain string is still read (as one question). The shell is the one writer
 of `gates`; each app writes only under its own `apps.<name>` key. Writes are
