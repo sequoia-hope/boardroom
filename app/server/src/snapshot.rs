@@ -6,6 +6,7 @@
 //! tab reads) and copies the files those pages show into `<out>/<id>/`.
 
 use crate::config;
+use crate::examples;
 use crate::project;
 use std::path::{Path, PathBuf};
 
@@ -20,13 +21,22 @@ pub fn write(args: &[String]) -> Result<(), String> {
     }
     let out = PathBuf::from(out);
     std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    let list = examples::load(&crate::repo_dir());
     let mut all = vec![];
     for folder in folders {
         let root = std::fs::canonicalize(folder).map_err(|e| format!("{folder}: {e}"))?;
         let id = config::project_id(Path::new(folder));
-        let mut summary = serde_json::to_value(project::summarize(&id, &root, false)).map_err(|e| e.to_string())?;
-        // The machine's absolute path means nothing on a web page.
-        summary["path"] = folder.as_str().into();
+        let mut s = project::summarize(&id, &root, false);
+        examples::tag(std::slice::from_mut(&mut s), &list, &crate::repo_dir());
+        // The machine's absolute path means nothing on a web page: show where
+        // the project comes from instead.
+        let shown = list
+            .iter()
+            .find(|e| Some(&e.name) == s.example.as_ref())
+            .and_then(|e| e.repo.clone())
+            .unwrap_or_else(|| folder.clone());
+        let mut summary = serde_json::to_value(s).map_err(|e| e.to_string())?;
+        summary["path"] = shown.into();
         summary["docs"] = docs(&root).into();
         let mut listings = serde_json::Map::new();
         for dir in walk_dirs(&root.join("design/renders")) {

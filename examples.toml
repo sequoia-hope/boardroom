@@ -1,0 +1,15 @@
+# Example projects. Boardroom's Pages site shows a snapshot of each, and on the
+# desktop an example is matched to your own copy by its git remote, so nothing
+# here names a path on anyone's machine.
+#
+#   path = "..."         an example inside this repository
+#   repo, ref            an example in its own repository, at a branch or commit
+
+[[examples]]
+name = "easy2350"
+path = "examples/easy2350"
+
+[[examples]]
+name = "simple-earring"
+repo = "https://github.com/sequoia-hope/simple-earring"
+ref = "main"

@@ -12,6 +12,7 @@
 
 mod apps;
 mod config;
+mod examples;
 mod project;
 mod server;
 mod snapshot;
@@ -65,7 +66,8 @@ fn flag(args: &[String], name: &str) -> Option<String> {
 /// The repository this binary was built from: where `proj port` resolves to
 /// Boardroom's registered port, and where the web build lives.
 fn repo_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    std::fs::canonicalize(&dir).unwrap_or(dir)
 }
 
 fn port(args: &[String]) -> Result<u16, String> {

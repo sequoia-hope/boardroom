@@ -91,10 +91,24 @@
           <dt>Boards</dt>
           <dd>{p.boards.map((b) => `${b.board} / ${b.variant}`).join(', ')}</dd>
         {/if}
+        {#if p.example}
+          <dt>Example</dt>
+          <dd>{p.example}</dd>
+        {/if}
         {#if p.git}
+          {#if p.git.remote}
+            <dt>Remote</dt>
+            <dd>
+              {#if p.git.remote.startsWith('https://')}<a href={p.git.remote} target="_blank" rel="noopener">{p.git.remote.replace('https://', '')}</a>{:else}<span class="mono">{p.git.remote}</span>{/if}
+            </dd>
+          {/if}
           <dt>Git</dt>
           <dd>
-            {p.git.branch || 'detached'}{#if p.git.dirty}<span class="dirty"> · {p.git.dirty} uncommitted</span>{/if}
+            {p.git.branch || 'detached'}
+            {#if p.git.ahead}<span class="ahead"> · {p.git.ahead} to push</span>{/if}
+            {#if p.git.behind}<span class="dirty"> · {p.git.behind} to pull</span>{/if}
+            {#if p.git.ahead === 0 && p.git.behind === 0}<span class="muted"> · in step with its remote</span>{/if}
+            {#if p.git.dirty}<span class="dirty"> · {p.git.dirty} uncommitted</span>{/if}
           </dd>
           <dt>Last commit</dt>
           <dd>{p.git.last_commit} <span class="muted">{p.git.last_date}</span></dd>
@@ -304,6 +318,10 @@
 
   .dirty {
     color: var(--warn);
+  }
+
+  .ahead {
+    color: var(--accent);
   }
 
   .links {

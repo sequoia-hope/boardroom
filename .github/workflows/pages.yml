@@ -7,6 +7,9 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  # Examples in other repos follow their branch; rebuild daily to pick them up.
+  schedule:
+    - cron: "17 9 * * *"
 
 permissions:
   contents: read
@@ -41,10 +44,29 @@ jobs:
           npm ci --no-audit --no-fund
           npm run build:pages
 
-      - name: Snapshot the example project into it
+      # examples.toml names each example by a path here or by its own repo and
+      # ref; the repo ones are cloned for this build only (no submodules).
+      - name: Fetch the examples
+        id: examples
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
+          import os, subprocess, tomllib
+          folders = []
+          for ex in tomllib.load(open("examples.toml", "rb"))["examples"]:
+              if "path" in ex:
+                  folders.append(ex["path"])
+                  continue
+              dest = os.path.join("..", "examples-src", ex["name"])
+              subprocess.run(["git", "clone", "--quiet", "--depth", "1", "--branch", ex.get("ref", "main"),
+                              ex["repo"], dest], check=True)
+              folders.append(dest)
+          print("folders=" + " ".join(folders))
+          EOF
+
+      - name: Snapshot the examples into it
         run: |
           cargo run --quiet --manifest-path app/server/Cargo.toml -- \
-            snapshot app/web/dist-pages/snapshot examples/easy2350
+            snapshot app/web/dist-pages/snapshot ${{ steps.examples.outputs.folders }}
 
       - uses: actions/upload-pages-artifact@v3
         with:

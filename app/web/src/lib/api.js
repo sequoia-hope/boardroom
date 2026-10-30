@@ -10,6 +10,13 @@ async function json(url, init) {
   return res.status === 204 ? null : res.json();
 }
 
+/** Circuit Composer's page: through Boardroom's proxy, or its own Pages site. */
+export const COMPOSER = STATIC ? 'https://sequoia-hope.github.io/circuit-composer/app/dist/' : '/apps/composer/';
+
+export function examples() {
+  return STATIC ? Promise.resolve([]) : json('/api/examples');
+}
+
 export function projects() {
   return json(STATIC ? './snapshot/projects.json' : '/api/projects');
 }

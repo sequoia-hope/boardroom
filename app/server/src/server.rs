@@ -5,6 +5,7 @@
 
 use crate::apps;
 use crate::config::{self, ProjectList};
+use crate::examples;
 use crate::project;
 use axum::{
     Json, Router,
@@ -45,6 +46,7 @@ pub async fn run(host: &str, port: u16, web: PathBuf) -> Result<(), String> {
     let router = Router::new()
         .route("/api/projects", get(projects).post(add_project))
         .route("/api/projects/{id}", delete(remove_project))
+        .route("/api/examples", get(list_examples))
         .route("/api/projects/{id}/docs", get(docs))
         .route("/api/projects/{id}/files/{*path}", get(file))
         .route("/api/projects/{id}/open/{what}", post(open))
@@ -87,14 +89,42 @@ fn project_path(app: &App, id: &str) -> ApiResult<PathBuf> {
 async fn projects(State(app): State<Shared>) -> impl IntoResponse {
     let entries = app.list.lock().unwrap().projects.clone();
     let summaries = tokio::task::spawn_blocking(move || {
-        entries
+        let mut out: Vec<_> = entries
             .iter()
             .map(|e| project::summarize(&config::project_id(&e.path), &e.path, e.pinned))
-            .collect::<Vec<_>>()
+            .collect();
+        examples::tag(&mut out, &examples::load(&crate::repo_dir()), &crate::repo_dir());
+        out
     })
     .await
     .unwrap_or_default();
     Json(summaries)
+}
+
+/// The examples, each with the id of your copy of it if one is on the list.
+async fn list_examples(State(app): State<Shared>) -> impl IntoResponse {
+    let entries = app.list.lock().unwrap().projects.clone();
+    let found = tokio::task::spawn_blocking(move || {
+        let repo = crate::repo_dir();
+        let list = examples::load(&repo);
+        let summaries: Vec<_> = entries
+            .iter()
+            .map(|e| project::summarize(&config::project_id(&e.path), &e.path, e.pinned))
+            .collect();
+        list.into_iter()
+            .map(|ex| {
+                let mine = summaries
+                    .iter()
+                    .find(|s| ex.matches(&repo, &s.path, s.git.as_ref().and_then(|g| g.remote.as_deref())))
+                    .map(|s| s.id.clone());
+                let in_repo = ex.local_path(&repo).map(|p| p.display().to_string());
+                serde_json::json!({"name": ex.name, "repo": ex.repo, "ref": ex.git_ref, "in_repo": in_repo, "project": mine})
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap_or_default();
+    Json(found)
 }
 
 #[derive(Deserialize)]

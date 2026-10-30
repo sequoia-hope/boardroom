@@ -49,6 +49,8 @@ pub struct Summary {
     pub viewer: Option<String>,
     pub boards: Vec<Board>,
     pub git: Option<Git>,
+    /// The name of the example (examples.toml) this project is a copy of.
+    pub example: Option<String>,
     pub error: Option<String>,
 }
 
@@ -99,6 +101,22 @@ pub struct Git {
     pub dirty: usize,
     pub last_commit: String,
     pub last_date: String,
+    /// `origin`, as an https URL when it is one GitHub-style host can show.
+    pub remote: Option<String>,
+    /// Commits ahead of and behind the branch's upstream, as of the last fetch.
+    pub ahead: Option<u32>,
+    pub behind: Option<u32>,
+}
+
+/// A remote URL in one comparable form: https, no `.git`, no trailing slash.
+pub fn normalize_remote(url: &str) -> String {
+    let url = url.trim().trim_end_matches('/').trim_end_matches(".git");
+    if let Some(rest) = url.strip_prefix("git@") {
+        if let Some((host, path)) = rest.split_once(':') {
+            return format!("https://{host}/{path}");
+        }
+    }
+    url.replacen("http://", "https://", 1)
 }
 
 pub fn summarize(id: &str, path: &Path, pinned: bool) -> Summary {
@@ -123,6 +141,7 @@ pub fn summarize(id: &str, path: &Path, pinned: bool) -> Summary {
         viewer: None,
         boards: vec![],
         git: None,
+        example: None,
         error: None,
     };
     if !s.exists {
@@ -325,10 +344,20 @@ fn read_git(root: &Path) -> Option<Git> {
     log_args.extend_from_slice(scope);
     let log = git(&log_args).unwrap_or_default();
     let (last_commit, last_date) = log.split_once('\x1f').unwrap_or((&log, ""));
+    // "behind<TAB>ahead" against the upstream; no upstream, no numbers.
+    let counts = git(&["rev-list", "--left-right", "--count", "@{upstream}...HEAD"]);
+    let (behind, ahead) = counts
+        .as_deref()
+        .and_then(|c| c.split_once('\t'))
+        .map(|(b, a)| (b.parse().ok(), a.parse().ok()))
+        .unwrap_or((None, None));
     Some(Git {
         branch: git(&["branch", "--show-current"]).unwrap_or_default(),
         dirty,
         last_commit: last_commit.to_string(),
         last_date: last_date.to_string(),
+        remote: git(&["remote", "get-url", "origin"]).map(|r| normalize_remote(&r)),
+        ahead,
+        behind,
     })
 }

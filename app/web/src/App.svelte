@@ -19,6 +19,7 @@
   };
 
   let projects = $state([]);
+  let examples = $state([]);
   let loadError = $state('');
   // ?project=<id>&tab=<name> opens straight to a project (windows, links).
   const params = new URLSearchParams(location.search);
@@ -62,7 +63,7 @@
 
   async function refresh() {
     try {
-      projects = await api.projects();
+      [projects, examples] = await Promise.all([api.projects(), api.examples()]);
       loadError = '';
     } catch (e) {
       loadError = e.message;
@@ -105,7 +106,7 @@
 
   const composerBoard = $derived(sel?.boards[0]?.board ?? sel?.board ?? sel?.name);
   const composerUrl = (embed) =>
-    `/apps/composer/?board=${encodeURIComponent(composerBoard)}&project=${encodeURIComponent(sel.path)}${embed ? '&embed=1' : ''}`;
+    `${api.COMPOSER}?board=${encodeURIComponent(composerBoard)}&project=${encodeURIComponent(sel.path)}${embed ? '&embed=1' : ''}`;
 
   function openComposer() {
     if (mode === 'single') {
@@ -206,7 +207,7 @@
     ['documents', 'Documents'],
     ['renders', 'Renders'],
     ...(mode === 'single' && sel?.viewer ? [['viewer', 'Viewer']] : []),
-    ...(mode === 'single' && !api.STATIC ? [['composer', 'Composer']] : []),
+    ...(mode === 'single' ? [['composer', 'Composer']] : []),
   ]);
 
   const gateTitles = $derived(
@@ -237,7 +238,7 @@
       {#each sorted as p (p.id)}
         <li>
           <button class="proj" class:on={view === 'project' && sel?.id === p.id} onclick={() => choose(p)}>
-            <span class="pname">{p.board ?? p.name}</span>
+            <span class="pname">{p.board ?? p.name}{#if p.example}<span class="extag">example</span>{/if}</span>
             <span class="pmeta">
               {#if !p.exists}missing{:else if p.phase != null}{p.phase} · {p.gates[p.phase]?.name}{:else if !p.is_project}folder{:else}not started{/if}
             </span>
@@ -246,6 +247,23 @@
         </li>
       {/each}
     </ul>
+
+    {#if examples.some((e) => !e.project)}
+      <div class="label list-head">Examples not on this machine</div>
+      <ul class="plist">
+        {#each examples.filter((e) => !e.project) as e (e.name)}
+          <li class="ex">
+            <span class="pname">{e.name}</span>
+            {#if e.repo}
+              <span class="pmeta">Clone it, then add the folder:</span>
+              <code class="mono clone">git clone {e.repo}</code>
+            {:else}
+              <span class="pmeta mono">{e.in_repo}</span>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    {/if}
 
     {#if !api.STATIC}
       {#if adding}
@@ -324,7 +342,7 @@
         </div>
         <div class="open-in">
           <span class="label">Open in</span>
-          <button class="btn" disabled={api.STATIC} title={api.STATIC ? 'Circuit Composer has no web build on Pages yet' : `Circuit Composer, board ${composerBoard} (prototype)`} onclick={openComposer}>Composer</button>
+          <button class="btn" title="Circuit Composer, board {composerBoard} (prototype)" onclick={openComposer}>Composer</button>
           <button class="btn" disabled title="UltraRoute Studio: opening a project path is on its list">Studio</button>
           <button class="btn" disabled={!sel.viewer} title={sel.viewer ? 'pcbview' : 'No viewer built yet (scripts/view.sh build)'} onclick={openViewer}>Viewer</button>
           {#if !api.STATIC}
@@ -441,6 +459,30 @@
     font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .extag {
+    margin-left: 6px;
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 0 6px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    color: var(--muted);
+  }
+
+  .ex {
+    display: flex;
+    flex-direction: column;
+    padding: 6px 8px;
+    gap: 2px;
+  }
+
+  .clone {
+    font-size: 11px;
+    user-select: all;
+    overflow-wrap: anywhere;
+    color: var(--text);
   }
 
   .pmeta {
