@@ -1,6 +1,7 @@
 # The working demo: Boardroom, Composer and Route on GitHub Pages
 
-Status: **draft for review** (2026-10-30). Nothing here is built yet.
+Status: **decided** (2026-10-30; the answers are under Decisions). Built so far: the KiCad
+writer Composer saves with (milestone 0).
 
 ## What the person asked for
 
@@ -9,8 +10,10 @@ Composer, route it in Route (UltraRoute Studio), and see the result back in Boar
 are kept in the browser, survive a reload, and are passed from one app to the next. The same
 workflow on this machine saves to the project on disk instead.
 
-Composer's own board selector goes away wherever Boardroom opened it. Composer still runs
-standalone, but what standalone Composer looks like is not settled (open question 4).
+Composer's own board selector goes away wherever Boardroom opened it. Standalone Composer opens
+Boardroom's example projects through the same store, not examples of its own.
+
+The aim is closing the gaps that stop the workflow running entirely in the browser.
 
 ## What exists today
 
@@ -53,7 +56,12 @@ revision. The history makes these possible:
 - **Undo to any revision** and **Reset to the published board**.
 - **Download changes**: a zip of the changed files at their project paths, to unpack over a
   clone, so a demo session can become a real commit.
-- **Upload a project folder**: maybe later, not in this pass (open question 5).
+- **Upload a project folder**: later, not in this pass.
+
+**One workspace per tab.** A tab's workspace id lives in `sessionStorage`, so a reload keeps
+it and a new tab starts fresh from the published board. Boardroom passes the id to the apps
+it embeds or opens (`?ws=…`), so they share it. The workspaces of closed tabs are cleared
+after a week; Download changes is the way to keep one.
 
 `navigator.storage.persist()` is requested on the first save, so the browser doesn't evict the
 workspace when space runs low. If that's refused, Boardroom shows a note that changes can be
@@ -92,14 +100,13 @@ it and the last step writes it, so KiCad, a download and every view agree.
 1. **Boardroom → Composer.** Composer needs a placement problem (parts, nets, outline, locks)
    for the board. On Pages, `boardroom snapshot` writes `compose/<board>/problem.json` with
    `ccomp floorplan --problem`, next to the board. Locally, Composer's server makes it on open.
-2. **Composer saves** `compose/<board>/placement.json`: each part's position, rotation and side.
-   It does not touch the `.kicad_pcb`, because in the browser it can't. Placing parts in a
-   KiCad file is done by pcbnew today (`tools/apply_placement.py`), and pcbnew doesn't run in a
-   browser.
-3. **Route applies the placement.** On open, if `placement.json` is newer than the board, Route
-   moves the footprints to it (its core already moves parts and writes `.kicad_pcb` in the tab).
-   It shows "Placement from Composer, 14:02" and routes. **Save** writes the `.kicad_pcb`, plus
-   the run report to `route/<board>/report.json`.
+2. **Composer saves the board.** It writes `compose/<board>/placement.json` and the `.kicad_pcb`
+   itself: `Board.write_kicad_pcb` in its WASM core moves, turns and flips each part with
+   ultraroute's `kicad_pcb::place`, which does what pcbnew's `Flip`, `SetPosition` and
+   `SetOrientation` do, byte for byte, and keeps every other byte of the file. So a KiCad user
+   who never routes still gets a board that opens in KiCad, and pcbnew is not needed.
+3. **Route routes.** It reads the `.kicad_pcb` Composer saved, routes it, and **Save** writes
+   the `.kicad_pcb`, plus the run report to `route/<board>/report.json`.
 4. **Boardroom shows the result.** The overview takes routing counts from the report, as it
    does locally. The history shows "Composer: placement", "Route: routed 83/83".
 
@@ -122,22 +129,29 @@ the renderer Composer and Studio already share.
 ## Locally, the same workflow
 
 - Composer gets the server its spec already describes (milestones A and B in its
-  `docs/app-spec.md`): it opens a project path and saves `placement.json`. Applying it to KiCad
-  is Route's step, as on Pages, so pcbnew isn't needed in the loop.
+  `docs/app-spec.md`): it opens a project path and saves `placement.json` and the `.kicad_pcb`
+  through the same core as on Pages, so pcbnew isn't needed in the loop.
 - Route's **Save to project** goes through the same `write` call, so it gets the conflict check.
 - **Other devices** (a phone on the LAN): today Boardroom refuses Studio's socket from anything
   other than this machine, and Studio loads nothing without its socket. That is why Route was
-  blank on your phone (open question 1).
+  blank on your phone. Left as it is: the owner cares about the browser-only workflow, not LAN
+  devices.
 
 ## Milestones
 
+0. **Composer writes KiCad files.** Done 2026-10-30: `kicad_pcb::place` (ultraroute `0e581c4`),
+   held byte for byte to pcbnew 9.0.8 on three real boards, every part moved, turned and flipped
+   in two rounds, natively and in WASM; `Board.write_kicad_pcb` in Composer's core
+   (circuit-composer `2a7abb1`), matching `apply_placement.py` on easy2350. Not yet: drawing a
+   new outline (Composer's own shaped boards), and KiCad 10's own flip, if it differs from 9's.
 1. **Store.** `app/store/` with both backends, plus Boardroom's write endpoint. Boardroom's
    History panel shows the history, and offers Reset and Download changes.
 2. **Snapshot carries the boards.** `hw/**/*.kicad_{pcb,pro,dru}` and `compose/<board>/problem.json`.
-3. **Route reads and writes the store** (ultraroute): the `?project=` path on Pages, Save on
-   Pages, and placement applied from `placement.json`.
-4. **Composer reads and writes the store** (circuit-composer): no selector with `?project=`,
-   and a load error instead of a demo fallback.
+3. **Route reads and writes the store** (ultraroute): the `?project=` path on Pages, and Save
+   on Pages.
+4. **Composer reads and writes the store** (circuit-composer): no selector with `?project=`, a
+   load error instead of a demo fallback, Save writing `placement.json` and the `.kicad_pcb`,
+   and standalone Composer opening Boardroom's example projects.
 5. **Stale bar** on Boardroom's drawn tabs; then the Board tab draws from the `.kicad_pcb`.
 6. **Composer's server** for the local workflow.
 
@@ -145,17 +159,12 @@ Done means: on the Pages site, a phone or laptop can open easy2350, move U1 in C
 in Route, reload the page, and still see the moved, routed board with both steps in the
 history. Download changes then gives a `.kicad_pcb` that opens in KiCad.
 
-## Open questions
+## Decisions
 
-1. **Phones on the LAN.** Can another device route and save through Boardroom, or only view?
-   If it can only view, Route still needs a view-only way to load there, without the socket.
-2. **Who applies a placement?** This draft says Route (it can in the browser). The alternative
-   is Composer writing the `.kicad_pcb` itself, which needs a KiCad writer in Composer's WASM
-   core. That is cleaner for KiCad users who never route, but it is more work. A side change
-   (top ↔ bottom) is the hard case either way.
-3. **One workspace or one per tab?** This draft keeps one per browser: two windows of the demo
-   see the same edits. Fine for one person, but a second "fresh demo" means Reset.
-4. **Standalone Composer.** Does it keep its own examples and selector, or open from Boardroom's
-   example projects through the same store?
-5. **Bringing your own board to the Pages demo** (upload a project folder into the workspace):
-   in scope now, or later?
+The owner's answers to the draft's questions, 2026-10-30:
+
+1. **Phones on the LAN:** no preference; the browser-only workflow matters, not LAN devices.
+2. **Who applies a placement:** Composer, writing the `.kicad_pcb` itself in Rust.
+3. **Workspaces:** one per tab.
+4. **Standalone Composer:** opens Boardroom's example projects.
+5. **Bringing your own board:** later.
