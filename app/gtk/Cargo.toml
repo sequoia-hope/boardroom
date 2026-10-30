@@ -1,0 +1,16 @@
+[package]
+name = "boardroom-gtk"
+version = "0.1.0"
+edition = "2024"
+description = "Boardroom's desktop window: the web app in GTK 4 and WebKitGTK"
+license = "MIT"
+
+[[bin]]
+name = "boardroom-gtk"
+path = "src/main.rs"
+
+[dependencies]
+# The bindings gate newer API by library version; this machine has GTK 4.22
+# and WebKitGTK 2.52 (webkit6 needs gtk's 4.10+ API to build at all).
+gtk = { package = "gtk4", version = "0.11", features = ["v4_18"] }
+webkit = { package = "webkit6", version = "0.6", features = ["v2_50", "gtk_v4_18"] }
