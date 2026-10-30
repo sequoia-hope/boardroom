@@ -9,7 +9,9 @@ use crate::examples;
 use crate::project;
 use axum::{
     Json, Router,
-    extract::{Path as UrlPath, State, ws::{Message, WebSocket, WebSocketUpgrade}},
+    extract::{ConnectInfo, Path as UrlPath, Request, State, ws::{Message, WebSocket, WebSocketUpgrade}},
+    http::Method,
+    middleware::{self, Next},
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
@@ -69,11 +71,26 @@ pub async fn run(host: &str, port: u16, web: PathBuf) -> Result<(), String> {
             HeaderValue::from_static("same-origin"),
         ))
         .layer(SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, HeaderValue::from_static("no-cache")))
+        .layer(middleware::from_fn(local_changes_only))
         .with_state(app);
 
     let listener = tokio::net::TcpListener::bind((host, port)).await.map_err(|e| format!("{host}:{port}: {e}"))?;
     println!("Boardroom: http://localhost:{port}/");
-    axum::serve(listener, router).await.map_err(|e| e.to_string())
+    axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Other devices may look but not act: anything but a read (adding projects,
+/// opening KiCad or a folder, the folder dialog) must come from this machine.
+/// Reads stay inside the listed projects, so a reachable port shows what
+/// Boardroom shows and nothing more.
+async fn local_changes_only(ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>, req: Request, next: Next) -> Response {
+    let reading = matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
+    if !reading && !peer.ip().is_loopback() {
+        return (StatusCode::FORBIDDEN, "Boardroom takes changes only from the machine it runs on").into_response();
+    }
+    next.run(req).await
 }
 
 /// Looks a project up by id; the path is always one on the list.
