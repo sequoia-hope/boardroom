@@ -3,6 +3,7 @@
 //! Every response carries the cross-origin isolation headers the suite's apps
 //! need (docs/shell-spec.md, "One origin").
 
+use crate::apps;
 use crate::config::{self, ProjectList};
 use crate::project;
 use axum::{
@@ -49,6 +50,9 @@ pub async fn run(host: &str, port: u16, web: PathBuf) -> Result<(), String> {
         .route("/api/projects/{id}/open/{what}", post(open))
         .route("/api/pick-folder", post(pick_folder))
         .route("/api/bus", get(bus_socket))
+        .route("/apps/{name}", get(apps::slash))
+        .route("/apps/{name}/", get(|UrlPath(name): UrlPath<String>, req| apps::proxy(UrlPath((name, String::new())), req)))
+        .route("/apps/{name}/{*rest}", get(apps::proxy))
         .fallback_service(ServeDir::new(&web).fallback(index))
         .layer(SetResponseHeaderLayer::overriding(
             header::HeaderName::from_static("cross-origin-opener-policy"),

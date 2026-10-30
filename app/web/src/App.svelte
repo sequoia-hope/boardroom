@@ -28,13 +28,15 @@
   let gateDoc = $state(null);
   let doc = $state(null);
   // Pages has no desktop to open windows on, so it is always single-window.
-  let mode = $state(api.STATIC ? 'single' : remember('mode', 'windows'));
+  let mode = $state(api.STATIC ? 'single' : (params.get('mode') ?? remember('mode', 'windows')));
   let theme = $state(remember('theme', 'auto'));
   let adding = $state(false);
   let addPath = $state('');
   let addError = $state('');
   let toast = $state('');
   let topH = $state(62);
+  let selection = $state(null); // {from, board, refs} — the last selection any app reported
+  let composerFrame = $state(null);
 
   const sel = $derived(projects.find((p) => p.id === selId) ?? projects[0] ?? null);
   const sorted = $derived(
@@ -47,7 +49,7 @@
   });
   $effect(() => {
     keep('mode', mode);
-    if (mode === 'windows' && tab === 'viewer') tab = 'overview';
+    if (mode === 'windows' && (tab === 'viewer' || tab === 'composer')) tab = 'overview';
   });
   $effect(() => {
     keep('theme', theme);
@@ -67,15 +69,52 @@
     }
   }
 
-  // The bus says which project changed; refetch at most every 400 ms.
+  // The bus says which project changed; refetch at most every 400 ms. A
+  // selection from another window is shown and passed to an embedded app.
   let pending = null;
+  let sendBus = () => {};
   $effect(() => {
     refresh();
-    return api.bus(() => {
+    const conn = api.bus((msg) => {
+      if (msg.type === 'select') {
+        if (msg.project === selId) {
+          selection = msg;
+          if (msg.from !== 'composer') composerFrame?.contentWindow?.postMessage({ type: 'select', board: msg.board, refs: msg.refs }, location.origin);
+        }
+        return;
+      }
       clearTimeout(pending);
       pending = setTimeout(refresh, 400);
     });
+    sendBus = conn.send;
+    return conn.close;
   });
+
+  // Circuit Composer, embedded, posts its selection to its parent; until its
+  // server joins the bus, Boardroom relays it there for every other window.
+  $effect(() => {
+    const onMessage = (e) => {
+      if (e.origin !== location.origin || e.data?.source !== 'circuit-composer' || e.data.type !== 'select') return;
+      const msg = { type: 'select', from: 'composer', project: selId, board: e.data.board, refs: e.data.refs ?? [] };
+      selection = msg;
+      sendBus(msg);
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  });
+
+  const composerBoard = $derived(sel?.boards[0]?.board ?? sel?.board ?? sel?.name);
+  const composerUrl = (embed) =>
+    `/apps/composer/?board=${encodeURIComponent(composerBoard)}&project=${encodeURIComponent(sel.path)}${embed ? '&embed=1' : ''}`;
+
+  function openComposer() {
+    if (mode === 'single') {
+      tab = 'composer';
+      return;
+    }
+    const w = window.open(composerUrl(false), `composer-${sel.id}`, 'popup,width=1500,height=950');
+    if (!w) flash('The browser blocked the window; allow pop-ups for Boardroom.');
+  }
 
   function flash(msg) {
     toast = msg;
@@ -167,6 +206,7 @@
     ['documents', 'Documents'],
     ['renders', 'Renders'],
     ...(mode === 'single' && sel?.viewer ? [['viewer', 'Viewer']] : []),
+    ...(mode === 'single' && !api.STATIC ? [['composer', 'Composer']] : []),
   ]);
 
   const gateTitles = $derived(
@@ -278,10 +318,13 @@
         <div class="crumbs">
           <h1>{sel.board ?? sel.name}</h1>
           {#each sel.boards as b}<span class="crumb">{b.board} / {b.variant}</span>{/each}
+          {#if selection?.refs?.length}
+            <span class="selchip" title="Selected in {selection.from ?? 'another window'}">Selected: {selection.refs.join(', ')}</span>
+          {/if}
         </div>
         <div class="open-in">
           <span class="label">Open in</span>
-          <button class="btn" disabled title="Circuit Composer: coming (its milestone A)">Composer</button>
+          <button class="btn" disabled={api.STATIC} title={api.STATIC ? 'Circuit Composer has no web build on Pages yet' : `Circuit Composer, board ${composerBoard} (prototype)`} onclick={openComposer}>Composer</button>
           <button class="btn" disabled title="UltraRoute Studio: opening a project path is on its list">Studio</button>
           <button class="btn" disabled={!sel.viewer} title={sel.viewer ? 'pcbview' : 'No viewer built yet (scripts/view.sh build)'} onclick={openViewer}>Viewer</button>
           {#if !api.STATIC}
@@ -298,7 +341,7 @@
         {/each}
       </nav>
 
-      <div class="body" class:flush={tab === 'viewer'}>
+      <div class="body" class:flush={tab === 'viewer' || tab === 'composer'}>
         {#if !sel.exists}
           <p class="err">This folder is missing: <span class="mono">{sel.path}</span></p>
         {:else if sel.error}
@@ -313,6 +356,8 @@
             <Docs project={sel} filter={(f) => !f.startsWith('design/gates/')} bind:selected={doc} titles={docTitles} />
           {:else if tab === 'renders'}
             <Renders project={sel} />
+          {:else if tab === 'composer'}
+            <iframe class="viewer" bind:this={composerFrame} src={composerUrl(true)} title="Circuit Composer" allow="cross-origin-isolated"></iframe>
           {:else if tab === 'viewer'}
             <iframe class="viewer" src={api.fileUrl(sel.id, sel.viewer)} title="Board viewer"></iframe>
           {/if}
@@ -503,6 +548,14 @@
 
   .crumb::before {
     content: '▸ ';
+  }
+
+  .selchip {
+    font-size: 12px;
+    padding: 1px 8px;
+    border-radius: 10px;
+    background: var(--accent-soft);
+    color: var(--accent);
   }
 
   .open-in {

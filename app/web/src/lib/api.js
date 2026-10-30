@@ -57,9 +57,9 @@ export function pickFolder() {
   return json('/api/pick-folder', { method: 'POST' });
 }
 
-/** Calls onMessage for every bus message; reconnects if the server restarts. */
+/** Calls onMessage for every bus message and returns {send, close}; reconnects if the server restarts. */
 export function bus(onMessage) {
-  if (STATIC) return () => {};
+  if (STATIC) return { send() {}, close() {} };
   let socket;
   let closed = false;
   const connect = () => {
@@ -74,8 +74,13 @@ export function bus(onMessage) {
     };
   };
   connect();
-  return () => {
-    closed = true;
-    socket?.close();
+  return {
+    send(msg) {
+      if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
+    },
+    close() {
+      closed = true;
+      socket?.close();
+    },
   };
 }

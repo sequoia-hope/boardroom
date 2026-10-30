@@ -10,6 +10,7 @@
 //! The port comes from --port, then $PORT, then `proj port`; with none the
 //! command fails rather than guessing (see docs/shell-spec.md).
 
+mod apps;
 mod config;
 mod project;
 mod server;
