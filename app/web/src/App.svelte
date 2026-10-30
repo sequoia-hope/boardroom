@@ -246,7 +246,7 @@
     ['renders', 'Renders'],
     ...(mode === 'single' && sel?.viewer ? [['viewer', 'Viewer']] : []),
     ...(mode === 'single' ? [['composer', 'Composer']] : []),
-    ...(mode === 'single' && api.STUDIO ? [['studio', 'Studio']] : []),
+    ...(mode === 'single' && api.STUDIO ? [['studio', 'Route']] : []),
   ]);
 
   const gateTitles = $derived(
@@ -382,7 +382,7 @@
         <div class="open-in">
           <span class="label">Open in</span>
           <button class="btn" title="Circuit Composer, board {composerBoard} (prototype)" onclick={openComposer}>Composer</button>
-          <button class="btn" disabled={!api.STUDIO} title={api.STUDIO ? `UltraRoute Studio, board ${composerBoard}` : 'Studio opens a project from this machine, not from the Pages site'} onclick={openStudio}>Studio</button>
+          <button class="btn" disabled={!api.STUDIO} title={api.STUDIO ? `Route in UltraRoute Studio, board ${composerBoard}` : 'Studio opens a project from this machine, not from the Pages site'} onclick={openStudio}>Route</button>
           <button class="btn" disabled={!sel.viewer} title={sel.viewer ? 'pcbview' : 'No viewer built yet (scripts/view.sh build)'} onclick={openViewer}>Viewer</button>
           {#if !api.STATIC}
             <button class="btn" disabled={!sel.boards.some((b) => b.kicad_pro)} onclick={() => act('kicad')}>KiCad</button>

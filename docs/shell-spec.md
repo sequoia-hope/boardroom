@@ -20,7 +20,7 @@ The app is in `app/` (`app/build.sh`, `app/serve.sh`); the rest of this spec is 
   isolation headers. Reachable from other devices like the proj hub, but **read-only** to them:
   anything other than a read must come from this machine.
 - **Page** (`app/web`, Svelte 5): sidebar with projects, an inbox and examples; tabs Overview,
-  Board, Gates, Documents, Renders, and in single-window mode Viewer, Composer and Studio.
+  Board, Gates, Documents, Renders, and in single-window mode Viewer, Composer and Route (Studio).
   Composer and Studio open windowed or embedded, and Composer's selection travels on the bus.
   An embedded app loads on its first visit and stays loaded behind the other tabs, so going
   back to it finds it as it was left (switching project or mode reloads it).
