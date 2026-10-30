@@ -171,6 +171,7 @@ pub fn summarize(id: &str, path: &Path, pinned: bool) -> Summary {
     s.updated = str_field(&status, "updated");
     s.apps = status.get("apps").cloned().unwrap_or(Value::Null);
     s.needs_user = read_needs(&status);
+    s.needs_user.extend(studio_failures(&status));
     s.checks = read_checks(&status);
     s.links = read_links(&status);
     s.gates = read_gates(&status, path, s.phase);
@@ -218,6 +219,25 @@ fn read_needs(status: &Value) -> Vec<Need> {
             .collect(),
         _ => vec![],
     }
+}
+
+/// A Studio run that crashed, or left connections open when its clock ran
+/// out, is something to look at: `apps.studio.<board>.failed`.
+fn studio_failures(status: &Value) -> Vec<Need> {
+    let Some(Value::Object(boards)) = status.pointer("/apps/studio") else { return vec![] };
+    boards
+        .iter()
+        .filter_map(|(board, v)| {
+            let failed = str_field(v, "failed")?;
+            let opens = v.get("opens").and_then(Value::as_u64).unwrap_or(0);
+            let text = match failed.as_str() {
+                "crash" => format!("The router crashed routing {board}; see its run report"),
+                "deadline" => format!("Routing {board} ran out of time with {opens} connection(s) open"),
+                other => format!("Routing {board} failed ({other})"),
+            };
+            Some(Need { id: format!("studio-{board}-{failed}"), kind: "alert".into(), text, gate: Some(7), options: vec![] })
+        })
+        .collect()
 }
 
 fn read_checks(status: &Value) -> Vec<Check> {

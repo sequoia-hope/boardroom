@@ -330,7 +330,7 @@
       <div class="body">
         {#each inbox as n (n.project.id + n.id)}
           <button class="card inbox-item" onclick={() => choose(n.project)}>
-            <span class="label">{n.project.board ?? n.project.name} · {n.kind === 'signoff' ? 'sign-off' : 'question'}</span>
+            <span class="label">{n.project.board ?? n.project.name} · {n.kind === 'signoff' ? 'sign-off' : n.kind === 'alert' ? 'problem' : 'question'}</span>
             <span>{n.text}</span>
           </button>
         {:else}

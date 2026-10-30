@@ -8,7 +8,7 @@ import { chromium } from 'playwright-core';
 
 const base = process.env.BOARDROOM_URL;
 if (!base) {
-  console.error('smoke: set BOARDROOM_URL (e.g. http://localhost:8054/)');
+  console.error('smoke: set BOARDROOM_URL (e.g. http://localhost:$(proj port)/)');
   process.exit(2);
 }
 const browser = await chromium.launch({

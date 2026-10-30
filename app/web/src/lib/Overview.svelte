@@ -15,6 +15,18 @@
     ),
   );
 
+  const KIND = { signoff: 'Sign-off', question: 'Question', alert: 'Problem' };
+
+  // Studio's entry, from ultraroute's run report: "412/414 routed · 2 opens".
+  function studioLine(v) {
+    const parts = [];
+    if (v.connections != null) parts.push(`${v.routed ?? '?'}/${v.connections} routed`);
+    if (v.opens != null) parts.push(v.opens ? `${v.opens} open${v.opens === 1 ? '' : 's'}` : 'no opens');
+    const f = v.findings ?? {};
+    if (f.error || f.warning) parts.push(`${f.error ?? 0} errors, ${f.warning ?? 0} warnings`);
+    return parts.join(' · ');
+  }
+
   function fmt(v) {
     if (v == null) return '';
     if (typeof v === 'object') return Object.entries(v).map(([k, x]) => `${k} ${x}`).join(', ');
@@ -49,7 +61,7 @@
     <h3 class="label">Needs you</h3>
     {#each p.needs_user as n (n.id)}
       <div class="need">
-        <span class="kind {n.kind}">{n.kind === 'signoff' ? 'Sign-off' : 'Question'}</span>
+        <span class="kind {n.kind}">{KIND[n.kind] ?? 'Question'}</span>
         <p>{n.text}</p>
         {#if n.options.length}
           <div class="opts">
@@ -126,7 +138,16 @@
         <dl>
           {#each appRows as r}
             <dt>{r.app} · {r.board}</dt>
-            <dd>{Object.entries(r.v).filter(([k]) => k !== 'updated').map(([k, v]) => `${k}: ${fmt(v)}`).join(' · ')}</dd>
+            {#if r.app === 'studio'}
+              <dd>
+                {#if r.v.failed}<span class="dirty">{r.v.failed === 'crash' ? 'crashed' : 'ran out of time'} · </span>{/if}
+                {studioLine(r.v)}
+                {#if r.v.report}· <a href={fileUrl(p.id, r.v.report)} target="_blank" rel="noopener">run report</a>{/if}
+                {#if r.v.last_route}<br /><span class="muted">routed {r.v.last_route.replace('T', ' ').replace(/\.\d+/, '')}{r.v.router ? ` · ultraroute ${String(r.v.router).slice(0, 7)}` : ''}</span>{/if}
+              </dd>
+            {:else}
+              <dd>{Object.entries(r.v).filter(([k]) => k !== 'updated').map(([k, v]) => `${k}: ${fmt(v)}`).join(' · ')}</dd>
+            {/if}
           {/each}
         </dl>
       {/if}
@@ -234,6 +255,11 @@
     border-radius: 10px;
     background: var(--warn-soft);
     color: var(--warn);
+  }
+
+  .kind.alert {
+    background: color-mix(in srgb, var(--bad) 15%, transparent);
+    color: var(--bad);
   }
 
   .kind.signoff {
