@@ -5,7 +5,9 @@
 export const STATIC = !!import.meta.env.VITE_STATIC;
 
 async function json(url, init) {
-  const res = await fetch(url, init);
+  // The static build's snapshot changes with every deploy; Pages lets it be
+  // cached for ten minutes, so always ask whether it changed.
+  const res = await fetch(url, STATIC ? { cache: 'no-cache', ...init } : init);
   if (!res.ok) throw new Error((await res.text()) || `${res.status} ${res.statusText}`);
   return res.status === 204 ? null : res.json();
 }
