@@ -66,12 +66,13 @@ open:
   entry and icon. Opening Composer for a project is another `--app` window, which the server
   opens, so it works the same from a button, the CLI (`boardroom open composer <project>`) or
   Claude.
-- **Why not Tauri / a webview (yet):** Tauri on Linux uses WebKitGTK, and WebGPU there cannot
-  be relied on today, while Composer and Studio are moving to WebGPU. Chromium app windows give
-  real WebGPU, devtools, and the exact same pages as single-window mode. The cost is no native
-  menus and no native file dialog in the page; the server covers the dialog (below). The
-  server is the app either way, so wrapping it in Tauri or a native shell later changes only
-  how windows are made.
+- **Why not Tauri / a webview (yet):** the apps draw with WebGL2, not WebGPU (decided with
+  ultraroute, `platform-spec.md`), so a WebKitGTK webview could draw them; that removes the
+  main objection. Chromium app windows are still the first step: one engine for windows mode,
+  single-window mode and a plain browser tab, devtools, and the cross-origin isolation Studio
+  needs (below) behaving the same everywhere. The cost is no native menus and no native file
+  dialog in the page; the server covers the dialog (below). The server is the app either way,
+  so wrapping it in Tauri later changes only how windows are made.
 - **Folder picking.** A browser page can't learn a real path, so "Add project" asks the
   server, which opens the desktop's own folder dialog (xdg-desktop-portal, `zenity` as a
   fallback) and returns the path. A path can also be pasted.
@@ -83,6 +84,24 @@ server and `/apps/studio/…` to Studio's, WebSockets included. Each app still r
 server on its own registered port and still works on its own. Through the shell they share one
 origin, which makes iframes, `BroadcastChannel` and one login-free session simple, and means
 only the shell's port matters to the person.
+
+> **ultraroute — keep the apps cross-origin isolated.** Studio routes in the tab on workers that
+> share memory (`SharedArrayBuffer`), which only works on a cross-origin-isolated page, so
+> Studio's server sends `Cross-Origin-Opener-Policy: same-origin` and
+> `Cross-Origin-Embedder-Policy: require-corp`. Through the shell the proxy must keep those
+> headers on Studio's pages; in single-window mode the shell page must be isolated too and the
+> iframe carry `allow="cross-origin-isolated"`. Otherwise Studio silently loses in-tab routing.
+> Composer needs the same once its annealer workers share memory.
+
+> **Boardroom:** Agreed, and simplest done everywhere: the shell server sends
+> `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` on
+> every page it serves, passes the apps' own headers through the proxy, and gives every app
+> iframe `allow="cross-origin-isolated"`. Since the proxy puts everything on one origin, that
+> costs nothing for our own pages; pcbview loads nothing from other origins (checked
+> 2026-10-29). The rule it imposes: Boardroom pages embed nothing from other sites (no LCSC part
+> images or remote datasheet PDFs inline); those are links, or files fetched into the project
+> first, as datasheets already are. The selection bus runs over the shell's WebSocket, not
+> `window.opener`, so isolated windows lose nothing.
 
 ## The shell window
 
@@ -181,10 +200,9 @@ rotation checks, and the order checklist from `needs_user`. "Export release" zip
 
 ### Claude tab
 
-A **real Claude Code terminal** in the project directory (a pty in the server, xterm.js in the
-page). This is the escape hatch with full power: anything the buttons don't cover, you ask
-here, with the project's `CLAUDE.md` and skill loaded, permission prompts and all. Its changes
-show up in the other tabs as the file watcher sees them.
+The project's **Claude terminal**: a real Claude Code session in the project folder, for
+anything the buttons don't cover and for the conversations a project starts with (phase 0 is
+a conversation). See **Terminals** below for how it works and how it relates to Composer's.
 
 ### The viewer
 
@@ -236,6 +254,13 @@ dependencies.
 - **Tools stay with the project too:** the project's `scripts/` and the pinned
   `vendor/pcbview` and `vendor/ultraroute` submodules. A route depends on the exact router
   version, so pinning it per project is a feature.
+  > **ultraroute:** Agreed. A route can now be reproduced: the same board, flags and seeds give
+  > byte-identical output (`--uuid-seed`). So the pin should name the commit, and the recipe
+  > (the flags) should live in the project beside it.
+
+  > **Boardroom:** Agreed: the recipe lives in `route/<board>/` (Studio's directory), and gate 7
+  > records the router commit and the recipe it was routed with, so a gate can be re-run
+  > byte for byte.
 - **Other skills** a project uses (Circuit Composer's) are vendored the same way, each with its
   own upstream path in the config, by the same command.
 
@@ -273,7 +298,8 @@ answer items one by one, and a key per app so apps don't collide:
   "apps": {
     "composer": {"easy2350": {"stage": "handed_off", "open_fields": 0, "findings": {"error": 0, "warning": 2},
                               "placement": {"wire_mm": 790, "board_mm": [50, 30], "legal": true}, "updated": "…"}},
-    "studio":   {"easy2350": {"opens": 0, "drc_ok": true, "last_route": "…", "updated": "…"}}
+    "studio":   {"easy2350": {"opens": 0, "drc_ok": true, "findings": {"error": 0, "warning": 1},
+                              "last_route": "…", "router": "<commit>", "updated": "…"}}
   },
   "updated": "2026-10-29T14:02:00Z"
 }
@@ -297,17 +323,103 @@ The shell server runs every AI job, for itself and for the apps.
 - **Write scope:** a job declares what it may change (Composer's jobs: `compose/**`). It is
   passed as permission rules, and checked afterwards against the diff; anything outside it is
   shown as a violation and not accepted with the rest.
-- **Change sets:** before a job starts the shell notes the commit (and stashes nothing: a
-  dirty tree it records as the job's base). Afterwards the diff is the change set. **Accept**
+- **Change sets:** a job starts from a clean tree (see the note below) and the shell notes the
+  commit. Afterwards the diff is the change set. **Accept**
   commits it with the job id in the message; **Discard** restores the base; **Revise** resumes
   the job with the person's note. Renders and check results changed by the job are shown as
   before/after.
+  > **ultraroute:** A dirty tree as the base mixes the person's unsaved edits into the job's
+  > change set, and Discard would throw them away with the job's. Require a clean tree, or have
+  > the job commit a snapshot of the dirty one first.
+
+  > **Boardroom:** Right, that was a bug in the plan, and the same bug has a second half: edits
+  > made *while* the job runs (Studio saving a route, Composer saving a placement, the person
+  > saving in KiCad) would land in the job's diff too. So:
+  > - **Everything is scoped to the job's write scope.** "Clean", the lock and the change set
+  >   all apply to the paths the job may write (`compose/<board>/**` for a Composer job), not
+  >   the whole repo, so uncommitted work elsewhere in the project doesn't block a job, and a
+  >   job can run in a repo that is busy with other work (Composer's own `boards/`, below).
+  >   Changes outside the scope are flagged as violations, as before.
+  > - **Clean start.** A job never starts with uncommitted changes inside its scope. If the tree is dirty, Boardroom shows
+  >   what's uncommitted and offers "Commit and run", which commits it as
+  >   `Snapshot before job <id>`; the job's base is that commit. (This makes a commit even for
+  >   people who'd rather commit themselves; see open question 3.)
+  > - **The job holds the project while it runs.** Boardroom takes a write lock on the project
+  >   (`.boardroom/lock`, announced on the bus). Composer and Studio keep showing the files live
+  >   but hold their saves until the job ends, then save on top of its result. KiCad can't be
+  >   told to wait, so Boardroom won't start a job whose write scope includes a board or
+  >   schematic KiCad has open (KiCad's `.lck` file beside it), and if a KiCad save lands
+  >   mid-job anyway, the change set flags those files instead of mixing them in silently.
+  > - Discard then only ever throws away the job's own changes.
+  >
+  > Running each job in its own git worktree would isolate it completely and allow parallel
+  > jobs in one project, but the apps couldn't watch the job work live in the project's files,
+  > and each worktree would need its own submodules and router build. Not now.
 - **Queue:** one queue per machine. Jobs in different projects run in parallel up to a limit
   (setting, default 2); jobs in one project run one at a time, since they share a working tree.
   Heavy steps inside a job still go through `~/.claude/bin/reserve`, which the project's
   `CLAUDE.md` already requires.
 - **Questions mid-job:** a job that needs the person ends with a `needs_user` item tied to
   its session; answering resumes it.
+
+## Terminals
+
+A terminal here means a **real, interactive Claude Code session** (`claude` in a pty), shown
+in a panel. It is the conversational side of the suite; AI jobs are the other side: headless,
+one task, ending as a change set. Terminals are for working *with* Claude; jobs are for handing
+it a task.
+
+### Which apps get one
+
+| App | Terminal? | Why |
+|---|---|---|
+| **Boardroom** | **Yes: the project terminal** | Project-level talk: describing the board (phase 0), requirements, parts, "why did gate 7 fail", "get this ready to order". Loads `pcb-design`. Starts in the project folder. |
+| **Circuit Composer** | **Yes: the composition terminal** | "Add a LiPo charger here", "why this inductor?", "make this net a 2 A power net". Loads the circuit-composer skill, knows the open board and what's selected, and works through `ccomp` commands, so its edits show up on the canvas as they land. |
+| **UltraRoute Studio** | **No** | Studio is a conventional tool: a board, rules and a recipe go in; a routed board and a run report come out. Claude uses it from the other terminals and from jobs through its CLI and reads its reports; "why are there opens?" is asked in the project terminal. Studio stays a GUI you drive directly. |
+
+The rule behind the table: **an app gets a terminal when its work is a conversation** (what
+the board should be, what the circuit should contain) and not when it's a function (route
+this). If that changes for Studio later, it gets one the same way Composer does.
+
+### One mechanism, shown in two places
+
+- **Boardroom's server runs every terminal**, as it runs every job: it owns the ptys, so one
+  place lists every Claude session on the machine and the `reserve` and job rules apply to all
+  of them. A terminal panel is a component in `suite-ui` that connects to the server
+  (`/api/term/<id>` over a WebSocket); Composer shows the same panel in its own window.
+- **A terminal outlives its window**, like a tmux session: close Composer and reopen it and
+  the composition terminal is still there, scrollback and all. After a restart the session is
+  resumed with `claude --resume`.
+- **Separate sessions, not one shared conversation.** The project terminal and the
+  composition terminal are different Claude sessions: they load different skills and keep
+  their context small. They share the files, the selection and the bus, not their chat.
+  Boardroom's sidebar lists every open terminal (project, app, board) so none get lost.
+- **The project terminal can hand off.** Asked to do composition work, it says so and offers
+  to open Composer's terminal on that board (and the reverse for project-level work), rather
+  than doing another app's work without its skill.
+
+### Knowing what "this" means
+
+The terminal starts with a short context line (project, board, app). For the live part, which
+parts or nets are selected and which workspace is open, Claude runs a command rather than
+having text pushed into its prompt: `boardroom selection` prints the current selection from
+the bus as JSON. Both skills say: when the person says "this" or "here", run it. Composer adds
+its own `ccomp context` for the workspace and the open fields under the selection.
+
+### Terminals, jobs and the lock
+
+A terminal's edits are the person's edits: they land directly, are not change sets, and are
+committed when the person commits (Composer still marks its AI-made values `by: "ai"`, so
+they can be reviewed in place). The one interaction with jobs: while a job holds a write
+scope, a terminal must not write into it. Claude Code can't be paused mid-turn, so each
+project's `.claude/settings.json` has a **PreToolUse hook** that refuses an Edit or Write
+inside a locked scope and tells Claude why; it can wait for the job or work elsewhere.
+
+### Your own terminal still works
+
+None of this is required. Because every project carries its skill and `CLAUDE.md`, running
+`claude` in the project folder from any terminal gives the same agent. The in-app terminals
+add the selection, the hand-off, the lock hook and a place to find every session.
 
 ## Selection and events across windows
 
@@ -330,13 +442,24 @@ Same shape as Studio and Composer:
 
 - **`app/server`**: Rust (axum or tungstenite, whichever Studio and Composer settle on). It
   holds the project list, reads and writes project files, watches them, proxies the apps,
-  runs the event bus, the job queue, the Claude terminal ptys, and opens windows. Port from
+  runs the event bus, the job queue, every Claude terminal (Boardroom's and Composer's), and
+  opens windows. Port from
   `--port`, then `$PORT`, then `proj port`; fails with none. Registered with `proj` as
   `boardroom`.
-- **`app/web`**: Svelte 5 and Vite, like the other two. The shell is forms, lists and text, so
-  it needs no WebGPU; a Rust→WASM core only if shared code (the `status.json` schema types,
-  KiCad file reading) makes it worth it. The schema types live in a small Rust crate the other
-  two apps can depend on.
+- **`app/web`**: Svelte 5 and Vite, like the other two (plain Vite; SvelteKit's page routing
+  isn't needed for a handful of tabs). The shell is forms, lists and text and draws no boards
+  itself: thumbnails are renders, and the viewer is pcbview. A Rust→WASM core only if shared
+  code makes it worth it.
+- **Shared with the other apps** (ultraroute's proposal, agreed):
+  - **`suite-ui`**, a Svelte package with the design tokens and the panels every app repeats:
+    inspector, checks list, jobs list, inbox item, and the selection-bus client. Boardroom
+    owns the bus, the jobs and the inbox, so the package starts in this repo
+    (`packages/suite-ui`) and the others depend on it; it moves to its own repo if that
+    gets awkward.
+  - **The `status.json` schema types**, a small Rust crate (`crates/status`) beside it.
+  - **The board renderer** is `board-draw` (working name), its own repo, extracted from Studio
+    and pinned by Studio and Composer (Composer's `app-spec.md`). The shell doesn't draw
+    boards, so Boardroom doesn't depend on it.
 - **The CLI comes first**, as in Composer: `boardroom projects`, `boardroom status <project>`,
   `boardroom job <project> "<prompt>"`, `boardroom open composer <project>`, `boardroom signoff
   <project> <gate>`. Every button is one of these, so Claude can drive the shell too.
@@ -364,12 +487,22 @@ From `platform-spec.md` and Composer's `app-spec.md`:
 - **Window default:** agreed, launch opens a window; the shell's project overview shows
   Composer's status, not an embedded canvas (a small canvas there would be cramped and
   duplicate the app).
-- **Where Composer's boards go:** projects can live anywhere; the owner's call (open question 1).
+- **Where Composer's boards go:** decided, they stay in `circuit-composer/boards/` for now, with
+  Composer's "compose root" setting. They aren't Boardroom projects (no `design/`), so they
+  don't appear in the project list. AI jobs on them still go through Boardroom's backend: a job
+  names a folder and a write scope, not only a project, and the scoped clean check and lock
+  (above) mean the circuit-composer repo's other uncommitted work doesn't get in the way.
+- **Who reviews a Composer job.** Composer does, field by field (accept makes a fill *set*,
+  reject makes it *open* again), since only Composer can show a fill with its reasons and
+  citations in place. Boardroom's Jobs view shows the job and its diff, and its Accept for a
+  Composer job is "Review in Composer", which opens the board there. When the person has gone
+  through the fills, Composer tells the backend, and the job's change set is committed with
+  the rejected fills already reverted to open.
 
 ## Milestones
 
 1. **Server and list.** `boardroom serve` with the project list, reading `status.json` (old and
-   v1) for easy2350 and one Composer board. Shell window with sidebar and Overview. Registered
+   v1) for easy2350 and one new project made with New. Shell window with sidebar and Overview. Registered
    with `proj`.
 2. **Windows.** Open the viewer, KiCad, Composer and Studio for a project, each in its own app
    window, through the proxy. Single-window mode with tabs.
@@ -379,15 +512,15 @@ From `platform-spec.md` and Composer's `app-spec.md`:
    answer.
 5. **Gates.** Gates tab, run-gate as a job, staleness from input hashes.
 6. **The rest of the tabs** (Requirements, Parts, Decisions, Renders, Release), and the Claude
-   terminal.
+   terminal (Composer's terminal follows with its canvas).
 7. **Selection bus**, with Composer and Studio, and a pcbview request for it.
 
 ## Open questions
 
-1. ~~Where projects live~~ Decided: anywhere; a project is a folder. Still open: whether
-   Composer's boards (earrings, rp2350-battery) become their own projects now.
-2. **Chromium app windows now, Tauri later?** The proposal is app windows first. If native
-   menus and dialogs matter more than WebGPU on day one, say so.
+1. ~~Where projects live~~ Decided: anywhere; a project is a folder. Composer's boards stay
+   in `circuit-composer/boards/` for now (Composer's decision, 2026-10-29).
+2. **Chromium app windows now, Tauri later?** The proposal is app windows first. With WebGPU
+   dropped, Tauri is a real option later; if native menus and dialogs matter on day one, say so.
 3. **Change sets as commits.** Accepting a job commits it. Some people would rather commit
    themselves; a setting, or always commit?
 4. ~~The skill's copy per project~~ Decided: a copy in every project (see "The skill: a vendored

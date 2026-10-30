@@ -22,7 +22,7 @@ Code, not an API account.
 | Part | Role | Today | Becomes |
 |---|---|---|---|
 | **Boardroom** | Shell and project manager | A template repo: the `pcb-design` skill, phases and gates, `design/status.json`, a project page with the pcbview viewer | The front end: lists projects, shows headline info, owns the project format and the phase/gate record, launches the apps, runs the AI backend |
-| **Circuit Composer** | Composition: schematic, board shape, floorplan, locked copper | `ccomp` CLI: intent schema, packages, composer, floorplanner, constraint compiler. No UI | Its own app (Rust/WASM/WebGPU, like Studio): a block-diagram canvas whose blocks and nets may be left partly defined for the AI to complete, outline and generator tools, a live floorplanner, locked copper and routing regions. Hands UltraRoute a placed board plus `routing.json` |
+| **Circuit Composer** | Composition: schematic, board shape, floorplan, locked copper | `ccomp` CLI: intent schema, packages, composer, floorplanner, constraint compiler. No UI | Its own app (Rust/WASM, Svelte, WebGL2 through a board renderer shared with Studio): a block-diagram canvas whose blocks and nets may be left partly defined for the AI to complete, outline and generator tools, a live floorplanner, locked copper and routing regions. Hands UltraRoute a placed board plus `routing.json` |
 | **UltraRoute Studio** | Routing | Studio: live, interactive view of the router at work (Rust server, WASM core, Svelte client) | The routing app: opens a project's board, routes it live, writes the routed board back to the project |
 
 ### Boardroom (the shell)
@@ -74,6 +74,24 @@ Full spec: `circuit-composer/docs/app-spec.md`. In short:
 - Reads the rules and cost grids Circuit Composer compiles, as it does now.
 - Keeps the GPL boundary: the studio runs `copperroute` as a separate process and never links
   it. Embedding the studio in the shell (an iframe or a link) does not change that.
+
+> **ultraroute — the renderer (Composer's open question 5).** Share a renderer rather than adopt
+> wgpu. Studio draws boards with a WASM core that builds a mesh and one WebGL2 shader that cuts
+> each quad to an anti-aliased capsule or a fill (about 120 lines). That already runs in headless
+> Chrome and Playwright, Firefox on Linux and phones, the cases Composer wants its fallback for;
+> and Composer's renderer uses no compute shaders, so WebGPU adds nothing to draw with while wgpu
+> adds megabytes of WASM. The owner agrees: no WebGPU front end. Proposal, one shared board
+> renderer: a Rust crate that builds meshes and does hit testing, a small JS module with the
+> shader (WebGL2 now, WebGPU later behind the same interface if it ever pays), text on an overlay
+> canvas; 3D through three.js and Threlte, as Waffle Iron does. Studio's renderer becomes that
+> package and Composer uses it from milestone A. WebGPU routing is no reason to keep WebGPU
+> either: ultraroute's GPU solver is slower than its CPU search and the browser's `--gpu` path
+> does not work (ultraroute `REVIEW.md`; its remediation Stage 10). Pages routes on CPU workers.
+
+> **ultraroute — common UI.** Svelte 5 and Vite in all three apps (SvelteKit only if the shell's
+> tabs want its page routing), and one shared package for the design tokens and the panels every
+> app repeats: inspector, checks list, jobs list, inbox item, and the selection-bus client.
+> Otherwise three apps grow three looks.
 
 ## The seam: files in the project directory
 
@@ -139,6 +157,15 @@ Rules for the seam:
 > one queue) or run `claude -p` itself? (c) can a job name the skill to load (circuit-composer
 > rather than pcb-design)?
 
+## Terminals
+
+Interactive Claude Code sessions live in two apps: **Boardroom** (the project terminal, with
+`pcb-design`) and **Circuit Composer** (the composition terminal, with its own skill, aware of
+the open board and selection). **UltraRoute Studio has none**: it is a conventional tool,
+inputs in and outputs out, used by the other two through its CLI and run reports. Boardroom's
+server runs all terminals; Composer shows its own in a shared `suite-ui` panel. Details in
+`shell-spec.md`, "Terminals".
+
 ## What each sibling project needs to do
 
 **Boardroom**
@@ -149,7 +176,7 @@ Rules for the seam:
 
 **circuit-composer**
 - Accept a project path for every command and keep per-project files under the project.
-- Build the app (`app/core` Rust→WASM, `app/web` Svelte + WebGPU, `app/server` Rust),
+- Build the app (`app/core` Rust→WASM, `app/web` Svelte + the shared WebGL2 board renderer, `app/server` Rust),
   served the registered way, standalone or embedded.
 - The "partly defined" model and the AI request/response: drafted in its `docs/app-spec.md`.
 - Its own boards (earrings, rp2350-battery) stay under `circuit-composer/boards/` for now
@@ -158,6 +185,22 @@ Rules for the seam:
 **ultraroute**
 - Studio: open a board from a project path and save the routed board back to it.
 - Report results into `design/status.json` (route done, opens left, DRC result).
+
+> **ultraroute — what Studio will do.**
+> 1. Open a board by project path (`/?project=<path>&board=<name>&variant=<v>`) and save the
+>    routed board back to `hw/<board>/<variant>/`. Parts moved in Studio are written as KiCad
+>    `(at …)` edits and `(locked yes)`, so Composer's `written.json` check sees them.
+> 2. A machine-readable run report (`--report <file>.json`). Today the router tells these as
+>    stderr lines: open connections, region and length breaches, stages the clock cut short, and
+>    forced necks (a wide net necked into a fine-pitch pin, with the KiCad rule that allows it).
+>    The report gives them as findings with refs and nets. Studio writes the summary under
+>    `apps.studio.<board>` in `status.json`: `opens`, `drc_ok`, `findings`, `last_route`,
+>    `router` (commit), `updated`. This lands with ultraroute's remediation Stage 8, where the
+>    driver gets structured stats.
+> 3. `route/` is fine as Studio's directory: run reports, recipes and replays per board.
+>
+> Floorplan (open question 1): agreed. Composer places; Studio nudges and locks while routing;
+> both through the KiCad board.
 
 ## Open questions
 
@@ -202,8 +245,9 @@ Rules for the seam:
 
 ## Suggested first milestones
 
-1. Boardroom shell lists two real projects (easy2350 and circuit-composer's rp2350-battery) from
-   their paths and shows their `status.json`.
+1. Boardroom shell lists two real projects (easy2350 and a new one) from their paths and shows
+   their `status.json`. (Composer's boards stay in its repo for now, so rp2350-battery isn't a
+   project yet.)
 2. "Open in UltraRoute Studio" opens easy2350's board in Studio; a route saved there shows up
    in the shell's viewer.
 3. Circuit Composer runs `compose` + `floorplan` against a project path and writes into it.
