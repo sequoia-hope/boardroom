@@ -7,8 +7,31 @@ built. Questions for the owner are under **Open questions**; answers to Circuit 
 questions are under **Answers to circuit-composer**.
 
 **Name:** the suite's main app is **Boardroom** (chosen 2026-10-29), formerly the placeholder
-easy_pcb. The repository and folder are still called `easy_pcb` until they are renamed;
-`ccomp import easy-pcb` keeps its name for now.
+easy_pcb. The GitHub repository is now `sequoia-hope/boardroom`; the local folder is still
+`easy_pcb`, and `ccomp import easy-pcb` keeps its name for now.
+
+## Built so far (2026-10-30)
+
+The app is in `app/` (`app/build.sh`, `app/serve.sh`); the rest of this spec is the plan.
+
+- **Server** (`app/server`, Rust, axum): the project list, `status.json` in both shapes, project
+  files, the bus (`/api/bus`, with a watcher on each project's `design/`), and `/apps/<name>/`
+  proxying a suite app from its registered port (Composer today). Every response carries the
+  isolation headers. Reachable from other devices like the proj hub, but **read-only** to them:
+  anything other than a read must come from this machine.
+- **Page** (`app/web`, Svelte 5): sidebar with projects, an inbox and examples; tabs Overview,
+  Board, Gates, Documents, Renders, and in single-window mode Viewer and Composer. Composer
+  opens windowed or embedded, and its selection travels on the bus.
+- **Board tab**: Boardroom's own layer viewer and 3D view over pcbview's generated data
+  (below, "The viewer").
+- **Examples** (`examples.toml`): named by a path in this repo or by git remote and ref, never
+  a machine path; matched to your own copy by its `origin`. The project view is git-aware
+  (remote, ahead/behind, uncommitted).
+- **GitHub Pages**: the single-window app, read-only, on a `boardroom snapshot` of the examples
+  (repo examples are shallow-cloned during the build, not submodules), rebuilt daily.
+- **GTK window** (`app/gtk`): the same pages in GTK 4 / WebKitGTK windows (below, "How windows
+  are made").
+- **Smoke test**: `BOARDROOM_URL=… npm run smoke` in `app/web` drives the real app in Chrome.
 
 ## The paradigm
 
@@ -66,13 +89,14 @@ open:
   entry and icon. Opening Composer for a project is another `--app` window, which the server
   opens, so it works the same from a button, the CLI (`boardroom open composer <project>`) or
   Claude.
-- **Why not Tauri / a webview (yet):** the apps draw with WebGL2, not WebGPU (decided with
-  ultraroute, `platform-spec.md`), so a WebKitGTK webview could draw them; that removes the
-  main objection. Chromium app windows are still the first step: one engine for windows mode,
-  single-window mode and a plain browser tab, devtools, and the cross-origin isolation Studio
-  needs (below) behaving the same everywhere. The cost is no native menus and no native file
-  dialog in the page; the server covers the dialog (below). The server is the app either way,
-  so wrapping it in Tauri later changes only how windows are made.
+- **A native GTK window (decided 2026-10-30, the owner's choice).** `app/gtk` (`boardroom-gtk`)
+  shows the same pages in GTK 4 windows with WebKitGTK 6.0, so Boardroom looks and behaves
+  like the rest of the desktop: a native header bar, and every `window.open` from the page
+  (viewer, Composer) a GTK window of its own. Links to other sites open in the default
+  browser. It uses the server on the registered port and starts one if none answers. Not a
+  separate UI: the server is the app, and the GTK window is only how windows are made. The
+  apps draw with WebGL2, not WebGPU (decided with ultraroute), so WebKitGTK can draw them.
+  Chromium app windows (`boardroom open`) and a plain browser tab keep working.
 - **Folder picking.** A browser page can't learn a real path, so "Add project" asks the
   server, which opens the desktop's own folder dialog (xdg-desktop-portal, `zenity` as a
   fallback) and returns the path. A path can also be pasted.
@@ -205,6 +229,23 @@ anything the buttons don't cover and for the conversations a project starts with
 a conversation). See **Terminals** below for how it works and how it relates to Composer's.
 
 ### The viewer
+
+**Built: the Board tab.** Boardroom draws the board itself from what pcbview generates
+(`viewer/site.json`, and each board's `layers/` and `3d/`), rather than embedding pcbview's
+page:
+
+- **Layers**: every layer SVG drawn into one picture, recoloured on load so each layer's colour
+  can be changed; panning and zooming move the viewBox, so the copper stays sharp at any zoom.
+  Layers are stacked as the board is seen (far side first, the near side's overlays over the
+  copper), the active layer raised. The other copper is dimmed, grey or hidden; view from the
+  back; background and board body; cursor coordinates in KiCad's millimetres, a scale bar,
+  keys 1–9, f and b, pinch zoom.
+- **3D**: `board.glb` with three.js (loaded only when 3D opens): top, bottom, tilted and edge
+  views, layer-group toggles, hover and pick.
+- Both select parts by reference: a part pane opens, the selection goes to the bus and an
+  embedded Composer, and a selection made elsewhere is shown (3D flies to it).
+
+pcbview's own page stays available as the Viewer.
 
 pcbview stays the viewer, built by `scripts/view.sh` into `viewer/`. It opens in its own window
 or a tab, and takes part in the shared selection. Its rebuild after each gate becomes a job the
