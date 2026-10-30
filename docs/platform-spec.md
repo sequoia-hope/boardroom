@@ -1,12 +1,16 @@
-# easy_pcb as an AI-forward EDA suite — spec (draft)
+# Boardroom: an AI-forward EDA suite — spec (draft)
 
 Status: draft, 2026-10-29. Written from the owner's description for the three sibling projects
-(easy_pcb, circuit-composer, ultraroute) to read and push back on. Where this spec guesses, it
+(Boardroom, circuit-composer, ultraroute) to read and push back on. Where this spec guesses, it
 says so under **Open questions**.
+
+**Name:** the suite's main app is **Boardroom** (chosen 2026-10-29), formerly the placeholder
+easy_pcb. The repository and folder are still called `easy_pcb` until they are renamed;
+`ccomp import easy-pcb` keeps its name for now.
 
 ## The idea in one paragraph
 
-easy_pcb becomes the main window of an EDA tool, the way KiCad's project manager is the window
+Boardroom becomes the main window of an EDA tool, the way KiCad's project manager is the window
 you open first. It holds the list of board projects, shows each one's headline information, and
 launches the apps that do the work. **Circuit Composer** and **UltraRoute Studio** become apps
 inside it, as Eeschema and Pcbnew are inside KiCad. The whole suite is AI-forward: anything the
@@ -17,23 +21,23 @@ Code, not an API account.
 
 | Part | Role | Today | Becomes |
 |---|---|---|---|
-| **easy_pcb** | Shell and project manager | A template repo: the `pcb-design` skill, phases and gates, `design/status.json`, a project page with the pcbview viewer | The front end: lists projects, shows headline info, owns the project format and the phase/gate record, launches the apps, runs the AI backend |
+| **Boardroom** | Shell and project manager | A template repo: the `pcb-design` skill, phases and gates, `design/status.json`, a project page with the pcbview viewer | The front end: lists projects, shows headline info, owns the project format and the phase/gate record, launches the apps, runs the AI backend |
 | **Circuit Composer** | Composition: schematic, board shape, floorplan, locked copper | `ccomp` CLI: intent schema, packages, composer, floorplanner, constraint compiler. No UI | Its own app (Rust/WASM/WebGPU, like Studio): a block-diagram canvas whose blocks and nets may be left partly defined for the AI to complete, outline and generator tools, a live floorplanner, locked copper and routing regions. Hands UltraRoute a placed board plus `routing.json` |
 | **UltraRoute Studio** | Routing | Studio: live, interactive view of the router at work (Rust server, WASM core, Svelte client) | The routing app: opens a project's board, routes it live, writes the routed board back to the project |
 
-### easy_pcb (the shell)
+### Boardroom (the shell)
 
 Full spec: [`shell-spec.md`](shell-spec.md), which also answers Circuit Composer's questions
 below (job API, standalone AI work, skills, windows). In short: a local Rust server that opens
 Chromium app windows (one per app, or one window with tabs), a window centred on the phase
 pipeline, an inbox of what needs the person, and AI jobs that end as reviewable change sets.
 
-- **Projects.** A list of easy_pcb projects, each with its own path on disk. The user can add,
+- **Projects.** A list of Boardroom projects, each with its own path on disk. The user can add,
   open, and select them. Selecting one highlights it and shows its headline info.
-- **Headline info** is whatever easy_pcb manages for a project: board name, current phase, what
+- **Headline info** is whatever Boardroom manages for a project: board name, current phase, what
   Claude is doing, what it needs from the user, gates passed, checks, links, a thumbnail. Today
   this is `design/status.json`; that file is the starting point for the schema.
-- **Managing that info.** UI to edit what easy_pcb owns: design intent (`design/intent.md`),
+- **Managing that info.** UI to edit what Boardroom owns: design intent (`design/intent.md`),
   decisions, net classes (`design/nets.csv`), parts and datasheets, gates and sign-offs.
 - **Launching apps.** "Open in Circuit Composer" / "Open in UltraRoute Studio" for the selected
   project. The shell passes the project path; the app works on files in that project.
@@ -77,13 +81,13 @@ The apps talk through the project's files, not through each other's internals. E
 be run on its own against a project path, and the shell only needs to know how to launch it
 and how to read the headline info.
 
-A project directory (today's easy_pcb layout, extended):
+A project directory (today's Boardroom layout, extended):
 
 ```
 <project>/
   design/status.json        headline info: the shell reads it, every app may update it
-  design/intent.md          requirements (easy_pcb)
-  design/nets.csv           net classes (easy_pcb; ccomp imports it)
+  design/intent.md          requirements (Boardroom)
+  design/nets.csv           net classes (Boardroom; ccomp imports it)
   design/decisions.md, gates/, parts/, datasheets/
   hw/<board>/<variant>/     KiCad projects: the schematic and board every app reads and writes
   compose/                  Circuit Composer's files: packages.lock, then compose/<board>/
@@ -104,7 +108,7 @@ Rules for the seam:
    > Locks are shared as KiCad's own `(locked yes)`.
 2. **Each app owns its own subdirectory** and doesn't write in another's.
 3. **`design/status.json` is append-friendly shared state**: an app records what it did and what
-   it needs from the user there, so the shell can show it. Its schema is easy_pcb's to define,
+   it needs from the user there, so the shell can show it. Its schema is Boardroom's to define,
    with fields the others ask for.
    > **circuit-composer:** Fields we'd ask for, per board: `stage` (composed / floorplanned /
    > handed_off), `open_fields` (count left for the AI or the person), `findings` (errors,
@@ -137,7 +141,7 @@ Rules for the seam:
 
 ## What each sibling project needs to do
 
-**easy_pcb**
+**Boardroom**
 - Project registry (list of project paths) and the shell UI: project list, selection, headline
   panel, launch buttons, embedded pcbview.
 - A written schema for `design/status.json` (and a version field).
@@ -149,7 +153,7 @@ Rules for the seam:
   served the registered way, standalone or embedded.
 - The "partly defined" model and the AI request/response: drafted in its `docs/app-spec.md`.
 - Its own boards (earrings, rp2350-battery) stay under `circuit-composer/boards/` for now
-  (owner's call). The app opens them in place as well as easy_pcb projects.
+  (owner's call). The app opens them in place as well as Boardroom projects.
 
 **ultraroute**
 - Studio: open a board from a project path and save the routed board back to it.
@@ -164,7 +168,7 @@ Rules for the seam:
    > **circuit-composer:** Agreed. Composer's floorplan includes the board shape and locked
    > copper (generated block layouts, reserved vias, rails, pours), since those decide where
    > parts can go. Studio's changes come back through the KiCad board (see the note under rule 1).
-2. **The line between easy_pcb and Circuit Composer.** Proposal above: easy_pcb owns
+2. **The line between Boardroom and Circuit Composer.** Proposal above: Boardroom owns
    requirements, project management, phases/gates and release; Circuit Composer owns
    composition, schematic generation, floorplan and constraints. Both sides should confirm.
    > **circuit-composer:** Confirmed. Two seams need a rule: (a) **net classes** — today phase 3
@@ -182,12 +186,12 @@ Rules for the seam:
    > a smaller embedded view sits in the project panel.
 4. **Where the project list lives**: a file in the user's config directory, or entries in the
    `proj` registry.
-   > **easy_pcb:** Decided by the owner: a project is a folder and can live anywhere; the list
-   > is `~/.config/easy-pcb/projects.toml`. Each project carries its own copy of each skill it
-   > uses in `.claude/skills/` (pcb-design from easy_pcb, circuit-composer's from its repo), so
+   > **Boardroom:** Decided by the owner: a project is a folder and can live anywhere; the list
+   > is `~/.config/boardroom/projects.toml`. Each project carries its own copy of each skill it
+   > uses in `.claude/skills/` (pcb-design from Boardroom, circuit-composer's from its repo), so
    > an agent opened in the folder can run the project on its own, and a project cloned from
    > GitHub works without anything else installed. The copies are vendored:
-   > `easy-pcb skill update` refreshes every project from each skill's upstream copy in one step
+   > `boardroom skill update` refreshes every project from each skill's upstream copy in one step
    > (pinned projects skipped), and lessons are written upstream. See `shell-spec.md`.
 5. **The `pcb-design` skill's phases** were written for a human-plus-Claude terminal flow. How
    they map onto app actions (e.g. phase 2 = Circuit Composer, phase 7 = Studio) needs deciding.
@@ -198,7 +202,7 @@ Rules for the seam:
 
 ## Suggested first milestones
 
-1. easy_pcb shell lists two real projects (easy2350 and circuit-composer's rp2350-battery) from
+1. Boardroom shell lists two real projects (easy2350 and circuit-composer's rp2350-battery) from
    their paths and shows their `status.json`.
 2. "Open in UltraRoute Studio" opens easy2350's board in Studio; a route saved there shows up
    in the shell's viewer.

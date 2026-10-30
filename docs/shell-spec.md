@@ -1,20 +1,24 @@
-# easy_pcb shell app — spec (draft)
+# Boardroom app — spec (draft)
 
-Status: draft, 2026-10-29. easy_pcb's half of [`platform-spec.md`](platform-spec.md), the
-counterpart of `circuit-composer/docs/app-spec.md`. It says what the easy_pcb app shows, what
+Status: draft, 2026-10-29. Boardroom's half of [`platform-spec.md`](platform-spec.md), the
+counterpart of `circuit-composer/docs/app-spec.md`. It says what the Boardroom app shows, what
 you do in it, how it holds the suite together (windows, selection, AI jobs), and how it is
 built. Questions for the owner are under **Open questions**; answers to Circuit Composer's
 questions are under **Answers to circuit-composer**.
 
+**Name:** the suite's main app is **Boardroom** (chosen 2026-10-29), formerly the placeholder
+easy_pcb. The repository and folder are still called `easy_pcb` until they are renamed;
+`ccomp import easy-pcb` keeps its name for now.
+
 ## The paradigm
 
 KiCad's model is a project manager that launches editors. That part is right and we keep it:
-easy_pcb is the window you open first, it knows your projects, and Circuit Composer and
+Boardroom is the window you open first, it knows your projects, and Circuit Composer and
 UltraRoute Studio are the editors it launches.
 
 But KiCad's project manager is a **file browser**: it lists files and you decide what to open.
 In an AI-forward tool the person is not doing most of the steps; they are steering, deciding
-and signing off. So the easy_pcb window is centred on **the state of the design**, not its
+and signing off. So the Boardroom window is centred on **the state of the design**, not its
 files:
 
 1. **Where is it?** The phase pipeline, 0 to 10, with each gate passed, open, failed or *stale*.
@@ -57,10 +61,10 @@ any tab in single-window mode can be "popped out" into its own window and back.
 The shell is a **local Rust server plus browser-engine windows**, not a web page you happen to
 open:
 
-- `easy-pcb` starts the shell server (or finds it running) and opens the shell window with
+- `boardroom` starts the shell server (or finds it running) and opens the shell window with
   Chromium's app mode (`--app=<url>`): a window with no tabs or address bar, its own taskbar
   entry and icon. Opening Composer for a project is another `--app` window, which the server
-  opens, so it works the same from a button, the CLI (`easy-pcb open composer <project>`) or
+  opens, so it works the same from a button, the CLI (`boardroom open composer <project>`) or
   Claude.
 - **Why not Tauri / a webview (yet):** Tauri on Linux uses WebKitGTK, and WebGPU there cannot
   be relied on today, while Composer and Studio are moving to WebGPU. Chromium app windows give
@@ -212,17 +216,17 @@ dependencies.
   skill and can run the whole project, with or without the app. A project posted to GitHub on
   its own works for whoever clones it, at the skill version it was built with.
 - **One upstream copy**: this repo's `.claude/skills/pcb-design/`. The app records where it is
-  in `~/.config/easy-pcb/config.toml` (`skill_upstream = "<path>"`).
-- **Updating is one command.** `easy-pcb skill update` copies the upstream skill into every project on
+  in `~/.config/boardroom/config.toml` (`skill_upstream = "<path>"`).
+- **Updating is one command.** `boardroom skill update` copies the upstream skill into every project on
   the list and commits it in each, with the upstream commit in the message. The shell can run
   it on start or from a button, and shows each project's skill version. Editing the skill
   means editing the upstream copy once and running this.
-- **Pinning.** A project mid-design or released can be pinned (`easy-pcb skill pin <project>`,
+- **Pinning.** A project mid-design or released can be pinned (`boardroom skill pin <project>`,
   or a checkbox) and is skipped by updates until unpinned. Each gate file records the skill
   version it was judged with; a gate passed under an older skill is shown as such, not as
   stale.
 - **Lessons go upstream.** The project's `CLAUDE.md` says: when the person corrects you,
-  read `~/.config/easy-pcb/config.toml`; if `skill_upstream` exists on this machine, add the rule
+  read `~/.config/boardroom/config.toml`; if `skill_upstream` exists on this machine, add the rule
   to its `LESSONS.md`; otherwise add it to the project's own copy. On the owner's machine every
   lesson lands in one place and the next update spreads it. Lessons written into a project's
   copy (on a machine without the app) are not lost: before overwriting, `skill update` looks
@@ -243,7 +247,7 @@ per update.)
 
 ## The project list
 
-`~/.config/easy-pcb/projects.toml`: one entry per project with its path and a pinned flag.
+`~/.config/boardroom/projects.toml`: one entry per project with its path and a pinned flag.
 Not the `proj` registry, which is for servers and ports; a project is a folder, not a server.
 Projects may live anywhere. A missing path shows greyed with "locate…".
 
@@ -289,7 +293,7 @@ The shell server runs every AI job, for itself and for the apps.
 - **Submitting:** `POST /api/jobs` on the shell server, `{project, board, app, skill, prompt,
   request_file, write_scope}`; events (started, text, tool use, question, finished) stream
   over the shell's WebSocket to every window, and the job's whole log is kept under
-  `.easy-pcb/jobs/<id>/` in the project (gitignored).
+  `.boardroom/jobs/<id>/` in the project (gitignored).
 - **Write scope:** a job declares what it may change (Composer's jobs: `compose/**`). It is
   passed as permission rules, and checked afterwards against the diff; anything outside it is
   shown as a violation and not accepted with the rest.
@@ -328,13 +332,13 @@ Same shape as Studio and Composer:
   holds the project list, reads and writes project files, watches them, proxies the apps,
   runs the event bus, the job queue, the Claude terminal ptys, and opens windows. Port from
   `--port`, then `$PORT`, then `proj port`; fails with none. Registered with `proj` as
-  `easy-pcb`.
+  `boardroom`.
 - **`app/web`**: Svelte 5 and Vite, like the other two. The shell is forms, lists and text, so
   it needs no WebGPU; a Rust→WASM core only if shared code (the `status.json` schema types,
   KiCad file reading) makes it worth it. The schema types live in a small Rust crate the other
   two apps can depend on.
-- **The CLI comes first**, as in Composer: `easy-pcb projects`, `easy-pcb status <project>`,
-  `easy-pcb job <project> "<prompt>"`, `easy-pcb open composer <project>`, `easy-pcb signoff
+- **The CLI comes first**, as in Composer: `boardroom projects`, `boardroom status <project>`,
+  `boardroom job <project> "<prompt>"`, `boardroom open composer <project>`, `boardroom signoff
   <project> <gate>`. Every button is one of these, so Claude can drive the shell too.
 - **`index.html` and `serve.sh` stay** in projects as the static project page (phone, GitHub
   Pages). The app does not need them.
@@ -348,10 +352,10 @@ From `platform-spec.md` and Composer's `app-spec.md`:
   `compose/**`.
 - **(b) Composer standalone and AI work:** agreed, one queue: Composer asks the shell server.
   The server is a small daemon that runs without its window, so "requires the shell" means
-  `easy-pcb serve` is running, not the UI open. Composer can start it if it isn't.
+  `boardroom serve` is running, not the UI open. Composer can start it if it isn't.
 - **(c) Can a job name its skill?** Yes, `skill` in the job; the prompt tells Claude to use
   it. The skill has to be present in the project: it is vendored into
-  `.claude/skills/circuit-composer/` by `easy-pcb skill update`, from your repo as its upstream,
+  `.claude/skills/circuit-composer/` by `boardroom skill update`, from your repo as its upstream,
   the same way as `pcb-design`.
 - **Net classes:** agreed, once a project has `compose/`, `intent.json` is the source and
   `nets.csv` is generated. The shell shows `nets.csv` read only in that case, with "edit in
@@ -364,7 +368,7 @@ From `platform-spec.md` and Composer's `app-spec.md`:
 
 ## Milestones
 
-1. **Server and list.** `easy-pcb serve` with the project list, reading `status.json` (old and
+1. **Server and list.** `boardroom serve` with the project list, reading `status.json` (old and
    v1) for easy2350 and one Composer board. Shell window with sidebar and Overview. Registered
    with `proj`.
 2. **Windows.** Open the viewer, KiCad, Composer and Studio for a project, each in its own app
