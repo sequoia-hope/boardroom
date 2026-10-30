@@ -13,6 +13,7 @@
 mod apps;
 mod config;
 mod examples;
+mod files;
 mod project;
 mod server;
 mod snapshot;

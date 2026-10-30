@@ -6,10 +6,13 @@
 use crate::apps;
 use crate::config::{self, ProjectList};
 use crate::examples;
+use crate::files::{self, Expect, WriteError};
 use crate::project;
 use axum::{
     Json, Router,
-    extract::{ConnectInfo, Path as UrlPath, Request, State, ws::{Message, WebSocket, WebSocketUpgrade}},
+    body::Bytes,
+    extract::{ConnectInfo, DefaultBodyLimit, Path as UrlPath, Query, Request, State, ws::{Message, WebSocket, WebSocketUpgrade}},
+    http::HeaderMap,
     http::Method,
     middleware::{self, Next},
     http::{HeaderValue, StatusCode, header},
@@ -50,7 +53,9 @@ pub async fn run(host: &str, port: u16, web: PathBuf) -> Result<(), String> {
         .route("/api/projects/{id}", delete(remove_project))
         .route("/api/examples", get(list_examples))
         .route("/api/projects/{id}/docs", get(docs))
-        .route("/api/projects/{id}/files/{*path}", get(file))
+        // A board file is a few megabytes; the default 2 MB limit is too small for some.
+        .route("/api/projects/{id}/files/{*path}", get(file).put(put_file).layer(DefaultBodyLimit::max(64 << 20)))
+        .route("/api/projects/{id}/history", get(history))
         .route("/api/projects/{id}/open/{what}", post(open))
         .route("/api/pick-folder", post(pick_folder))
         .route("/api/bus", get(bus_socket))
@@ -219,7 +224,76 @@ async fn file(State(app): State<Shared>, UrlPath((id, rel)): UrlPath<(String, St
         return Ok(Json(names).into_response());
     }
     let bytes = tokio::fs::read(&path).await.map_err(|e| bad(StatusCode::NOT_FOUND, e.to_string()))?;
-    Ok(([(header::CONTENT_TYPE, mime(&path))], bytes).into_response())
+    let etag = format!("\"{}\"", files::rev_of(&bytes));
+    Ok(([(header::CONTENT_TYPE, mime(&path).to_string()), (header::ETAG, etag)], bytes).into_response())
+}
+
+/// Writes a project file for an app (the store's server backend). `If-Match` names the revision
+/// the app started from and `If-None-Match: *` asks that there be none; a file that moved on is
+/// 412, with its revision now as the ETag. The bus then says which file changed and which app
+/// changed it (`x-boardroom-app`, `x-boardroom-message`).
+async fn put_file(State(app): State<Shared>, UrlPath((id, rel)): UrlPath<(String, String)>, headers: HeaderMap, body: Bytes) -> ApiResult<Response> {
+    let root = project_path(&app, &id)?;
+    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let expect = match (header("if-match"), header("if-none-match")) {
+        (Some(rev), _) => Expect::Rev(rev.trim().trim_start_matches("W/").trim_matches('"').to_string()),
+        (None, Some(star)) if star.trim() == "*" => Expect::Absent,
+        _ => Expect::Any,
+    };
+    let (root2, rel2) = (root.clone(), rel.clone());
+    let written = tokio::task::spawn_blocking(move || files::write(&root2, &rel2, &body, &expect))
+        .await
+        .map_err(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    match written {
+        Ok(rev) => {
+            let who = header("x-boardroom-app").unwrap_or_else(|| "unknown".into());
+            let message = header("x-boardroom-message").map(|m| percent_decode(&m)).unwrap_or_default();
+            let _ = app.bus.send(serde_json::json!({"type": "changed", "project": id, "paths": [rel], "app": who, "message": message}).to_string());
+            Ok(([(header::ETAG, format!("\"{rev}\""))], Json(serde_json::json!({"rev": rev}))).into_response())
+        }
+        Err(WriteError::Conflict { current }) => {
+            let mut res = (StatusCode::PRECONDITION_FAILED, format!("{rel} changed since you opened it")).into_response();
+            if let Some(rev) = current.and_then(|r| HeaderValue::from_str(&format!("\"{r}\"")).ok()) {
+                res.headers_mut().insert(header::ETAG, rev);
+            }
+            Ok(res)
+        }
+        Err(WriteError::Refused(why)) => Err(bad(StatusCode::FORBIDDEN, why)),
+        Err(WriteError::Io(why)) => Err(bad(StatusCode::INTERNAL_SERVER_ERROR, why)),
+    }
+}
+
+#[derive(Deserialize)]
+struct HistoryQuery {
+    path: Option<String>,
+}
+
+/// The project's history, or one file's (`?path=`): git's, newest first.
+async fn history(State(app): State<Shared>, UrlPath(id): UrlPath<String>, Query(q): Query<HistoryQuery>) -> ApiResult<Json<Vec<serde_json::Value>>> {
+    let root = project_path(&app, &id)?;
+    let list = tokio::task::spawn_blocking(move || files::history(&root, q.path.as_deref()))
+        .await
+        .map_err(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(list))
+}
+
+/// `%XX` escapes undone (the store sends a message so, as headers are ASCII).
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Some(v) = std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Resolves `rel` under `root`, refusing anything that leaves the folder.

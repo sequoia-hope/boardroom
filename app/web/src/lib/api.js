@@ -2,7 +2,20 @@
 // a snapshot written by `boardroom snapshot`. The static build can look but
 // not act: nothing on a web page can open your folders or start KiCad.
 
+import { browserStore, serverStore, query } from '../../../store/store.js';
+
 export const STATIC = !!import.meta.env.VITE_STATIC;
+
+/**
+ * A project's store (app/store/store.js): its files on this machine through the server, or, on
+ * Pages, this tab's workspace over the published snapshot.
+ */
+export function store(id) {
+  return STATIC ? browserStore({ project: id, snapshot: `./snapshot/${id}/` }) : serverStore(`/api/projects/${id}/`);
+}
+
+/** The query that hands `store` to an app Boardroom opens. */
+export const storeQuery = query;
 
 async function json(url, init) {
   // The static build's snapshot changes with every deploy; Pages lets it be

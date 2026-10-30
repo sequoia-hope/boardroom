@@ -3,6 +3,7 @@
   import Overview from './lib/Overview.svelte';
   import Docs from './lib/Docs.svelte';
   import Renders from './lib/Renders.svelte';
+  import History from './lib/History.svelte';
   import BoardView from './lib/board/BoardView.svelte';
 
   // ---- remembered per viewer (window mode, last project, theme) ----
@@ -26,7 +27,7 @@
   const params = new URLSearchParams(location.search);
   let selId = $state(params.get('project') ?? remember('project', null));
   let view = $state(params.get('view') === 'inbox' ? 'inbox' : 'project'); // project | inbox
-  let tab = $state(params.get('tab') ?? 'overview'); // overview | board | gates | documents | renders | viewer | composer | studio
+  let tab = $state(params.get('tab') ?? 'overview'); // overview | board | gates | documents | renders | history | viewer | composer | studio
   let gateDoc = $state(null);
   let doc = $state(null);
   // Pages has no desktop to open windows on, so it is always single-window.
@@ -48,6 +49,8 @@
   });
 
   const sel = $derived(projects.find((p) => p.id === selId) ?? projects[0] ?? null);
+  // The selected project's files, as every app reads and writes them.
+  const store = $derived(sel ? api.store(sel.id) : null);
   const sorted = $derived(
     [...projects].sort((a, b) => (b.pinned - a.pinned) || (b.updated ?? '').localeCompare(a.updated ?? '')),
   );
@@ -127,7 +130,7 @@
 
   const composerBoard = $derived(sel?.boards[0]?.board ?? sel?.board ?? sel?.name);
   const composerUrl = (embed) =>
-    `${api.COMPOSER}?board=${encodeURIComponent(composerBoard)}&project=${encodeURIComponent(sel.path)}${embed ? '&embed=1' : ''}`;
+    `${api.COMPOSER}?board=${encodeURIComponent(composerBoard)}&project=${encodeURIComponent(sel.path)}${embed ? '&embed=1' : ''}&${api.storeQuery(store)}`;
 
   function openComposer() {
     if (mode === 'single') {
@@ -141,7 +144,7 @@
   const studioUrl = () => {
     const b = sel.boards[0];
     const q = new URLSearchParams({ project: sel.path, ...(b ? { board: b.board, variant: b.variant } : {}) });
-    return `${api.STUDIO}?${q}`;
+    return `${api.STUDIO}?${q}&${api.storeQuery(store)}`;
   };
 
   function openStudio() {
@@ -244,6 +247,7 @@
     ['gates', 'Gates'],
     ['documents', 'Documents'],
     ['renders', 'Renders'],
+    ['history', 'History'],
     ...(mode === 'single' && sel?.viewer ? [['viewer', 'Viewer']] : []),
     ...(mode === 'single' ? [['composer', 'Composer']] : []),
     ...(mode === 'single' && api.STUDIO ? [['studio', 'Route']] : []),
@@ -415,6 +419,8 @@
             <BoardView project={sel} selected={selection?.project === sel.id ? (selection.refs ?? []) : []} onselect={(refs) => select(refs)} />
           {:else if tab === 'renders'}
             <Renders project={sel} />
+          {:else if tab === 'history'}
+            <History {store} />
           {/if}
           {#if loaded.includes('composer')}
             <iframe class="viewer" hidden={tab !== 'composer'} bind:this={composerFrame} src={composerUrl(true)} title="Circuit Composer" allow="cross-origin-isolated"></iframe>

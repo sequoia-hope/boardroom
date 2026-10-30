@@ -1,7 +1,7 @@
 # The working demo: Boardroom, Composer and Route on GitHub Pages
 
 Status: **decided** (2026-10-30; the answers are under Decisions). Built so far: the KiCad
-writer Composer saves with (milestone 0).
+writer Composer saves with (milestone 0) and the store (milestone 1).
 
 ## What the person asked for
 
@@ -83,9 +83,18 @@ store.watch(fn)                        // changed paths, from any app or window
   new write endpoint. Git is the history and the file watcher feeds `watch`.
 - **Browser backend** (Pages): the IndexedDB workspace, with `BroadcastChannel` for `watch`.
 
-The module lives in this repo (`app/store/`, plain JS, no dependencies). Composer and Studio
-pin it the way they pin `board-draw`. An app opened with `?project=` uses it. Opened without
-one, it keeps its own demo boards as now.
+The module lives in this repo (`app/store/store.js`, one file of plain JS, no dependencies).
+Composer and Studio copy it at a pinned commit (an npm git dependency would clone this whole
+repo, renders and all). Boardroom opens an app with `?store=<root>` (and `&pid=…&ws=…` in the
+browser); `fromLocation()` turns that back into the store. Opened without one, an app keeps its
+own demo boards as now.
+
+On the server a revision is a hash of the file's bytes, sent as its ETag; a write is
+`PUT /api/projects/<id>/files/<path>` with `If-Match` (or `If-None-Match: *` for a new file),
+412 when the file moved on, and the bus then carries
+`{type: "changed", project, paths, app, message}`. `GET /api/projects/<id>/history[?path=]` is
+what isn't committed, then `git log`. Writes stay inside the project and out of `.git`, and,
+like every change, come only from this machine.
 
 **Conflicts.** `write` carries the revision it started from. If the file moved on in the
 meantime (you routed in one window and moved a part in another), the write is refused. The app
@@ -144,8 +153,12 @@ the renderer Composer and Studio already share.
    in two rounds, natively and in WASM; `Board.write_kicad_pcb` in Composer's core
    (circuit-composer `2a7abb1`), matching `apply_placement.py` on easy2350. Not yet: drawing a
    new outline (Composer's own shaped boards), and KiCad 10's own flip, if it differs from 9's.
-1. **Store.** `app/store/` with both backends, plus Boardroom's write endpoint. Boardroom's
-   History panel shows the history, and offers Reset and Download changes.
+1. **Store.** Done 2026-10-30: `app/store/store.js` with both backends, the server's write and
+   history endpoints, and Boardroom's History tab (Restore, Reset, Download changes on Pages;
+   uncommitted files and git's log locally). Boardroom hands its store to the apps it opens.
+   Tests: `npm run test:store` (the browser backend in Chrome: revisions, conflicts, a tab's
+   workspace across reloads and windows, Restore, Reset, the zip, the sweep; and the server
+   backend's protocol) and `cargo test` in `app/server` (writes, refusals, history).
 2. **Snapshot carries the boards.** `hw/**/*.kicad_{pcb,pro,dru}` and `compose/<board>/problem.json`.
 3. **Route reads and writes the store** (ultraroute): the `?project=` path on Pages, and Save
    on Pages.
