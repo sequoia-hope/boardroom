@@ -17,13 +17,15 @@
 
   const KIND = { signoff: 'Sign-off', question: 'Question', alert: 'Problem' };
 
+  const n = (k, word) => `${k} ${word}${k === 1 ? '' : 's'}`;
+
   // Studio's entry, from ultraroute's run report: "412/414 routed · 2 opens".
   function studioLine(v) {
     const parts = [];
     if (v.connections != null) parts.push(`${v.routed ?? '?'}/${v.connections} routed`);
     if (v.opens != null) parts.push(v.opens ? `${v.opens} open${v.opens === 1 ? '' : 's'}` : 'no opens');
     const f = v.findings ?? {};
-    if (f.error || f.warning) parts.push(`${f.error ?? 0} errors, ${f.warning ?? 0} warnings`);
+    if (f.error || f.warning) parts.push(`${n(f.error ?? 0, 'error')}, ${n(f.warning ?? 0, 'warning')}`);
     return parts.join(' · ');
   }
 
