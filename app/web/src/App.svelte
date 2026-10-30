@@ -26,7 +26,7 @@
   const params = new URLSearchParams(location.search);
   let selId = $state(params.get('project') ?? remember('project', null));
   let view = $state(params.get('view') === 'inbox' ? 'inbox' : 'project'); // project | inbox
-  let tab = $state(params.get('tab') ?? 'overview'); // overview | gates | documents | renders | viewer
+  let tab = $state(params.get('tab') ?? 'overview'); // overview | board | gates | documents | renders | viewer | composer | studio
   let gateDoc = $state(null);
   let doc = $state(null);
   // Pages has no desktop to open windows on, so it is always single-window.
@@ -39,6 +39,13 @@
   let topH = $state(62);
   let selection = $state(null); // {from, board, refs} — the last selection any app reported
   let composerFrame = $state(null);
+  // The apps embedded in single-window mode load on first visit and then stay loaded, hidden
+  // behind the other tabs, so going back to one finds it as it was left.
+  const FRAMES = ['viewer', 'composer', 'studio'];
+  let loaded = $state(FRAMES.includes(tab) ? [tab] : []);
+  $effect(() => {
+    if (FRAMES.includes(tab) && !loaded.includes(tab)) loaded.push(tab);
+  });
 
   const sel = $derived(projects.find((p) => p.id === selId) ?? projects[0] ?? null);
   const sorted = $derived(
@@ -51,7 +58,10 @@
   });
   $effect(() => {
     keep('mode', mode);
-    if (mode === 'windows' && (tab === 'viewer' || tab === 'composer')) tab = 'overview';
+    if (mode === 'windows') {
+      if (FRAMES.includes(tab)) tab = 'overview';
+      loaded = [];
+    }
   });
   $effect(() => {
     keep('theme', theme);
@@ -128,12 +138,28 @@
     if (!w) flash('The browser blocked the window; allow pop-ups for Boardroom.');
   }
 
+  const studioUrl = () => {
+    const b = sel.boards[0];
+    const q = new URLSearchParams({ project: sel.path, ...(b ? { board: b.board, variant: b.variant } : {}) });
+    return `${api.STUDIO}?${q}`;
+  };
+
+  function openStudio() {
+    if (mode === 'single') {
+      tab = 'studio';
+      return;
+    }
+    const w = window.open(studioUrl(), `studio-${sel.id}`, 'popup,width=1500,height=950');
+    if (!w) flash('The browser blocked the window; allow pop-ups for Boardroom.');
+  }
+
   function flash(msg) {
     toast = msg;
     setTimeout(() => (toast = ''), 3500);
   }
 
   function choose(p) {
+    if (p.id !== selId) loaded = FRAMES.includes(tab) ? [tab] : [];
     selId = p.id;
     view = 'project';
     if ((tab === 'viewer' || tab === 'board') && !p.viewer) tab = 'overview';
@@ -220,6 +246,7 @@
     ['renders', 'Renders'],
     ...(mode === 'single' && sel?.viewer ? [['viewer', 'Viewer']] : []),
     ...(mode === 'single' ? [['composer', 'Composer']] : []),
+    ...(mode === 'single' && api.STUDIO ? [['studio', 'Studio']] : []),
   ]);
 
   const gateTitles = $derived(
@@ -355,7 +382,7 @@
         <div class="open-in">
           <span class="label">Open in</span>
           <button class="btn" title="Circuit Composer, board {composerBoard} (prototype)" onclick={openComposer}>Composer</button>
-          <button class="btn" disabled title="UltraRoute Studio: opening a project path is on its list">Studio</button>
+          <button class="btn" disabled={!api.STUDIO} title={api.STUDIO ? `UltraRoute Studio, board ${composerBoard}` : 'Studio opens a project from this machine, not from the Pages site'} onclick={openStudio}>Studio</button>
           <button class="btn" disabled={!sel.viewer} title={sel.viewer ? 'pcbview' : 'No viewer built yet (scripts/view.sh build)'} onclick={openViewer}>Viewer</button>
           {#if !api.STATIC}
             <button class="btn" disabled={!sel.boards.some((b) => b.kicad_pro)} onclick={() => act('kicad')}>KiCad</button>
@@ -371,7 +398,7 @@
         {/each}
       </nav>
 
-      <div class="body" class:flush={tab === 'viewer' || tab === 'composer' || tab === 'board'}>
+      <div class="body" class:flush={FRAMES.includes(tab) || tab === 'board'}>
         {#if !sel.exists}
           <p class="err">This folder is missing: <span class="mono">{sel.path}</span></p>
         {:else if sel.error}
@@ -388,10 +415,15 @@
             <BoardView project={sel} selected={selection?.project === sel.id ? (selection.refs ?? []) : []} onselect={(refs) => select(refs)} />
           {:else if tab === 'renders'}
             <Renders project={sel} />
-          {:else if tab === 'composer'}
-            <iframe class="viewer" bind:this={composerFrame} src={composerUrl(true)} title="Circuit Composer" allow="cross-origin-isolated"></iframe>
-          {:else if tab === 'viewer'}
-            <iframe class="viewer" src={api.fileUrl(sel.id, sel.viewer)} title="Board viewer"></iframe>
+          {/if}
+          {#if loaded.includes('composer')}
+            <iframe class="viewer" hidden={tab !== 'composer'} bind:this={composerFrame} src={composerUrl(true)} title="Circuit Composer" allow="cross-origin-isolated"></iframe>
+          {/if}
+          {#if loaded.includes('studio') && api.STUDIO}
+            <iframe class="viewer" hidden={tab !== 'studio'} src={studioUrl()} title="UltraRoute Studio" allow="cross-origin-isolated"></iframe>
+          {/if}
+          {#if loaded.includes('viewer') && sel.viewer}
+            <iframe class="viewer" hidden={tab !== 'viewer'} src={api.fileUrl(sel.id, sel.viewer)} title="Board viewer"></iframe>
           {/if}
         {/if}
       </div>

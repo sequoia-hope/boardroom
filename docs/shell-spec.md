@@ -20,8 +20,10 @@ The app is in `app/` (`app/build.sh`, `app/serve.sh`); the rest of this spec is 
   isolation headers. Reachable from other devices like the proj hub, but **read-only** to them:
   anything other than a read must come from this machine.
 - **Page** (`app/web`, Svelte 5): sidebar with projects, an inbox and examples; tabs Overview,
-  Board, Gates, Documents, Renders, and in single-window mode Viewer and Composer. Composer
-  opens windowed or embedded, and its selection travels on the bus.
+  Board, Gates, Documents, Renders, and in single-window mode Viewer, Composer and Studio.
+  Composer and Studio open windowed or embedded, and Composer's selection travels on the bus.
+  An embedded app loads on its first visit and stays loaded behind the other tabs, so going
+  back to it finds it as it was left (switching project or mode reloads it).
 - **Board tab**: Boardroom's own layer viewer and 3D view over pcbview's generated data
   (below, "The viewer").
 - **Examples** (`examples.toml`): named by a path in this repo or by git remote and ref, never
@@ -74,7 +76,7 @@ both:
 | Mode | What you get | Used for |
 |---|---|---|
 | **Windows** (default) | The shell is one window. Composer, Studio, the viewer and KiCad each open in their own window, one per project and board | Desktop use, several monitors |
-| **Single window** | Apps open as tabs inside the shell window (Composer's `&embed=1`, Studio's equivalent) | A laptop, a browser tab, a phone check-in |
+| **Single window** | Apps open as tabs inside the shell window (Composer's `&embed=1`; Studio as it is, its socket proxied too) | A laptop, a browser tab, a phone check-in |
 
 Windows mode is the same pages opened as separate app windows. A setting picks the mode, and
 any tab in single-window mode can be "popped out" into its own window and back.

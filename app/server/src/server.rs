@@ -14,7 +14,7 @@ use axum::{
     middleware::{self, Next},
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{any, delete, get, post},
 };
 use notify::{RecursiveMode, Watcher};
 use serde::Deserialize;
@@ -55,8 +55,8 @@ pub async fn run(host: &str, port: u16, web: PathBuf) -> Result<(), String> {
         .route("/api/pick-folder", post(pick_folder))
         .route("/api/bus", get(bus_socket))
         .route("/apps/{name}", get(apps::slash))
-        .route("/apps/{name}/", get(|UrlPath(name): UrlPath<String>, req| apps::proxy(UrlPath((name, String::new())), req)))
-        .route("/apps/{name}/{*rest}", get(apps::proxy))
+        .route("/apps/{name}/", any(|peer, UrlPath(name): UrlPath<String>, req| apps::proxy(peer, UrlPath((name, String::new())), req)))
+        .route("/apps/{name}/{*rest}", any(apps::proxy))
         .fallback_service(ServeDir::new(&web).fallback(index))
         .layer(SetResponseHeaderLayer::overriding(
             header::HeaderName::from_static("cross-origin-opener-policy"),

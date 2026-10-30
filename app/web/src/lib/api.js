@@ -15,6 +15,9 @@ async function json(url, init) {
 /** Circuit Composer's page: through Boardroom's proxy, or its own Pages site. */
 export const COMPOSER = STATIC ? 'https://sequoia-hope.github.io/circuit-composer/' : '/apps/composer/';
 
+/** UltraRoute Studio's page, through Boardroom's proxy. It opens a project by its path, so the static build has none. */
+export const STUDIO = STATIC ? null : '/apps/studio/studio/';
+
 export function examples() {
   return STATIC ? Promise.resolve([]) : json('/api/examples');
 }

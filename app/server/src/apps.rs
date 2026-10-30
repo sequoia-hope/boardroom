@@ -4,14 +4,15 @@
 //!
 //! Each app runs its own server on its registered port; Boardroom asks the
 //! registry for that port (`proj port <project>`) rather than keeping a copy.
+//! WebSockets pass through too (Studio drives its router over one).
 
 use axum::{
     body::Body,
-    extract::{Path as UrlPath, Request},
-    http::{StatusCode, Uri},
+    extract::{ConnectInfo, Path as UrlPath, Request},
+    http::{StatusCode, Uri, header},
     response::{IntoResponse, Response},
 };
-use hyper_util::{client::legacy::Client, rt::TokioExecutor};
+use hyper_util::{client::legacy::Client, rt::{TokioExecutor, TokioIo}};
 use std::sync::OnceLock;
 
 /// An app: its name in Boardroom's URLs, its registry project, and the path
@@ -22,7 +23,11 @@ pub struct AppDef {
     pub base: &'static str,
 }
 
-pub const APPS: [AppDef; 1] = [AppDef { name: "composer", project: "circuit-composer", base: "/app/dist/" }];
+pub const APPS: [AppDef; 2] = [
+    AppDef { name: "composer", project: "circuit-composer", base: "/app/dist/" },
+    // ultraroute's server: the studio's page is /apps/studio/studio/, its socket /apps/studio/ws.
+    AppDef { name: "studio", project: "ultraroute", base: "/" },
+];
 
 fn registry_port(project: &str) -> Option<u16> {
     let out = std::process::Command::new("proj").args(["port", project]).output().ok()?;
@@ -37,7 +42,11 @@ fn client() -> &'static Client<hyper_util::client::legacy::connect::HttpConnecto
     CLIENT.get_or_init(|| Client::builder(TokioExecutor::new()).build_http())
 }
 
-pub async fn proxy(UrlPath((name, rest)): UrlPath<(String, String)>, req: Request) -> Response {
+pub async fn proxy(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    UrlPath((name, rest)): UrlPath<(String, String)>,
+    mut req: Request,
+) -> Response {
     let Some(app) = APPS.iter().find(|a| a.name == name) else {
         return (StatusCode::NOT_FOUND, format!("no app '{name}'")).into_response();
     };
@@ -51,11 +60,27 @@ pub async fn proxy(UrlPath((name, rest)): UrlPath<(String, String)>, req: Reques
         Ok(u) => u,
         Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     };
+    // A socket can route and save a board, so, like any change, only from this machine.
+    let upgrade = req.headers().contains_key(header::UPGRADE);
+    if upgrade && !peer.ip().is_loopback() {
+        return (StatusCode::FORBIDDEN, "Boardroom takes changes only from the machine it runs on").into_response();
+    }
+    let browser_side = upgrade.then(|| hyper::upgrade::on(&mut req));
     let (mut parts, body) = req.into_parts();
     parts.uri = target;
-    parts.headers.remove(axum::http::header::HOST);
+    parts.headers.remove(header::HOST);
     match client().request(Request::from_parts(parts, body)).await {
-        Ok(resp) => resp.map(Body::new).into_response(),
+        Ok(mut resp) => {
+            if let (StatusCode::SWITCHING_PROTOCOLS, Some(browser_side)) = (resp.status(), browser_side) {
+                let app_side = hyper::upgrade::on(&mut resp);
+                tokio::spawn(async move {
+                    if let (Ok(a), Ok(b)) = (browser_side.await, app_side.await) {
+                        let _ = tokio::io::copy_bidirectional(&mut TokioIo::new(a), &mut TokioIo::new(b)).await;
+                    }
+                });
+            }
+            resp.map(Body::new).into_response()
+        }
         Err(e) => (
             StatusCode::BAD_GATEWAY,
             format!("{} isn't running on port {port} (proj up {}): {e}", app.name, app.project),
