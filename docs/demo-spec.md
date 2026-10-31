@@ -19,7 +19,7 @@ The aim is closing the gaps that stop the workflow running entirely in the brows
 
 | | Local (served from this machine) | Pages |
 |---|---|---|
-| **Boardroom** | Reads projects from disk; watches them; the bus over a WebSocket | A read-only snapshot (`boardroom snapshot`): `design/`, `viewer/`. No `hw/`, so no KiCad files |
+| **Boardroom** | Reads projects from disk; watches them; the bus over a WebSocket | A snapshot (`boardroom snapshot`): `design/`, `viewer/`, and (milestone 2) the KiCad files and Composer's placement problems |
 | **Composer** | Static files (`python3 -m http.server`); no server yet. Ignores `?project=` and shows its built-in copy of the board, or `rp2350-battery` | Built-in example boards (`problem.json` made by `ccomp` at build time). Saving is "Download placement" |
 | **Route** | Opens a project by path; routes on the server; **Save to project** writes the `.kicad_pcb` | `VITE_LOCAL` build: routes in the tab (WASM), opens files from your computer, **downloads** the routed board |
 
@@ -159,7 +159,15 @@ the renderer Composer and Studio already share.
    Tests: `npm run test:store` (the browser backend in Chrome: revisions, conflicts, a tab's
    workspace across reloads and windows, Restore, Reset, the zip, the sweep; and the server
    backend's protocol) and `cargo test` in `app/server` (writes, refusals, history).
-2. **Snapshot carries the boards.** `hw/**/*.kicad_{pcb,pro,dru}` and `compose/<board>/problem.json`.
+2. **Snapshot carries the boards.** Done 2026-10-30: `boardroom snapshot` copies each variant's
+   own `hw/<board>/<variant>/*.kicad_{pcb,pro,dru}` (not the routing runs in folders below it) and
+   writes `compose/<board>/problem.json` for the board's last variant: the project's own if it
+   has one, else `ccomp floorplan --nets-from-board --outline-from-board --problem` on the board
+   (`--ccomp PATH` or `$CCOMP`; the snapshot refuses to run without it). `projects.json` lists
+   them per project as `compose: [{board, variant, pcb, problem}]`, with `error` instead of
+   `problem` for a board ccomp can't read, which doesn't stop the build. The Pages workflow
+   clones and builds ccomp, and runs `npm run test:store` too. easy2350 (58 parts, 62 nets) and
+   simple-earring (167, 98) both come through, read back through the browser store.
 3. **Route reads and writes the store** (ultraroute): the `?project=` path on Pages, and Save
    on Pages.
 4. **Composer reads and writes the store** (circuit-composer): no selector with `?project=`, a

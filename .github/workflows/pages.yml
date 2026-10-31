@@ -1,6 +1,6 @@
 # The web-only Boardroom on GitHub Pages: the single-window app reading a
-# static snapshot of the example project (examples/easy2350). It can look but
-# not act; the desktop app is what opens folders, KiCad and the other apps.
+# static snapshot of the example projects, KiCad files and Composer's placement
+# problems included; changes are kept in the browser (app/store/store.js).
 name: Pages
 
 on:
@@ -34,15 +34,29 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # ccomp makes each board's placement problem for Composer (compose/<board>/problem.json).
+      - name: Fetch circuit-composer
+        run: git clone --quiet --depth 1 https://github.com/sequoia-hope/circuit-composer ../circuit-composer
+
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: app/server
+          workspaces: |
+            app/server
+            ../circuit-composer
+
+      - name: Build ccomp
+        run: cargo build --release --quiet --manifest-path ../circuit-composer/Cargo.toml -p ccomp
 
       - name: Build the static page
         working-directory: app/web
         run: |
           npm ci --no-audit --no-fund
           npm run build:pages
+
+      # The store in Chrome (the runner's own): revisions, conflicts, workspaces, the zip.
+      - name: Test the store
+        working-directory: app/web
+        run: npm run test:store
 
       # examples.toml names each example by a path here or by its own repo and
       # ref; the repo ones are cloned for this build only (no submodules).
@@ -64,6 +78,8 @@ jobs:
           EOF
 
       - name: Snapshot the examples into it
+        env:
+          CCOMP: ../circuit-composer/target/release/ccomp
         run: |
           cargo run --quiet --manifest-path app/server/Cargo.toml -- \
             snapshot app/web/dist-pages/snapshot ${{ steps.examples.outputs.folders }}

@@ -1,11 +1,11 @@
 //! Boardroom: the project manager and main window of the board design suite.
 //!
-//!     boardroom serve [--port N] [--host ADDR]   run the server
-//!     boardroom open  [--port N] [--browser]     open the Boardroom window
-//!     boardroom add <folder>                     add a project to the list
-//!     boardroom remove <folder>                  take one off the list
-//!     boardroom list                             the list, with each project's phase
-//!     boardroom snapshot <out> <folder>...       a static copy for the web-only build
+//!     boardroom serve [--port N] [--host ADDR]      run the server
+//!     boardroom open  [--port N] [--browser]        open the Boardroom window
+//!     boardroom add <folder>                        add a project to the list
+//!     boardroom remove <folder>                     take one off the list
+//!     boardroom list                                the list, with each project's phase
+//!     boardroom snapshot [--ccomp P] <out> <dir>... a static copy for the web-only build
 //!
 //! The port comes from --port, then $PORT, then `proj port`; with none the
 //! command fails rather than guessing (see docs/shell-spec.md).
