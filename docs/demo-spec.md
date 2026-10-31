@@ -183,7 +183,7 @@ the renderer Composer and Studio already share.
    with Boardroom's and Studio's Pages builds on one origin: route easy2350 in Boardroom's Route
    tab, save, see it in History, reload and still have it; a Composer save during a run gives
    the conflict, Save as a copy and Reload work.
-4. **Composer reads and writes the store.** Done 2026-10-31 (circuit-composer, see below).
+4. **Composer reads and writes the store.** Done 2026-10-31 (circuit-composer `697163c`).
    Opened with a store and `?board=&variant=` (Boardroom now passes the variant), Composer
    shows no selector. It loads `compose/<board>/problem.json`, and takes the parts' poses and
    the inspector's circuit from the `.kicad_pcb` (`KicadBoard::read` in its core). Read and
