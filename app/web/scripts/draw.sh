@@ -21,8 +21,9 @@ if [[ ! -d $src/.git ]]; then
   git -C "$src" sparse-checkout set --no-cone /core/Cargo.toml /core/Cargo.lock /core/rust-toolchain.toml \
     /core/crates/ /studio/Cargo.toml /studio/Cargo.lock /studio/core/ /studio/server/
 fi
-if [[ $(git -C "$src" rev-parse HEAD 2>/dev/null) != "$REV" ]]; then
-  git -C "$src" fetch --quiet origin "$REV"
+# A fresh clone has checked nothing out, even when its HEAD is already the commit.
+if [[ $(git -C "$src" rev-parse HEAD 2>/dev/null) != "$REV" || ! -f $src/studio/Cargo.toml ]]; then
+  git -C "$src" cat-file -e "$REV^{commit}" 2>/dev/null || git -C "$src" fetch --quiet origin "$REV"
   git -C "$src" checkout --quiet "$REV"
 fi
 
