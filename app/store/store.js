@@ -235,6 +235,14 @@ export function browserStore({ project, snapshot, ws = workspaceId() }) {
       return d;
     }));
   let persisted = null;
+  // Whether the published project has a file: asked once per path, since a snapshot doesn't change.
+  const published = new Map();
+  const inSnapshot = (path) => {
+    if (!published.has(path)) {
+      published.set(path, fetch(snapshot + segments(path), { method: 'HEAD', cache: 'no-cache' }).then((r) => r.ok, () => false));
+    }
+    return published.get(path);
+  };
 
   async function entries() {
     const d = await db();
@@ -271,12 +279,16 @@ export function browserStore({ project, snapshot, ws = workspaceId() }) {
 
     async write(path, data, { app = 'unknown', message = '', base } = {}) {
       const bytes = toBytes(data);
+      // Asked before the transaction, which would close while a fetch is waited on.
+      const there = base === undefined ? true : await inSnapshot(path);
       const d = await db();
       // One transaction: two windows writing the same file are serialized by the database, and
       // the second sees the first's revision.
       const tx = d.transaction(['workspaces', 'files', 'history'], 'readwrite');
       const files = tx.objectStore('files');
-      const current = (await result(files.get([ws, project, path])))?.rev ?? 'published';
+      // The tab's own revision; else the published file's, or none: a new file, or one deleted here.
+      const own = await result(files.get([ws, project, path]));
+      const current = own ? (own.deleted ? null : own.rev) : there ? 'published' : null;
       if (base !== undefined && base !== current) {
         tx.abort();
         await done(tx).catch(() => {});

@@ -94,6 +94,15 @@ await check('a write is a revision, and a stale one is a conflict', async () => 
   eq(r, ['r1', ['Conflict', 'r1'], '(kicad_pcb moved)'], 'write');
 });
 
+await check('a new file is made only where there is none, published or here', async () => {
+  const r = await a.evaluate(async () => {
+    const own = S.browserStore({ project: 'p', snapshot: '/snapshot/p/', ws: 'create-tab' });
+    const tryWrite = (path) => own.write(path, 'x', { app: 'route', base: null }).then(() => 'made', (e) => e.name);
+    return [await tryWrite('route/b/new.txt'), await tryWrite('route/b/new.txt'), await tryWrite('design/status.json')];
+  });
+  eq(r, ['made', 'Conflict', 'Conflict'], 'create');
+});
+
 await check('a reload keeps the tab\'s workspace', async () => {
   const ws = await a.evaluate(() => store.ws);
   await a.reload();
