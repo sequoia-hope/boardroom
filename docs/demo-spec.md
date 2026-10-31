@@ -21,7 +21,7 @@ The aim is closing the gaps that stop the workflow running entirely in the brows
 |---|---|---|
 | **Boardroom** | Reads projects from disk; watches them; the bus over a WebSocket | A snapshot (`boardroom snapshot`): `design/`, `viewer/`, and (milestone 2) the KiCad files and Composer's placement problems |
 | **Composer** | Static files (`python3 -m http.server`); no server yet. Ignores `?project=` and shows its built-in copy of the board, or `rp2350-battery` | Built-in example boards (`problem.json` made by `ccomp` at build time). Saving is "Download placement" |
-| **Route** | Opens a project by path; routes on the server; **Save to project** writes the `.kicad_pcb` | `VITE_LOCAL` build: routes in the tab (WASM), opens files from your computer, **downloads** the routed board |
+| **Route** | Opens a project by path; routes on the server; **Save to project** writes the `.kicad_pcb` | `VITE_LOCAL` build: routes in the tab (WASM), opens files from your computer, **downloads** the routed board; (milestone 3) opens a project's board from the store and saves it back |
 
 Today, nothing passes a change from one app to the next: each app only saves to disk or downloads a file.
 
@@ -168,8 +168,21 @@ the renderer Composer and Studio already share.
    `problem` for a board ccomp can't read, which doesn't stop the build. The Pages workflow
    clones and builds ccomp, and runs `npm run test:store` too. easy2350 (58 parts, 62 nets) and
    simple-earring (167, 98) both come through, read back through the browser store.
-3. **Route reads and writes the store** (ultraroute): the `?project=` path on Pages, and Save
-   on Pages.
+3. **Route reads and writes the store.** Done 2026-10-30 (ultraroute `5c09c33`): opened with a
+   browser store and `?board=&variant=`, Studio reads the board's `.kicad_pcb`, `.kicad_pro` and
+   `.kicad_dru` from it and routes in the tab. **Save to project** writes the board with the
+   revision it read; refused, it offers **Reload** or **Save as a copy** (`<board>-2.kicad_pcb`,
+   which leaves the board's report and status alone). With the board it writes
+   `route/<board>/report.json` (what a run in the tab knows: its opens; the tab's router makes
+   no full report) and the studio's entry in `design/status.json` (opens, routed from the
+   board's connections, last route; the published run's findings and router commit dropped). A
+   change from another app or window reloads the board when nothing routed is unsaved, and
+   warns otherwise. Boardroom's Route button and tab now work on Pages, opening Studio's Pages
+   site. Locally, Studio still opens a project by path and saves through its own server. Fixed
+   on the way: the browser store refused to make any new file (`32b8bdd`). Checked in Chrome
+   with Boardroom's and Studio's Pages builds on one origin: route easy2350 in Boardroom's Route
+   tab, save, see it in History, reload and still have it; a Composer save during a run gives
+   the conflict, Save as a copy and Reload work.
 4. **Composer reads and writes the store** (circuit-composer): no selector with `?project=`, a
    load error instead of a demo fallback, Save writing `placement.json` and the `.kicad_pcb`,
    and standalone Composer opening Boardroom's example projects.

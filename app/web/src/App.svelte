@@ -348,8 +348,9 @@
   <main style="--top-h: {topH}px">
     {#if api.STATIC}
       <div class="demo">
-        A read-only snapshot of the example project. Boardroom itself runs on your desktop, where it
-        opens your project folders, KiCad, and the suite's other apps.
+        The example projects as published. A board you route in Route is saved in this browser tab
+        (History lists every save). Boardroom itself runs on your desktop, where it opens your
+        project folders, KiCad, and the suite's other apps.
         <a href="https://github.com/sequoia-hope/boardroom">github.com/sequoia-hope/boardroom</a>
       </div>
     {/if}
