@@ -8,7 +8,8 @@
     "build": "vite build",
     "build:pages": "VITE_STATIC=1 vite build --outDir dist-pages",
     "smoke": "node tests/smoke.mjs",
-    "test:store": "node tests/store.mjs"
+    "test:store": "node tests/store.mjs",
+    "test:stale": "node tests/stale.mjs"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "7.3.1",

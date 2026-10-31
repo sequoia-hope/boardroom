@@ -1,7 +1,7 @@
 # The working demo: Boardroom, Composer and Route on GitHub Pages
 
 Status: **decided** (2026-10-30; the answers are under Decisions). Built so far: milestones
-0–4, the Pages workflow from Boardroom through Composer and Route.
+0–4, the Pages workflow from Boardroom through Composer and Route, and milestone 5's stale bar.
 
 ## What the person asked for
 
@@ -200,6 +200,15 @@ the renderer Composer and Studio already share.
    unsaved moves, and Save as a copy and Reload both work. The saved board differs from the
    published one only in U1's `(at …)` line, and kicad-cli opens it.
 5. **Stale bar** on Boardroom's drawn tabs; then the Board tab draws from the `.kicad_pcb`.
+   The bar is done 2026-10-31. Board, Viewer, Renders and Overview (its thumbnail is a render)
+   show it once a board's `.kicad_pcb` has changed since the tab was drawn. On Pages that is any
+   change in the tab's workspace: "Showing the published board; easy2350.kicad_pcb changed in
+   Route at 14:05 · Routed easy2350", with a History button. Reset takes it away. Locally it
+   compares the board file's time on disk (the server now sends `Last-Modified`) with
+   `viewer/site.json`'s, or the thumbnail's, and says how to rebuild. Test: `npm run test:stale`
+   (the Pages build in Chrome, also run by the Pages workflow). Checked by hand on this machine
+   too: easy2350's board is newer than its viewer data, so Board and Viewer show the bar, and
+   Renders and Overview don't.
 6. **Composer's server** for the local workflow.
 
 Done means: on the Pages site, a phone or laptop can open easy2350, move U1 in Composer, route

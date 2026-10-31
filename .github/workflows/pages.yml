@@ -58,6 +58,11 @@ jobs:
         working-directory: app/web
         run: npm run test:store
 
+      # The bar over the drawn tabs once the board is changed in the tab.
+      - name: Test the stale bar
+        working-directory: app/web
+        run: npm run test:stale
+
       # examples.toml names each example by a path here or by its own repo and
       # ref; the repo ones are cloned for this build only (no submodules).
       - name: Fetch the examples

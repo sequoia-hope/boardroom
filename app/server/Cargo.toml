@@ -20,3 +20,4 @@ notify = "8"
 hyper = "1"
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 http-body-util = "0.1"
+httpdate = "1"

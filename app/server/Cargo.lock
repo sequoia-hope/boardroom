@@ -90,6 +90,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "http-body-util",
+ "httpdate",
  "hyper",
  "hyper-util",
  "notify",

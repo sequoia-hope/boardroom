@@ -225,7 +225,9 @@ async fn file(State(app): State<Shared>, UrlPath((id, rel)): UrlPath<(String, St
     }
     let bytes = tokio::fs::read(&path).await.map_err(|e| bad(StatusCode::NOT_FOUND, e.to_string()))?;
     let etag = format!("\"{}\"", files::rev_of(&bytes));
-    Ok(([(header::CONTENT_TYPE, mime(&path).to_string()), (header::ETAG, etag)], bytes).into_response())
+    // When the file last changed: Boardroom's drawn tabs compare the board's against when they were drawn.
+    let modified = std::fs::metadata(&path).and_then(|m| m.modified()).map(httpdate::fmt_http_date).unwrap_or_default();
+    Ok(([(header::CONTENT_TYPE, mime(&path).to_string()), (header::ETAG, etag), (header::LAST_MODIFIED, modified)], bytes).into_response())
 }
 
 /// Writes a project file for an app (the store's server backend). `If-Match` names the revision

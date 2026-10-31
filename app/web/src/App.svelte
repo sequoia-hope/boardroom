@@ -5,6 +5,8 @@
   import Renders from './lib/Renders.svelte';
   import History from './lib/History.svelte';
   import BoardView from './lib/board/BoardView.svelte';
+  import Stale from './lib/Stale.svelte';
+  import { boardChange } from './lib/stale.js';
 
   // ---- remembered per viewer (window mode, last project, theme) ----
   const remember = (key, fallback) => {
@@ -49,8 +51,26 @@
   });
 
   const sel = $derived(projects.find((p) => p.id === selId) ?? projects[0] ?? null);
-  // The selected project's files, as every app reads and writes them.
-  const store = $derived(sel ? api.store(sel.id) : null);
+  // The selected project's files, as every app reads and writes them: one store per project,
+  // not one per refresh of the list.
+  const selKey = $derived(sel?.id ?? null);
+  const store = $derived(selKey ? api.store(selKey) : null);
+  // The board's newest change, which the drawn tabs (Board, Renders, Viewer) don't show yet.
+  let boardChanged = $state(null);
+  $effect(() => {
+    const [p, s] = [sel, store];
+    boardChanged = null;
+    if (!p || !s) return;
+    let live = true;
+    const check = () => boardChange(p, s).then((c) => live && (boardChanged = c)).catch(() => {});
+    check();
+    const stop = s.watch(check);
+    return () => {
+      live = false;
+      stop();
+    };
+  });
+  const VIEWER_FIX = 'Rebuild the viewer: scripts/view.sh build pcbview.toml';
   const sorted = $derived(
     [...projects].sort((a, b) => (b.pinned - a.pinned) || (b.updated ?? '').localeCompare(a.updated ?? '')),
   );
@@ -410,6 +430,11 @@
           <p class="err">{sel.error}</p>
         {/if}
         {#if sel.exists}
+          {#if tab === 'board' || tab === 'viewer'}
+            <Stale project={sel} change={boardChanged} from="viewer/site.json" fix={VIEWER_FIX} onhistory={() => (tab = 'history')} />
+          {:else if (tab === 'renders' || tab === 'overview') && sel.thumbnail}
+            <Stale project={sel} change={boardChanged} from={sel.thumbnail} fix="The skill renders it again at the next gate." onhistory={() => (tab = 'history')} />
+          {/if}
           {#if tab === 'overview'}
             <Overview project={sel} ongate={gotoGate} onlink={followLink} />
           {:else if tab === 'gates'}
@@ -716,6 +741,7 @@
   .body.flush {
     padding: 0;
     display: flex;
+    flex-direction: column;
     min-height: 0;
     overflow: hidden;
   }
