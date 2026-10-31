@@ -289,14 +289,18 @@
     color: var(--bad);
   }
 
+  /* Narrow: the part's details sit below the board in at most a third of the height, so the
+     board stays in view. */
   @media (max-width: 900px) {
     .main.with-pane {
       grid-template-columns: 1fr;
+      grid-template-rows: minmax(0, 1fr) auto;
     }
 
     .pane {
       border-left: none;
       border-top: 1px solid var(--line);
+      max-height: 34dvh;
     }
   }
 </style>
