@@ -32,8 +32,18 @@
   let tab = $state(params.get('tab') ?? 'overview'); // overview | board | gates | documents | renders | history | viewer | composer | studio
   let gateDoc = $state(null);
   let doc = $state(null);
-  // Pages has no desktop to open windows on, so it is always single-window.
-  let mode = $state(api.STATIC ? 'single' : (params.get('mode') ?? remember('mode', 'windows')));
+  // A phone-sized screen: the project list folds into a bar, and an app's tab takes the screen.
+  const narrowQuery = matchMedia('(max-width: 760px)');
+  let narrow = $state(narrowQuery.matches);
+  $effect(() => {
+    const on = () => (narrow = narrowQuery.matches);
+    narrowQuery.addEventListener('change', on);
+    return () => narrowQuery.removeEventListener('change', on);
+  });
+  let navOpen = $state(false);
+  let aboutHidden = $state(remember('about', '') === 'hidden');
+  // Pages, and a phone, have no desktop to open windows on, so they are always single-window.
+  let mode = $state(api.STATIC || narrowQuery.matches ? 'single' : (params.get('mode') ?? remember('mode', 'windows')));
   let theme = $state(remember('theme', 'auto'));
   let adding = $state(false);
   let addPath = $state('');
@@ -80,7 +90,7 @@
     if (sel) keep('project', sel.id);
   });
   $effect(() => {
-    keep('mode', mode);
+    if (!narrow) keep('mode', mode);
     if (mode === 'windows') {
       if (FRAMES.includes(tab)) tab = 'overview';
       loaded = [];
@@ -185,6 +195,7 @@
     if (p.id !== selId) loaded = FRAMES.includes(tab) ? [tab] : [];
     selId = p.id;
     view = 'project';
+    navOpen = false;
     if ((tab === 'viewer' && !p.viewer) || (tab === 'board' && !p.viewer && !p.boards.length)) tab = 'overview';
   }
 
@@ -261,17 +272,20 @@
     refresh();
   }
 
+  // The board and the apps that change it first, then the project's records.
   const tabs = $derived([
     ['overview', 'Overview'],
     ...(sel?.viewer || sel?.boards.length ? [['board', 'Board']] : []),
+    ...(mode === 'single' ? [['composer', 'Composer']] : []),
+    ...(mode === 'single' && api.STUDIO ? [['studio', 'Route']] : []),
+    ['history', 'History'],
     ['gates', 'Gates'],
     ['documents', 'Documents'],
     ['renders', 'Renders'],
-    ['history', 'History'],
     ...(mode === 'single' && sel?.viewer ? [['viewer', 'Viewer']] : []),
-    ...(mode === 'single' ? [['composer', 'Composer']] : []),
-    ...(mode === 'single' && api.STUDIO ? [['studio', 'Route']] : []),
   ]);
+  // A tab that is one app filling the page: on a phone it gets the screen below the tabs.
+  const appTab = $derived(FRAMES.includes(tab) || tab === 'board');
 
   const gateTitles = $derived(
     Object.fromEntries((sel?.gates ?? []).filter((g) => g.file).map((g) => [g.file, `${g.phase} · ${g.name}`])),
@@ -279,8 +293,8 @@
   const docTitles = { 'design/intent.md': 'Requirements', 'design/decisions.md': 'Decisions', 'design/brief.md': 'Brief' };
 </script>
 
-<div class="shell">
-  <aside>
+<div class="shell" class:app-tab={appTab && view === 'project'}>
+  <aside class:open={navOpen}>
     <div class="brand">
       <svg viewBox="0 0 32 32" width="22" height="22" aria-hidden="true">
         <rect x="3" y="5" width="26" height="22" rx="3" fill="var(--accent)" />
@@ -289,9 +303,14 @@
         <path d="M10 12h6l6 8" stroke="var(--bg)" stroke-width="2" fill="none" />
       </svg>
       <span>Boardroom</span>
+      <button class="navbtn" onclick={() => (navOpen = !navOpen)} aria-expanded={navOpen} aria-label="Projects">
+        <span class="navname">{view === 'inbox' ? 'Inbox' : (sel?.board ?? sel?.name ?? 'Projects')}</span>
+        {#if inbox.length}<span class="badge">{inbox.length}</span>{/if}
+        <span aria-hidden="true">{navOpen ? '▴' : '▾'}</span>
+      </button>
     </div>
 
-    <button class="inbox-btn" class:on={view === 'inbox'} onclick={() => (view = 'inbox')}>
+    <button class="inbox-btn" class:on={view === 'inbox'} onclick={() => ((view = 'inbox'), (navOpen = false))}>
       Inbox
       {#if inbox.length}<span class="badge">{inbox.length}</span>{/if}
     </button>
@@ -328,7 +347,7 @@
       </ul>
     {/if}
 
-    {#if !api.STATIC}
+    {#if !api.STATIC && !narrow}
       {#if adding}
         <form class="add" onsubmit={(e) => (e.preventDefault(), add())}>
           <input bind:value={addPath} placeholder="/path/to/project" aria-label="Project folder" />
@@ -345,7 +364,7 @@
     {/if}
 
     <div class="foot">
-      {#if !api.STATIC}
+      {#if !api.STATIC && !narrow}
         <label title="Windows: the viewer and apps open in their own windows. Single window: they open as tabs here.">
           <span class="label">Mode</span>
           <select bind:value={mode}>
@@ -366,12 +385,15 @@
   </aside>
 
   <main style="--top-h: {topH}px">
-    {#if api.STATIC}
+    {#if api.STATIC && !aboutHidden}
       <div class="demo">
-        The example projects as published. A board you route in Route is saved in this browser tab
-        (History lists every save). Boardroom itself runs on your desktop, where it opens your
-        project folders, KiCad, and the suite's other apps.
-        <a href="https://github.com/sequoia-hope/boardroom">github.com/sequoia-hope/boardroom</a>
+        <span>
+          The example projects as published. What you change in Composer and Route is saved in this
+          browser tab (History lists every save). Boardroom itself runs on your desktop, where it
+          opens your project folders, KiCad, and the suite's other apps.
+          <a href="https://github.com/sequoia-hope/boardroom">github.com/sequoia-hope/boardroom</a>
+        </span>
+        <button class="btn ghost" aria-label="Hide this note" onclick={() => ((aboutHidden = true), keep('about', 'hidden'))}>✕</button>
       </div>
     {/if}
 
@@ -404,11 +426,13 @@
             <span class="selchip" title="Selected in {selection.from ?? 'another window'}">Selected: {selection.refs.join(', ')}</span>
           {/if}
         </div>
-        <div class="open-in">
-          <span class="label">Open in</span>
-          <button class="btn" title="Circuit Composer, board {composerBoard} (prototype)" onclick={openComposer}>Composer</button>
-          <button class="btn" disabled={!api.STUDIO} title={api.STUDIO ? `Route in UltraRoute Studio, board ${composerBoard}` : 'Studio opens a project from this machine, not from the Pages site'} onclick={openStudio}>Route</button>
-          <button class="btn" disabled={!sel.viewer} title={sel.viewer ? 'pcbview' : 'No viewer built yet (scripts/view.sh build)'} onclick={openViewer}>Viewer</button>
+        <div class="open-in" class:empty={mode === 'single' && api.STATIC}>
+          {#if mode === 'windows' || !api.STATIC}<span class="label">Open in</span>{/if}
+          {#if mode === 'windows'}
+            <button class="btn" title="Circuit Composer, board {composerBoard} (prototype)" onclick={openComposer}>Composer</button>
+            <button class="btn" disabled={!api.STUDIO} title={api.STUDIO ? `Route in UltraRoute Studio, board ${composerBoard}` : 'Studio opens a project from this machine, not from the Pages site'} onclick={openStudio}>Route</button>
+            <button class="btn" disabled={!sel.viewer} title={sel.viewer ? 'pcbview' : 'No viewer built yet (scripts/view.sh build)'} onclick={openViewer}>Viewer</button>
+          {/if}
           {#if !api.STATIC}
             <button class="btn" disabled={!sel.boards.some((b) => b.kicad_pro)} onclick={() => act('kicad')}>KiCad</button>
             <button class="btn" onclick={() => act('folder')}>Folder</button>
@@ -635,10 +659,25 @@
   }
 
   .demo {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
     background: var(--accent-soft);
     border-bottom: 1px solid var(--line);
-    padding: 8px 20px;
+    padding: 8px 12px 8px 20px;
     font-size: 13px;
+  }
+
+  .demo .btn {
+    padding: 0 6px;
+  }
+
+  .navbtn {
+    display: none;
+  }
+
+  .open-in.empty {
+    display: none;
   }
 
   .top {
@@ -799,24 +838,115 @@
     z-index: 30;
   }
 
+  /* A phone: the project list folds into the bar at the top, the header loses what only a
+     desktop can do, and an app's tab gets the screen below the tabs. */
   @media (max-width: 760px) {
     .shell {
       grid-template-columns: 1fr;
-      grid-template-rows: auto 1fr;
-      height: auto;
-      min-height: 100%;
+      grid-template-rows: auto minmax(0, 1fr);
+      height: 100dvh;
     }
 
     aside {
       border-right: none;
       border-bottom: 1px solid var(--line);
-      max-height: 45vh;
+      padding: 6px 10px;
+      gap: 4px;
+      overflow: visible;
     }
 
-    .top,
+    aside > :not(.brand) {
+      display: none;
+    }
+
+    aside.open > :not(.brand) {
+      display: revert;
+    }
+
+    aside.open {
+      max-height: 75dvh;
+      overflow: auto;
+    }
+
+    aside.open > .foot {
+      display: flex;
+    }
+
+    .brand {
+      padding: 2px 2px;
+    }
+
+    .navbtn {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: auto;
+      max-width: 65%;
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      border-radius: 8px;
+      padding: 5px 10px;
+      font-weight: 600;
+    }
+
+    .navname {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .demo {
+      padding: 6px 8px 6px 14px;
+      font-size: 12px;
+    }
+
+    .top {
+      padding: 10px 14px 6px;
+      position: static;
+    }
+
+    .top h1 {
+      font-size: 19px;
+    }
+
+    /* Nothing on a phone opens KiCad or a folder on the desktop. */
+    .open-in {
+      display: none;
+    }
+
+    .tabs {
+      top: 0;
+      padding: 0 6px;
+    }
+
+    .tabs button {
+      padding: 9px 10px;
+    }
+
+    .shell.app-tab .top,
+    .shell.app-tab .demo {
+      display: none;
+    }
+
+    .shell.app-tab main {
+      overflow: hidden;
+    }
+
+    .shell.app-tab .body {
+      min-height: 0;
+    }
+
+    .viewer {
+      min-height: 0;
+    }
+
     .body {
-      padding-left: 16px;
-      padding-right: 16px;
+      padding-left: 14px;
+      padding-right: 14px;
+    }
+
+    .body.flush {
+      padding: 0;
     }
   }
 </style>

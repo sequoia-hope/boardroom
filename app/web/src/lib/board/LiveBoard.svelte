@@ -427,7 +427,11 @@
   @media (max-width: 760px) {
     .live {
       grid-template-columns: 1fr;
-      grid-template-rows: auto minmax(360px, 1fr);
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    canvas {
+      min-height: 0;
     }
 
     .side {
@@ -439,7 +443,8 @@
     }
 
     .side .label,
-    .note {
+    .note,
+    .stats {
       display: none;
     }
 
