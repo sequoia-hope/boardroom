@@ -6,6 +6,8 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
+# The Board tab's WASM (UltraRoute Studio's core and ultraroute's view()) at its pinned commit.
+web/scripts/draw.sh
 (cd web && { [[ -d node_modules ]] || npm ci --no-audit --no-fund; } && npm run build)
 (cd server && cargo build --release)
 echo "Built: app/server/target/release/boardroom (serves app/web/dist)"

@@ -1,26 +1,35 @@
 <script>
   import { fileUrl } from '../api.js';
   import Layers2D from './Layers2D.svelte';
-  // three.js is most of the page's weight: load it only when 3D is opened.
+  import Stale from '../Stale.svelte';
+  // three.js is most of the page's weight, and the live board's WASM is 2 MB: each loads only
+  // when its view is opened.
   const load3D = () => import('./Board3D.svelte');
+  const loadLive = () => import('./LiveBoard.svelte');
 
-  // The Board tab: pcbview's data (viewer/site.json and each board's layers/
-  // and 3d/) drawn by Boardroom itself, as layers or in 3D, with the part
-  // pane both share. A selection here goes to every other window, and one
-  // made elsewhere shows here.
+  // The Board tab. Board: the .kicad_pcb as it is now, through the store, drawn as Studio draws
+  // it. Plots and 3D: pcbview's data (viewer/site.json and each board's layers/ and 3d/), made
+  // before publishing, so they carry the stale bar once the board changes. The part pane is
+  // shared. A selection here goes to every other window, and one made elsewhere shows here.
 
-  let { project, selected = [], onselect = () => {} } = $props();
+  let { project, store, change = null, onhistory, selected = [], onselect = () => {} } = $props();
 
   let site = $state(null);
   let boardId = $state(null);
-  // ?view=3d opens the 3D view first.
-  let mode = $state(new URLSearchParams(location.search).get('view') === '3d' ? '3d' : 'layers');
+  // ?view=3d or ?view=plots opens that view first.
+  const asked = new URLSearchParams(location.search).get('view');
+  let mode = $state(asked === '3d' ? '3d' : asked === 'plots' || !project.boards.length ? 'layers' : 'board');
+  // The board Composer and Route open (the first), or another of the project's.
+  let boardIndex = $state(0);
+  const kicadBoard = $derived(project.boards[boardIndex] ?? project.boards[0] ?? null);
   let parts = $state({});
   let error = $state('');
 
   $effect(() => {
     const p = project;
     error = '';
+    site = null;
+    if (!p.viewer) return;
     fetch(fileUrl(p.id, 'viewer/site.json'))
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`viewer/site.json: ${r.status}`))))
       .then((s) => {
@@ -46,42 +55,7 @@
   const lcsc = (n) => `https://www.lcsc.com/product-detail/${encodeURIComponent(n)}.html`;
 </script>
 
-<div class="bv">
-  <div class="bar">
-    <div class="seg" role="tablist">
-      <button class:on={mode === 'layers'} role="tab" aria-selected={mode === 'layers'} onclick={() => (mode = 'layers')}>Layers</button>
-      <button class:on={mode === '3d'} role="tab" aria-selected={mode === '3d'} onclick={() => (mode = '3d')}>3D</button>
-    </div>
-    {#if site?.boards.length > 1}
-      <select bind:value={boardId} aria-label="Board">
-        {#each site.boards as b}<option value={b.id}>{b.name}</option>{/each}
-      </select>
-    {:else if site}
-      <span class="muted">{site.boards[0]?.name}</span>
-    {/if}
-    {#if site?.built}<span class="muted built">viewer data built {site.built.replace('T', ' ')}</span>{/if}
-    {#if selected.length}
-      <span class="sel">Selected: {selected.join(', ')} <button class="x" onclick={() => onselect([])} aria-label="Clear the selection">✕</button></span>
-    {/if}
-  </div>
-
-  {#if error}
-    <p class="err">{error}. This project has no pcbview build yet: <span class="mono">scripts/view.sh build pcbview.toml</span></p>
-  {:else if base}
-    <div class="main" class:with-pane={!!part}>
-      {#key base + mode}
-        {#if mode === 'layers'}
-          <Layers2D {base} {parts} {selected} {onselect} />
-        {:else}
-          {#await load3D()}
-            <p class="muted pad">Loading the 3D view…</p>
-          {:then m}
-            <m.default {base} {selected} {onselect} />
-          {:catch e}
-            <p class="err">{e.message}</p>
-          {/await}
-        {/if}
-      {/key}
+{#snippet pane()}
       {#if part}
         <aside class="pane">
           <h2>{selected[0]} <span class="muted">{part.value}</span></h2>
@@ -114,6 +88,72 @@
           {/if}
         </aside>
       {/if}
+{/snippet}
+
+<div class="bv">
+  <div class="bar">
+    <div class="seg" role="tablist">
+      {#if kicadBoard}
+        <button class:on={mode === 'board'} role="tab" aria-selected={mode === 'board'} onclick={() => (mode = 'board')} title="The board file as it is now">Board</button>
+      {/if}
+      {#if project.viewer}
+        <button class:on={mode === 'layers'} role="tab" aria-selected={mode === 'layers'} onclick={() => (mode = 'layers')} title="pcbview's plots, with silkscreen and fab, as published">Plots</button>
+        <button class:on={mode === '3d'} role="tab" aria-selected={mode === '3d'} onclick={() => (mode = '3d')}>3D</button>
+      {/if}
+    </div>
+    {#if mode === 'board' && project.boards.length > 1}
+      <select bind:value={boardIndex} aria-label="Board">
+        {#each project.boards as b, i}<option value={i}>{b.board} / {b.variant}</option>{/each}
+      </select>
+    {:else if mode === 'board'}
+      <span class="muted">{kicadBoard.board} / {kicadBoard.variant}</span>
+    {:else if site?.boards.length > 1}
+      <select bind:value={boardId} aria-label="Board">
+        {#each site.boards as b}<option value={b.id}>{b.name}</option>{/each}
+      </select>
+    {:else if site}
+      <span class="muted">{site.boards[0]?.name}</span>
+    {/if}
+    {#if site?.built && mode !== 'board'}<span class="muted built">viewer data built {site.built.replace('T', ' ')}</span>{/if}
+    {#if selected.length}
+      <span class="sel">Selected: {selected.join(', ')} <button class="x" onclick={() => onselect([])} aria-label="Clear the selection">✕</button></span>
+    {/if}
+  </div>
+
+  {#if mode !== 'board'}
+    <Stale {project} {change} from="viewer/site.json" fix="Rebuild the viewer: scripts/view.sh build pcbview.toml" {onhistory} />
+  {/if}
+  {#if mode === 'board'}
+    <div class="main" class:with-pane={!!part}>
+      {#await loadLive()}
+        <p class="muted pad">Loading the board drawing…</p>
+      {:then m}
+        {#key `${store.root} ${boardIndex}`}
+          <m.default {store} board={kicadBoard} {selected} {onselect} />
+        {/key}
+      {:catch e}
+        <p class="err">{e.message}</p>
+      {/await}
+      {@render pane()}
+    </div>
+  {:else if error}
+    <p class="err">{error}. This project has no pcbview build yet: <span class="mono">scripts/view.sh build pcbview.toml</span></p>
+  {:else if base}
+    <div class="main" class:with-pane={!!part}>
+      {#key base + mode}
+        {#if mode === 'layers'}
+          <Layers2D {base} {parts} {selected} {onselect} />
+        {:else}
+          {#await load3D()}
+            <p class="muted pad">Loading the 3D view…</p>
+          {:then m}
+            <m.default {base} {selected} {onselect} />
+          {:catch e}
+            <p class="err">{e.message}</p>
+          {/await}
+        {/if}
+      {/key}
+      {@render pane()}
     </div>
   {/if}
 </div>

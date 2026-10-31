@@ -33,6 +33,8 @@ jobs:
           cache-dependency-path: app/web/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
 
       # ccomp makes each board's placement problem for Composer (compose/<board>/problem.json).
       - name: Fetch circuit-composer
@@ -43,9 +45,19 @@ jobs:
           workspaces: |
             app/server
             ../circuit-composer
+            app/web/.cache/ultraroute/core
+            app/web/.cache/ultraroute/studio
 
       - name: Build ccomp
         run: cargo build --release --quiet --manifest-path ../circuit-composer/Cargo.toml -p ccomp
+
+      # The Board tab draws the .kicad_pcb with UltraRoute Studio's core and ultraroute's view(),
+      # both WASM, at the commit scripts/draw.sh pins.
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --version 0.14.0 --locked
+
+      - name: Build the board drawing
+        run: app/web/scripts/draw.sh
 
       - name: Build the static page
         working-directory: app/web
@@ -62,6 +74,11 @@ jobs:
       - name: Test the stale bar
         working-directory: app/web
         run: npm run test:stale
+
+      # The Board tab drawing the worked example's .kicad_pcb, and drawing it again after a save.
+      - name: Test the board drawing
+        working-directory: app/web
+        run: npm run test:board
 
       # examples.toml names each example by a path here or by its own repo and
       # ref; the repo ones are cloned for this build only (no submodules).

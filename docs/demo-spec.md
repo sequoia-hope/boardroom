@@ -1,7 +1,8 @@
 # The working demo: Boardroom, Composer and Route on GitHub Pages
 
 Status: **decided** (2026-10-30; the answers are under Decisions). Built so far: milestones
-0–4, the Pages workflow from Boardroom through Composer and Route, and milestone 5's stale bar.
+0–4, the Pages workflow from Boardroom through Composer and Route, and milestone 5: the stale bar, and the Board
+tab drawing from the `.kicad_pcb`.
 
 ## What the person asked for
 
@@ -209,6 +210,21 @@ the renderer Composer and Studio already share.
    (the Pages build in Chrome, also run by the Pages workflow). Checked by hand on this machine
    too: easy2350's board is newer than its viewer data, so Board and Viewer show the bar, and
    Renders and Overview don't.
+   The Board tab drawing from the `.kicad_pcb` is done 2026-10-31, the way Studio draws it.
+   ultraroute's web module gained `view(pcb, pro, dru)` (ultraroute `ce50b64`): the board's
+   lines (header, one frame of everything on it, its poured zones) without routing. Boardroom
+   runs it in a worker, feeds the lines to Studio's core, and draws the mesh with board-draw's
+   renderer (`d37b1f8`, Studio's pin). `app/web/scripts/draw.sh` builds both WASM modules from
+   a sparse clone at the pinned commit. `app/build.sh` and the Pages workflow run it, and the
+   2.3 MB loads only when the tab opens. The tab's views are now **Board** (the file through the
+   store, no stale bar, redrawn when any app saves it), **Plots** (pcbview's layers, with
+   silkscreen and fab, which board-draw doesn't draw yet) and **3D**. A project with boards but
+   no pcbview build now gets a Board tab, and a project with several boards gets a picker. File
+   names come from the board's `.kicad_pro` (servodrive's is `servodrive_E.kicad_pcb`). Test:
+   `npm run test:board` (easy2350's real board in Chrome: counts, picking, a save redraws it).
+   Checked locally on easy2350, bike-tracker, servodrive and motherboard (263 parts, 6121
+   tracks). Like Studio, it draws open connections as ratsnest lines, including pads that only
+   reach a plane through a pour.
 6. **Composer's server** for the local workflow.
 
 Done means: on the Pages site, a phone or laptop can open easy2350, move U1 in Composer, route

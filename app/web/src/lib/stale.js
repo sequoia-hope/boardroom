@@ -4,8 +4,17 @@
 
 import { fileUrl } from './api.js';
 
-/** The project's board files, `hw/<board>/<variant>/<board>.kicad_pcb`. */
-export const boardFiles = (project) => project.boards.map((b) => `hw/${b.board}/${b.variant}/${b.board}.kicad_pcb`);
+/**
+ * A board's KiCad files: named after its `.kicad_pro` when it has one (servodrive's ethernet board
+ * is `servodrive_E.kicad_pcb`), else `hw/<board>/<variant>/<board>.kicad_*`.
+ */
+export function kicadFiles(b) {
+  const stem = b.kicad_pro ? b.kicad_pro.replace(/\.kicad_pro$/, '') : `hw/${b.board}/${b.variant}/${b.board}`;
+  return { pcb: `${stem}.kicad_pcb`, pro: `${stem}.kicad_pro`, dru: `${stem}.kicad_dru` };
+}
+
+/** The project's board files. */
+export const boardFiles = (project) => project.boards.map((b) => kicadFiles(b).pcb);
 
 /** When a project file last changed, from the server's Last-Modified; null if it doesn't say. */
 export async function modified(id, path) {

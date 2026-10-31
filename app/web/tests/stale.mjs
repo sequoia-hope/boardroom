@@ -4,7 +4,8 @@
 //     npm run build:pages && npm run test:stale
 //
 // No bar on the published board; a save to the board's .kicad_pcb in the tab's workspace puts
-// it on Board, Viewer, Renders and Overview (not Gates or History), naming the app; a reload
+// it on the Board tab's Plots, Viewer, Renders and Overview (not the Board tab's own drawing of
+// the file, Gates or History), naming the app; a reload
 // keeps it, its History button opens History, Reset takes it away, and a new tab has none.
 import { chromium } from 'playwright-core';
 import { readFileSync, existsSync } from 'node:fs';
@@ -86,9 +87,13 @@ await check("a save from Route puts the bar up, naming the app and the file", as
   assert(/Showing the published board; b\.kicad_pcb changed in Route at .+ · Routed b/.test(text), text);
 });
 
-for (const [name, shown] of [['Board', true], ['Viewer', true], ['Renders', true], ['Overview', true], ['Gates', false], ['History', false]]) {
+const plots = () => page.locator('.bv .seg button', { hasText: 'Plots' }).click();
+for (const [name, shown] of [['Board', false], ['Plots', true], ['Viewer', true], ['Renders', true], ['Overview', true], ['Gates', false], ['History', false]]) {
   await check(`${shown ? 'a bar' : 'no bar'} on ${name}`, async () => {
-    await tab(name);
+    if (name === 'Plots') {
+      await tab('Board');
+      await plots();
+    } else await tab(name);
     await page.waitForTimeout(300);
     assert((await bars().count()) === (shown ? 1 : 0), `${await bars().count()} bars`);
   });
@@ -96,7 +101,7 @@ for (const [name, shown] of [['Board', true], ['Viewer', true], ['Renders', true
 
 await check('a reload keeps it, and its History button opens History', async () => {
   await page.reload();
-  await tab('Board');
+  await tab('Viewer');
   await bars().first().waitFor({ timeout: 3000 });
   await bars().first().locator('button', { hasText: 'History' }).click();
   assert((await page.locator('.tabs button.on').textContent()) === 'History', 'History is not open');
@@ -105,7 +110,7 @@ await check('a reload keeps it, and its History button opens History', async () 
 await check('Reset takes it away', async () => {
   page.once('dialog', (d) => d.accept());
   await page.locator('button', { hasText: 'Reset to the published project' }).click();
-  await tab('Board');
+  await tab('Viewer');
   await page.waitForTimeout(500);
   assert((await bars().count()) === 0, 'still shown');
 });

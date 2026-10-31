@@ -185,7 +185,7 @@
     if (p.id !== selId) loaded = FRAMES.includes(tab) ? [tab] : [];
     selId = p.id;
     view = 'project';
-    if ((tab === 'viewer' || tab === 'board') && !p.viewer) tab = 'overview';
+    if ((tab === 'viewer' && !p.viewer) || (tab === 'board' && !p.viewer && !p.boards.length)) tab = 'overview';
   }
 
   async function act(what) {
@@ -263,7 +263,7 @@
 
   const tabs = $derived([
     ['overview', 'Overview'],
-    ...(sel?.viewer ? [['board', 'Board']] : []),
+    ...(sel?.viewer || sel?.boards.length ? [['board', 'Board']] : []),
     ['gates', 'Gates'],
     ['documents', 'Documents'],
     ['renders', 'Renders'],
@@ -430,7 +430,7 @@
           <p class="err">{sel.error}</p>
         {/if}
         {#if sel.exists}
-          {#if tab === 'board' || tab === 'viewer'}
+          {#if tab === 'viewer'}
             <Stale project={sel} change={boardChanged} from="viewer/site.json" fix={VIEWER_FIX} onhistory={() => (tab = 'history')} />
           {:else if (tab === 'renders' || tab === 'overview') && sel.thumbnail}
             <Stale project={sel} change={boardChanged} from={sel.thumbnail} fix="The skill renders it again at the next gate." onhistory={() => (tab = 'history')} />
@@ -442,7 +442,7 @@
           {:else if tab === 'documents'}
             <Docs project={sel} filter={(f) => !f.startsWith('design/gates/')} bind:selected={doc} titles={docTitles} />
           {:else if tab === 'board'}
-            <BoardView project={sel} selected={selection?.project === sel.id ? (selection.refs ?? []) : []} onselect={(refs) => select(refs)} />
+            <BoardView project={sel} {store} change={boardChanged} onhistory={() => (tab = 'history')} selected={selection?.project === sel.id ? (selection.refs ?? []) : []} onselect={(refs) => select(refs)} />
           {:else if tab === 'renders'}
             <Renders project={sel} />
           {:else if tab === 'history'}
