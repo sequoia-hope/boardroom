@@ -28,22 +28,36 @@ pub fn ccomp() -> Option<PathBuf> {
     })
 }
 
-/// The board's problem, made by `ccomp` from its last variant's `.kicad_pcb`, as the snapshot
-/// picks it.
+/// The board's problem, made by `ccomp` from its last variant's board file
+/// (`project::board_pcb`), as the snapshot picks it.
 pub fn make(root: &Path, board: &str, ccomp: &Path) -> Result<Vec<u8>, String> {
-    let mut variants: Vec<String> = std::fs::read_dir(root.join("hw").join(board))
+    let mut variants: Vec<(String, String)> = std::fs::read_dir(root.join("hw").join(board))
         .map_err(|_| format!("the project has no hw/{board}/"))?
         .flatten()
-        .filter(|e| e.path().join(format!("{board}.kicad_pcb")).is_file())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter_map(|e| {
+            let variant = e.file_name().to_string_lossy().into_owned();
+            crate::project::board_pcb(root, board, &variant).map(|pcb| (variant, pcb))
+        })
         .collect();
     variants.sort();
-    let variant = variants.pop().ok_or(format!("no hw/{board}/<variant>/{board}.kicad_pcb"))?;
-    let pcb = root.join(format!("hw/{board}/{variant}/{board}.kicad_pcb"));
+    let (_, pcb) = variants.pop().ok_or(format!("no board file in hw/{board}/<variant>/"))?;
     let out = std::env::temp_dir().join(format!("boardroom-problem-{}-{board}-{:?}.json", std::process::id(), std::thread::current().id()));
-    let made = crate::snapshot::make_problem(ccomp, &pcb, &out).and_then(|_| std::fs::read(&out).map_err(|e| e.to_string()));
+    let made = crate::snapshot::make_problem(ccomp, &root.join(&pcb), &out).and_then(|_| std::fs::read(&out).map_err(|e| e.to_string()));
     let _ = std::fs::remove_file(&out);
     made
+}
+
+/// Waits until a script a test has just written can run. Until another test's freshly forked
+/// child has exec'd, it still holds the script's write handle and running it fails with "text
+/// file busy" (ETXTBSY).
+#[cfg(test)]
+pub(crate) fn runnable(script: &Path) {
+    for _ in 0..100 {
+        match std::process::Command::new(script).arg("--version").output() {
+            Err(e) if e.raw_os_error() == Some(26) => std::thread::sleep(std::time::Duration::from_millis(10)),
+            _ => return,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -75,10 +89,15 @@ mod tests {
         put("p/hw/b/a/b.kicad_pcb", "(kicad_pcb old)");
         put("p/hw/b/b/b.kicad_pcb", "(kicad_pcb)");
         put("p/hw/bad/a/bad.kicad_pcb", "unreadable");
+        // Named as its KiCad project, not as the board (servodrive's ethernet board).
+        put("p/hw/eth/e/servo_E.kicad_pro", "{}");
+        put("p/hw/eth/e/servo_E.kicad_pcb", "(kicad_pcb)");
         let (p, cc) = (dir.join("p"), dir.join("ccomp"));
+        runnable(&cc);
         let made = String::from_utf8(make(&p, "b", &cc).unwrap()).unwrap();
         assert!(made.ends_with("hw/b/b/b.kicad_pcb\"}"), "{made}");
         assert!(!p.join("compose").exists(), "nothing written into the project");
+        assert!(String::from_utf8(make(&p, "eth", &cc).unwrap()).unwrap().ends_with("hw/eth/e/servo_E.kicad_pcb\"}"));
         assert_eq!(make(&p, "bad", &cc), Err("ccomp failed: error: not a board".into()));
         assert_eq!(make(&p, "none", &cc), Err("the project has no hw/none/".into()));
         std::fs::remove_dir_all(&dir).unwrap();

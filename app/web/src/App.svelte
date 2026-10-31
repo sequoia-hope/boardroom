@@ -6,7 +6,7 @@
   import History from './lib/History.svelte';
   import BoardView from './lib/board/BoardView.svelte';
   import Stale from './lib/Stale.svelte';
-  import { boardChange } from './lib/stale.js';
+  import { boardChange, kicadFiles } from './lib/stale.js';
 
   // ---- remembered per viewer (window mode, last project, theme) ----
   const remember = (key, fallback) => {
@@ -159,8 +159,12 @@
   }
 
   const composerBoard = $derived(sel?.boards[0]?.board ?? sel?.board ?? sel?.name);
-  const composerUrl = (embed) =>
-    `${api.COMPOSER}?board=${encodeURIComponent(composerBoard)}${sel.boards[0] ? `&variant=${encodeURIComponent(sel.boards[0].variant)}` : ''}&project=${encodeURIComponent(sel.path)}${embed ? '&embed=1' : ''}&${api.storeQuery(store)}`;
+  // The apps are told the board's file too, which needn't be named as the board.
+  const composerUrl = (embed) => {
+    const b = sel.boards[0];
+    const q = new URLSearchParams({ board: composerBoard, ...(b ? { variant: b.variant, pcb: kicadFiles(b).pcb } : {}), project: sel.path, ...(embed ? { embed: '1' } : {}) });
+    return `${api.COMPOSER}?${q}&${api.storeQuery(store)}`;
+  };
 
   function openComposer() {
     if (mode === 'single') {
@@ -173,7 +177,7 @@
 
   const studioUrl = () => {
     const b = sel.boards[0];
-    const q = new URLSearchParams({ project: sel.path, ...(b ? { board: b.board, variant: b.variant } : {}) });
+    const q = new URLSearchParams({ project: sel.path, ...(b ? { board: b.board, variant: b.variant, pcb: kicadFiles(b).pcb } : {}) });
     return `${api.STUDIO}?${q}&${api.storeQuery(store)}`;
   };
 

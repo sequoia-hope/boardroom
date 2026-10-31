@@ -93,6 +93,8 @@ pub struct Board {
     pub board: String,
     pub variant: String,
     pub kicad_pro: Option<String>,
+    /// The board file (`board_pcb`), when the variant has one.
+    pub pcb: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -322,6 +324,27 @@ fn read_gates(status: &Value, root: &Path, phase: Option<u32>) -> Vec<Gate> {
         .collect()
 }
 
+/// A variant's board file, relative to the project: the `.kicad_pcb` named as its `.kicad_pro`
+/// is (servodrive's ethernet board is `hw/ethernet/e/servodrive_E.kicad_pcb`), else
+/// `<board>.kicad_pcb`, else the folder's only `.kicad_pcb`. Not the routing runs below it.
+pub fn board_pcb(root: &Path, board: &str, variant: &str) -> Option<String> {
+    let dir = format!("hw/{board}/{variant}");
+    let files: Vec<String> = std::fs::read_dir(root.join(&dir))
+        .ok()?
+        .flatten()
+        .filter(|e| e.path().is_file())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    let pcbs: Vec<&String> = files.iter().filter(|f| f.ends_with(".kicad_pcb")).collect();
+    let by_pro = files.iter().find_map(|f| f.strip_suffix(".kicad_pro")).map(|stem| format!("{stem}.kicad_pcb"));
+    let named = format!("{board}.kicad_pcb");
+    let chosen = by_pro
+        .filter(|p| pcbs.contains(&p))
+        .or_else(|| pcbs.contains(&&named).then_some(named))
+        .or_else(|| (pcbs.len() == 1).then(|| pcbs[0].clone()))?;
+    Some(format!("{dir}/{chosen}"))
+}
+
 /// KiCad projects live in `hw/<board>/<variant>/`.
 fn find_boards(root: &Path) -> Vec<Board> {
     let mut boards = vec![];
@@ -336,11 +359,9 @@ fn find_boards(root: &Path) -> Vec<Board> {
                     .find(|p| p.extension().is_some_and(|e| e == "kicad_pro"))
                     .and_then(|p| p.strip_prefix(root).ok().map(|r| r.to_string_lossy().into_owned()))
             });
-            boards.push(Board {
-                board: board.file_name().to_string_lossy().into_owned(),
-                variant: variant.file_name().to_string_lossy().into_owned(),
-                kicad_pro,
-            });
+            let (name, var) = (board.file_name().to_string_lossy().into_owned(), variant.file_name().to_string_lossy().into_owned());
+            let pcb = board_pcb(root, &name, &var);
+            boards.push(Board { board: name, variant: var, kicad_pro, pcb });
         }
     }
     boards.sort_by(|a, b| (&a.board, &a.variant).cmp(&(&b.board, &b.variant)));

@@ -5,12 +5,13 @@
 import { fileUrl } from './api.js';
 
 /**
- * A board's KiCad files: named after its `.kicad_pro` when it has one (servodrive's ethernet board
- * is `servodrive_E.kicad_pcb`), else `hw/<board>/<variant>/<board>.kicad_*`.
+ * A board's KiCad files: the board file the server found (named as its `.kicad_pro`, as
+ * servodrive's `servodrive_E.kicad_pcb` is), else `hw/<board>/<variant>/<board>.kicad_*`.
  */
 export function kicadFiles(b) {
-  const stem = b.kicad_pro ? b.kicad_pro.replace(/\.kicad_pro$/, '') : `hw/${b.board}/${b.variant}/${b.board}`;
-  return { pcb: `${stem}.kicad_pcb`, pro: `${stem}.kicad_pro`, dru: `${stem}.kicad_dru` };
+  // The server names the board file (`pcb`); its .kicad_pro and .kicad_dru are named as it is.
+  const stem = (b.pcb ?? b.kicad_pro ?? `hw/${b.board}/${b.variant}/${b.board}.kicad_pcb`).replace(/\.kicad_(pcb|pro)$/, '');
+  return { pcb: b.pcb ?? `${stem}.kicad_pcb`, pro: b.kicad_pro ?? `${stem}.kicad_pro`, dru: `${stem}.kicad_dru` };
 }
 
 /** The project's board files. */

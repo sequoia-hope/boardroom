@@ -108,7 +108,7 @@ fn problems(ccomp: &Path, root: &Path, to: &Path, boards: &[(String, String)]) -
     }
     last.into_iter()
         .map(|(board, variant)| {
-            let pcb = format!("hw/{board}/{variant}/{board}.kicad_pcb");
+            let pcb = crate::project::board_pcb(root, board, variant).unwrap_or_else(|| format!("hw/{board}/{variant}/{board}.kicad_pcb"));
             let problem = format!("compose/{board}/problem.json");
             let mut entry = serde_json::json!({"board": board, "variant": variant, "pcb": pcb});
             let made = if root.join(&problem).is_file() {
@@ -234,6 +234,7 @@ mod tests {
         // A stand-in for ccomp: `--version`, and the problem written to `-o` unless the board says no.
         put("ccomp", "#!/bin/sh\n[ \"$1\" = --version ] && exit 0\ngrep -q unreadable \"$2\" && { echo 'error: not a board' >&2; exit 1; }\nfor a; do [ \"$prev\" = -o ] && echo '{\"parts\":[]}' > \"$a\"; prev=$a; done\n");
         std::fs::set_permissions(dir.join("ccomp"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::problem::runnable(&dir.join("ccomp"));
         put("p/hw/b/a/b.kicad_pcb", "(kicad_pcb old)");
         put("p/hw/b/b/b.kicad_pcb", "(kicad_pcb)");
         put("p/hw/b/b/b.kicad_pro", "{}");
