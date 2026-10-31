@@ -7,6 +7,7 @@ use crate::apps;
 use crate::config::{self, ProjectList};
 use crate::examples;
 use crate::files::{self, Expect, WriteError};
+use crate::problem;
 use crate::project;
 use axum::{
     Json, Router,
@@ -213,6 +214,12 @@ fn natural(s: &str) -> (String, u64, String) {
 /// A file inside a project folder, or a directory listing as JSON.
 async fn file(State(app): State<Shared>, UrlPath((id, rel)): UrlPath<(String, String)>) -> ApiResult<Response> {
     let root = project_path(&app, &id)?;
+    // Composer's placement problem, when the project has none of its own: made from the board.
+    if let Some(board) = problem::board_of(&rel).map(str::to_string)
+        && !root.join(&rel).exists()
+    {
+        return made_problem(root, board).await;
+    }
     let path = inside(&root, &rel)?;
     if path.is_dir() {
         let mut names: Vec<serde_json::Value> = std::fs::read_dir(&path)
@@ -228,6 +235,19 @@ async fn file(State(app): State<Shared>, UrlPath((id, rel)): UrlPath<(String, St
     // When the file last changed: Boardroom's drawn tabs compare the board's against when they were drawn.
     let modified = std::fs::metadata(&path).and_then(|m| m.modified()).map(httpdate::fmt_http_date).unwrap_or_default();
     Ok(([(header::CONTENT_TYPE, mime(&path).to_string()), (header::ETAG, etag), (header::LAST_MODIFIED, modified)], bytes).into_response())
+}
+
+/// A board's placement problem made by ccomp (problem.rs), served as if it were the file.
+async fn made_problem(root: PathBuf, board: String) -> ApiResult<Response> {
+    let ccomp = problem::ccomp().ok_or_else(|| {
+        bad(StatusCode::NOT_FOUND, "Boardroom makes Composer's placement problem with ccomp: set CCOMP, or ccomp = \"…\" in ~/.config/boardroom/config.toml")
+    })?;
+    let bytes = tokio::task::spawn_blocking(move || problem::make(&root, &board, &ccomp))
+        .await
+        .map_err(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| bad(StatusCode::NOT_FOUND, e))?;
+    let etag = format!("\"{}\"", files::rev_of(&bytes));
+    Ok(([(header::CONTENT_TYPE, "application/json".to_string()), (header::ETAG, etag)], bytes).into_response())
 }
 
 /// Writes a project file for an app (the store's server backend). `If-Match` names the revision

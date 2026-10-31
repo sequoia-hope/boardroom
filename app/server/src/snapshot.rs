@@ -133,7 +133,7 @@ fn problems(ccomp: &Path, root: &Path, to: &Path, boards: &[(String, String)]) -
         .collect()
 }
 
-fn make_problem(ccomp: &Path, pcb: &Path, out: &Path) -> Result<(), String> {
+pub(crate) fn make_problem(ccomp: &Path, pcb: &Path, out: &Path) -> Result<(), String> {
     std::fs::create_dir_all(out.parent().unwrap()).map_err(|e| e.to_string())?;
     let run = std::process::Command::new(ccomp)
         .arg("floorplan")

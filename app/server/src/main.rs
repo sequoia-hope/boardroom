@@ -14,6 +14,7 @@ mod apps;
 mod config;
 mod examples;
 mod files;
+mod problem;
 mod project;
 mod server;
 mod snapshot;

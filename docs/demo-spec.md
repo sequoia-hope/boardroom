@@ -1,8 +1,8 @@
 # The working demo: Boardroom, Composer and Route on GitHub Pages
 
 Status: **decided** (2026-10-30; the answers are under Decisions). Built so far: milestones
-0–4, the Pages workflow from Boardroom through Composer and Route, and milestone 5: the stale bar, and the Board
-tab drawing from the `.kicad_pcb`.
+0–4, the Pages workflow from Boardroom through Composer and Route, milestone 5 (the stale bar, and the Board tab
+drawing from the `.kicad_pcb`) and milestone 6 (the same Composer workflow on this machine).
 
 ## What the person asked for
 
@@ -21,7 +21,7 @@ The aim is closing the gaps that stop the workflow running entirely in the brows
 | | Local (served from this machine) | Pages |
 |---|---|---|
 | **Boardroom** | Reads projects from disk; watches them; the bus over a WebSocket | A snapshot (`boardroom snapshot`): `design/`, `viewer/`, and (milestone 2) the KiCad files and Composer's placement problems |
-| **Composer** | Static files (`python3 -m http.server`); no server yet. Ignores `?project=` and shows its built-in copy of the board, or `rp2350-battery` | Built-in example boards (`problem.json` made by `ccomp` at build time). Saving is "Download placement"; (milestone 4) opens a project's board from the store and saves it back |
+| **Composer** | Static files; (milestone 4) opens a project's board through Boardroom's store and saves it back; (milestone 6) Boardroom's server makes its placement problem on read | Built-in example boards (`problem.json` made by `ccomp` at build time). Saving is "Download placement"; (milestone 4) opens a project's board from the store and saves it back |
 | **Route** | Opens a project by path; routes on the server; **Save to project** writes the `.kicad_pcb` | `VITE_LOCAL` build: routes in the tab (WASM), opens files from your computer, **downloads** the routed board; (milestone 3) opens a project's board from the store and saves it back |
 
 Today, nothing passes a change from one app to the next: each app only saves to disk or downloads a file.
@@ -225,7 +225,23 @@ the renderer Composer and Studio already share.
    Checked locally on easy2350, bike-tracker, servodrive and motherboard (263 parts, 6121
    tracks). Like Studio, it draws open connections as ratsnest lines, including pads that only
    reach a plane through a pour.
-6. **Composer's server** for the local workflow.
+6. **Composer's server** for the local workflow. Done 2026-10-31, more simply than planned.
+   Since milestone 4, Composer reads and writes a project through Boardroom's store, which on
+   this machine *is* a server (`/api/projects/<id>/files/`, with revisions, conflicts and git as
+   the history). The one thing it lacked locally was the placement problem, so a separate
+   Composer server would only have duplicated the store. Instead, when an app reads
+   `compose/<board>/problem.json` and the project has none of its own, Boardroom's server makes
+   it from the board's current `.kicad_pcb` with `ccomp floorplan --problem`, as the snapshot
+   does (last variant), and serves it without writing it into the project (`problem.rs`). It
+   takes about 45 ms, so it is made on every read and always matches the board. ccomp is found
+   through `$CCOMP`, then `ccomp = "…"` in `~/.config/boardroom/config.toml`, then the PATH;
+   without it the read says how to set it. Checked locally: Composer's tab opens easy2350,
+   bike-tracker and the earring. On a throwaway copy of easy2350 a moved part saved as one
+   changed `(at …)` line, plus `placement.json`. Composer's own server (its app-spec's
+   milestones A and B) stays its own business, for what only it can do (AI fill, Send to
+   UltraRoute). Not yet: Composer assumes `hw/<board>/<variant>/<board>.kicad_pcb`, so a board
+   named otherwise (servodrive's `servodrive_E.kicad_pcb`) doesn't open; and Route's local
+   **Save to project** still goes through Studio's own server, not the store.
 
 Done means: on the Pages site, a phone or laptop can open easy2350, move U1 in Composer, route
 in Route, reload the page, and still see the moved, routed board with both steps in the
