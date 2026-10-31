@@ -28,6 +28,14 @@ After routing:
            column) when the router drew one. Clear of silk text, so run it
            after the silk.
 
+  --fence   GND vias along a line --fence-inset mm inside every board edge (outline
+           and cut-outs), one at least every --fence PITCH mm where they fit.
+  --return  a GND return via beside every via of another net (a signal changing
+           layers changes its reference plane; its return current needs a way
+           between the planes nearby): within --return-reach mm (centre to
+           centre), --fast-reach for nets of the --fast-class net classes.
+           Clear of silk text. The first --net is the return net.
+
 After routing and pouring, two things are usually left:
 
   --grid   ground pours on the outer layers need vias to the plane, or they
@@ -90,6 +98,13 @@ def main() -> int:
     ap.add_argument("--wired", action="store_true",
                     help="--pads: count only vias joined to the pad by a track (or in it), for a net with no "
                          "outer-layer pour to join a nearby via to the pad")
+    ap.add_argument("--fence", type=float, help="mm, the most between edge vias")
+    ap.add_argument("--fence-inset", type=float, default=1.2, help="mm in from the board edge")
+    ap.add_argument("--return", dest="ret", action="store_true",
+                    help="a return via of the first --net beside every other net's via")
+    ap.add_argument("--return-reach", type=float, default=1.5, help="mm, signal via to return via (centres)")
+    ap.add_argument("--fast-reach", type=float, default=1.0, help="mm, the same for --fast-class nets")
+    ap.add_argument("--fast-class", action="append", default=[], help="net class whose vias get --fast-reach")
     ap.add_argument("--tag", default="stitch", help="group name; a re-run replaces this group only")
     ap.add_argument("--lock", action="store_true", help="lock the vias (pre-route: the autorouter keeps them)")
     args = ap.parse_args()
@@ -169,6 +184,11 @@ def main() -> int:
             return False
         if any(outline.COutline(i).SquaredDistance(pos, True) < (r + edge_gap) ** 2
                for i in range(outline.OutlineCount())):
+            return False
+        # a cut-out is a hole in the outline set: COutline() alone misses its
+        # edges (bluebuzz ring: a via 0.06 mm from a 14 x 25 mm cut-out)
+        if any(outline.CHole(i, j).SquaredDistance(pos, True) < (r + edge_gap) ** 2
+               for i in range(outline.OutlineCount()) for j in range(outline.HoleCount(i))):
             return False
         circ = pcbnew.SHAPE_CIRCLE(pos, r)
         seg = pcbnew.SHAPE_SEGMENT(stub[0], stub[1], stub[2]) if stub else None
@@ -436,6 +456,76 @@ def main() -> int:
         pcbnew.ZONE_FILLER(b).Fill(zones)
         pcbnew.SaveBoard(str(pcb_path), b)
 
+    if args.fence:
+        n0 = args.net[0]
+        net = nets[n0]
+        dia, drill = via_size(net)
+        line = pcbnew.SHAPE_POLY_SET()
+        b.GetBoardPolygonOutlines(line)
+        line.Inflate(-FromMM(args.fence_inset), pcbnew.CORNER_STRATEGY_ROUND_ALL_CORNERS, FromMM(0.02))
+        chains = []
+        for i in range(line.OutlineCount()):
+            chains.append(line.COutline(i))
+            chains += [line.CHole(i, j) for j in range(line.HoleCount(i))]
+        step, pitch = FromMM(0.1), FromMM(args.fence)
+        count = 0
+        for ch in chains:
+            pts = [ch.CPoint(k) for k in range(ch.PointCount())] + [ch.CPoint(0)]
+            since = pitch                          # place as soon as one fits
+            for p, q in zip(pts, pts[1:]):
+                L = math.dist((p.x, p.y), (q.x, q.y))
+                k = 0.0
+                while k < L:
+                    pos = pcbnew.VECTOR2I(int(p.x + (q.x - p.x) * k / L), int(p.y + (q.y - p.y) * k / L))
+                    near = any(a.Type() == pcbnew.PCB_VIA_T and a.GetNetCode() == net.GetNetCode()
+                               and math.dist((a.GetPosition().x, a.GetPosition().y), (pos.x, pos.y)) < pitch * 0.6
+                               for a in tracks + added)
+                    if near:
+                        since = 0
+                    elif since >= pitch * 0.6 and not under_silk(pos, dia) and fits(pos, net, dia, drill):
+                        add_via(pos, net, dia, drill)
+                        count += 1
+                        since = 0
+                    k += step
+                    since += step
+        report.append(f"{n0}: {count} edge fence vias at <= {args.fence} mm, {args.fence_inset} mm in")
+        pcbnew.ZONE_FILLER(b).Fill(zones)
+        pcbnew.SaveBoard(str(pcb_path), b)
+
+    if args.ret:
+        n0 = args.net[0]
+        net = nets[n0]
+        dia, drill = via_size(net)
+        skip = {x.GetNetCode() for x in nets.values()}
+        allvias = lambda: [t for t in tracks + added if t.Type() == pcbnew.PCB_VIA_T]  # noqa: E731
+        count, missed = 0, []
+        for v in [t for t in tracks if t.Type() == pcbnew.PCB_VIA_T and t.GetNetCode() not in skip
+                  and t.GetNetCode() > 0]:
+            fast = netclass(v.GetNet()).get("name") in args.fast_class
+            reach = FromMM(args.fast_reach if fast else args.return_reach)
+            c = v.GetPosition()
+            if any(a.GetNetCode() == net.GetNetCode() and math.dist((a.GetPosition().x, a.GetPosition().y),
+                                                                     (c.x, c.y)) <= reach for a in allvias()):
+                continue
+            done = False
+            d = v.GetWidth(pcbnew.F_Cu) // 2 + dia // 2 + FromMM(0.15)
+            while d <= reach and not done:
+                for ang in range(0, 360, 20):
+                    a = math.radians(ang)
+                    q = pcbnew.VECTOR2I(int(c.x + d * math.cos(a)), int(c.y + d * math.sin(a)))
+                    if not under_silk(q, dia) and fits(q, net, dia, drill):
+                        add_via(q, net, dia, drill)
+                        count += 1
+                        done = True
+                        break
+                d += FromMM(0.1)
+            if not done:
+                missed.append(f"{v.GetNetname()}@({pcbnew.ToMM(c.x):.2f},{pcbnew.ToMM(c.y):.2f})")
+        report.append(f"{n0}: {count} return vias" + (f"; no room beside {len(missed)}: {', '.join(missed)}"
+                                                      if missed else ""))
+        pcbnew.ZONE_FILLER(b).Fill(zones)
+        pcbnew.SaveBoard(str(pcb_path), b)
+
     if args.fix:
         for rnd in range(args.rounds):
             pcbnew.SaveBoard(str(pcb_path), b)
@@ -501,7 +591,7 @@ def main() -> int:
                 break
         pcbnew.SaveBoard(str(pcb_path), b)
 
-    if not (args.pads or args.twin or args.grid or args.fix):
+    if not (args.pads or args.twin or args.grid or args.fix or args.ret or args.fence):
         pcbnew.SaveBoard(str(pcb_path), b)          # no mode: just remove the --tag group
     print(f"stitch: {pcb_path.name}")
     for line in report:
