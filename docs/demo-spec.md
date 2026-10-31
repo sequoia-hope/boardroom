@@ -239,9 +239,21 @@ the renderer Composer and Studio already share.
    bike-tracker and the earring. On a throwaway copy of easy2350 a moved part saved as one
    changed `(at …)` line, plus `placement.json`. Composer's own server (its app-spec's
    milestones A and B) stays its own business, for what only it can do (AI fill, Send to
-   UltraRoute). Not yet: Composer assumes `hw/<board>/<variant>/<board>.kicad_pcb`, so a board
-   named otherwise (servodrive's `servodrive_E.kicad_pcb`) doesn't open; and Route's local
-   **Save to project** still goes through Studio's own server, not the store.
+   UltraRoute). Followed the same day by:
+   - **Boards by their file.** A board's `.kicad_pcb` is the one named as its `.kicad_pro` (else
+     as the board, else the folder's only one): `project::board_pcb`, in the project list as
+     each board's `pcb`. Boardroom passes it to Composer and Route as `?pcb=` (Boardroom
+     `0c7e620`, circuit-composer `be44b06`). servodrive's ethernet board
+     (`servodrive_E.kicad_pcb`) opens in Composer.
+   - **Route saves through the store locally** (ultraroute `8ba0287`). Studio still routes a
+     project's board on its own server, but Save asks that server for the routed board, writes
+     it through Boardroom with the revision the page read, then tells the server, which records
+     the save in `design/status.json`. A board Composer changed meanwhile is refused, with Reload
+     or Save as a copy; Boardroom's bus and the other apps hear of the save. The page's half was
+     checked in Chrome against Boardroom's real store with the studio socket stood in for, on a
+     throwaway copy of easy2350: save, refusal after a Composer write, Save as a copy, Reload.
+     The server's half has a unit test. It reaches this machine's Route when ultraroute's served
+     instance is rebuilt from main.
 
 Done means: on the Pages site, a phone or laptop can open easy2350, move U1 in Composer, route
 in Route, reload the page, and still see the moved, routed board with both steps in the
