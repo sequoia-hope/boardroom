@@ -1,7 +1,7 @@
 # The working demo: Boardroom, Composer and Route on GitHub Pages
 
-Status: **decided** (2026-10-30; the answers are under Decisions). Built so far: the KiCad
-writer Composer saves with (milestone 0) and the store (milestone 1).
+Status: **decided** (2026-10-30; the answers are under Decisions). Built so far: milestones
+0–4, the Pages workflow from Boardroom through Composer and Route.
 
 ## What the person asked for
 
@@ -20,7 +20,7 @@ The aim is closing the gaps that stop the workflow running entirely in the brows
 | | Local (served from this machine) | Pages |
 |---|---|---|
 | **Boardroom** | Reads projects from disk; watches them; the bus over a WebSocket | A snapshot (`boardroom snapshot`): `design/`, `viewer/`, and (milestone 2) the KiCad files and Composer's placement problems |
-| **Composer** | Static files (`python3 -m http.server`); no server yet. Ignores `?project=` and shows its built-in copy of the board, or `rp2350-battery` | Built-in example boards (`problem.json` made by `ccomp` at build time). Saving is "Download placement" |
+| **Composer** | Static files (`python3 -m http.server`); no server yet. Ignores `?project=` and shows its built-in copy of the board, or `rp2350-battery` | Built-in example boards (`problem.json` made by `ccomp` at build time). Saving is "Download placement"; (milestone 4) opens a project's board from the store and saves it back |
 | **Route** | Opens a project by path; routes on the server; **Save to project** writes the `.kicad_pcb` | `VITE_LOCAL` build: routes in the tab (WASM), opens files from your computer, **downloads** the routed board; (milestone 3) opens a project's board from the store and saves it back |
 
 Today, nothing passes a change from one app to the next: each app only saves to disk or downloads a file.
@@ -183,9 +183,22 @@ the renderer Composer and Studio already share.
    with Boardroom's and Studio's Pages builds on one origin: route easy2350 in Boardroom's Route
    tab, save, see it in History, reload and still have it; a Composer save during a run gives
    the conflict, Save as a copy and Reload work.
-4. **Composer reads and writes the store** (circuit-composer): no selector with `?project=`, a
-   load error instead of a demo fallback, Save writing `placement.json` and the `.kicad_pcb`,
-   and standalone Composer opening Boardroom's example projects.
+4. **Composer reads and writes the store.** Done 2026-10-31 (circuit-composer, see below).
+   Opened with a store and `?board=&variant=` (Boardroom now passes the variant), Composer
+   shows no selector. It loads `compose/<board>/problem.json`, and takes the parts' poses and
+   the inspector's circuit from the `.kicad_pcb` (`KicadBoard::read` in its core). Read and
+   written back unchanged, that board stays byte for byte the same. With no problem it says
+   "Composer can't open <board> yet". **Save to project** (Ctrl+S, and in the Board bar when
+   embedded) writes the `.kicad_pcb` with the revision it read ("Placement: moved U1"), then
+   `compose/<board>/placement.json`. Refused, it offers **Reload** or **Save as a copy**. A
+   change from another app reloads it when there are no unsaved moves. Standalone on github.io,
+   it lists Boardroom's projects first and opens them through the tab's workspace. Its own
+   examples follow, minus easy2350. Composer's workspace tab moved from `?ws=` to `?view=`,
+   because `?ws=` is the store's. Checked in Chrome with both Pages builds on one origin: open
+   easy2350 from Boardroom's Composer tab, move U1, save, reload and still have it, see it in
+   History. A new tab gets the published board. A save from a second window conflicts with
+   unsaved moves, and Save as a copy and Reload both work. The saved board differs from the
+   published one only in U1's `(at …)` line, and kicad-cli opens it.
 5. **Stale bar** on Boardroom's drawn tabs; then the Board tab draws from the `.kicad_pcb`.
 6. **Composer's server** for the local workflow.
 

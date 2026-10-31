@@ -130,7 +130,7 @@
 
   const composerBoard = $derived(sel?.boards[0]?.board ?? sel?.board ?? sel?.name);
   const composerUrl = (embed) =>
-    `${api.COMPOSER}?board=${encodeURIComponent(composerBoard)}&project=${encodeURIComponent(sel.path)}${embed ? '&embed=1' : ''}&${api.storeQuery(store)}`;
+    `${api.COMPOSER}?board=${encodeURIComponent(composerBoard)}${sel.boards[0] ? `&variant=${encodeURIComponent(sel.boards[0].variant)}` : ''}&project=${encodeURIComponent(sel.path)}${embed ? '&embed=1' : ''}&${api.storeQuery(store)}`;
 
   function openComposer() {
     if (mode === 'single') {
