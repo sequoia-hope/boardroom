@@ -16,14 +16,19 @@ REV=ce50b64155115ef42b1a0b3397138cb8ab1b53ac
 REPO=https://github.com/sequoia-hope/ultraroute.git
 src=.cache/ultraroute
 
+# In place rather than cloned: CI's build cache may have put the target folders there first.
 if [[ ! -d $src/.git ]]; then
-  git clone --quiet --filter=blob:none --no-checkout "$REPO" "$src"
+  mkdir -p "$src"
+  git -C "$src" init --quiet
+  git -C "$src" remote add origin "$REPO"
+  git -C "$src" config remote.origin.promisor true
+  git -C "$src" config remote.origin.partialclonefilter blob:none
   git -C "$src" sparse-checkout set --no-cone /core/Cargo.toml /core/Cargo.lock /core/rust-toolchain.toml \
     /core/crates/ /studio/Cargo.toml /studio/Cargo.lock /studio/core/ /studio/server/
 fi
 # A fresh clone has checked nothing out, even when its HEAD is already the commit.
 if [[ $(git -C "$src" rev-parse HEAD 2>/dev/null) != "$REV" || ! -f $src/studio/Cargo.toml ]]; then
-  git -C "$src" cat-file -e "$REV^{commit}" 2>/dev/null || git -C "$src" fetch --quiet origin "$REV"
+  git -C "$src" cat-file -e "$REV^{commit}" 2>/dev/null || git -C "$src" fetch --quiet --filter=blob:none origin "$REV"
   git -C "$src" checkout --quiet "$REV"
 fi
 
