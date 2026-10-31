@@ -1,16 +1,12 @@
 {
   "board": "easy2350",
-  "phase": "10 release",
-  "doing": "Routing moves to ultraroute (vendor/ultraroute, pinned 574caac). The board here is still the Freerouting route that passed gates 7-9. ultraroute now routes it completely with VBUS at full width (.kicad_dru rule), but its vias beside J2 pins 7-11 leave no room for the GP7/GP8 bottom labels (silk_check). Reserving those spots as hard keepouts leaves 3-4 connections open, so a soft via-avoid area has been asked of ultraroute; then re-route and re-run gates 7-10.",
-  "needs_user": "Approve the release. Before ordering: get the JLC quote (economic vs standard PCBA, cost vs the US$15 target), select stackup JLC04161H-7628, check pin 1 of D3–D6, L1 and the ICs in JLC's preview (gate 10), and order while L1 is in stock.",
+  "phase": "7 routing",
+  "doing": "Re-routing with ultraroute from a bare board: no locked copper, the vendor regulator copy and locked pre-routes gone, footprints locked only where Circuit Composer's floorplan spec fixes them (J1-J4, U1, C14, C15, L1, TP3, SW1, SW2, D1, D3-D6). Seeds 0-3 each leave only VREG_LX open (U1-48 to L1-2), 0 new errors; that connection is asked of ultraroute. Then re-run gates 7-10.",
+  "needs_user": [],
   "checks": {
-    "DRC": "0 errors, 0 unconnected; 53 lib_footprint_mismatch warnings (board-local footprint copies), explained in gate 7",
-    "sync_check (sch/pcb/BOM/CPL)": "PASS, 54 parts to build",
-    "nets_check --rules --routed": "PASS (XIN 9.86 mm / 10, no vias)",
-    "placement_check": "PASS",
-    "silk_check": "PASS (overlaps, silk over vias, pin-1 marks)",
-    "stock": "all in stock, lifecycle normal; L1 128 (2026-10-24)",
-    "gerbers": "13 files parsed and rendered outside KiCad (gerbonara)"
+    "DRC": "1 error (a +1V1 via in the CERN-OHL-P-2.0 silk no-via area), 1 unconnected (VREG_LX U1-48 to L1-2); 53 lib_footprint_mismatch warnings (board-local footprint copies, gate 7)",
+    "schematic parity": "0 differences",
+    "locks": "16 footprints locked, no locked copper"
   },
   "gates_passed": [
     0,
@@ -19,10 +15,7 @@
     3,
     4,
     5,
-    6,
-    7,
-    8,
-    9
+    6
   ],
   "links": [
     {
@@ -74,5 +67,19 @@
       "href": "hw/easy2350/a/fab/"
     }
   ],
-  "updated": "2026-10-26"
+  "updated": "2026-10-31",
+  "gates": {
+    "7": {
+      "stale_because": "re-routed 2026-10-31 with ultraroute 63679d9 from a bare board, no locked copper (LESSONS.md, [routing]); 1 connection open (VREG_LX, U1-48 to L1-2: the router can't reach the QFN pin past C14/C15; requested of ultraroute) and 1 via in a silk no-via area"
+    },
+    "8": {
+      "stale_because": "re-routed 2026-10-31 with ultraroute 63679d9 from a bare board, no locked copper (LESSONS.md, [routing]); the copper simulations ran on the old route"
+    },
+    "9": {
+      "stale_because": "re-routed 2026-10-31 with ultraroute 63679d9 from a bare board, no locked copper (LESSONS.md, [routing]); silk stage found no room for the GP8 label, U1's pin-1 dot, L1's 1V1 dot and the \"not Pico pinout\" note"
+    },
+    "10": {
+      "stale_because": "re-routed 2026-10-31 with ultraroute 63679d9 from a bare board, no locked copper (LESSONS.md, [routing]); the fab outputs in hw/easy2350/a/fab/ are from the old route; do not order from them"
+    }
+  }
 }

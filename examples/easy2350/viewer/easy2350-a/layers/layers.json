@@ -1,6 +1,6 @@
 {
  "board": "easy2350.kicad_pcb",
- "generated": "2026-10-26",
+ "generated": "2026-10-31",
  "view_mm": [
   98.98,
   98.98,
@@ -16,13 +16,13 @@
  "thickness": 1.6,
  "plate": "#c8c8c8",
  "body": "body.svg",
- "vias": 138,
+ "vias": 142,
  "nets": 72,
  "footprints": 58,
  "front": 55,
  "back": 3,
- "tracks": 819,
- "length_mm": 1017.3,
+ "tracks": 687,
+ "length_mm": 866.5,
  "layers": [
   {
    "name": "F.Cu",
@@ -31,12 +31,10 @@
    "file": "f.svg",
    "color": "#C83434",
    "note": "Top copper.",
-   "tracks": 545,
-   "length_mm": 467.5,
+   "tracks": 432,
+   "length_mm": 445.8,
    "pads": 272,
    "zones": [
-    "+1V1",
-    "/VREG_LX",
     "+3V3",
     "GND"
    ]
@@ -76,8 +74,8 @@
    "file": "b.svg",
    "color": "#4D7FC4",
    "note": "Bottom copper.",
-   "tracks": 274,
-   "length_mm": 549.8,
+   "tracks": 255,
+   "length_mm": 420.7,
    "pads": 62,
    "zones": [
     "GND"

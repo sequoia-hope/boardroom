@@ -69,11 +69,18 @@ def outline(b):
     arc((R, R), (0, R), (k, k), (R, 0))
 
 
+# The parts that start locked: what the mechanics fix (connectors, test point, buttons), the
+# RP2350 with its core regulator, and the LEDs. Circuit Composer's floorplan spec names the same
+# set, and a footprint's lock in this file is the lock Composer and ccomp read. Everything else
+# may move. No copper is locked (LESSONS.md, [routing]).
+LOCKED = {"J1", "J2", "J3", "J4", "U1", "C14", "C15", "L1", "TP3", "SW1", "SW2", "D1", "D3", "D4", "D5", "D6"}
+
+
 def place_fp(fps, ref, x, y, rot=0):
     fp = fps[ref]
     fp.SetPosition(at(x, y))
     fp.SetOrientationDegrees(rot)
-    fp.SetLocked(True)
+    fp.SetLocked(ref in LOCKED)
 
 
 def connectors(b):
@@ -387,14 +394,20 @@ def stage_place():
         sys.exit(r.stderr)
     b = pcbnew.LoadBoard(str(PCB))
     fps = {fp.GetReference(): fp for fp in b.GetFootprints()}
+    # The vendor copy places the regulator's parts as Raspberry Pi's board has them; its copper
+    # goes, since the router lays every track (LESSONS.md, [routing]).
+    copied = [t for t in b.GetTracks() if t.GetParentGroup() is not None and t.GetParentGroup().GetName() == "transplant"]
+    copied += [z for z in b.Zones() if z.GetZoneName().startswith("transplant")]
+    for item in copied:
+        b.Remove(item)
+    for fp in fps.values():
+        fp.SetLocked(fp.GetReference() in LOCKED)
     BOTTOM = {"TP3"}
     for ref, (x, y, rot) in PLACE.items():
         if ref in fps:
             if (ref in BOTTOM) != fps[ref].IsFlipped():
                 fps[ref].Flip(fps[ref].GetPosition(), pcbnew.FLIP_DIRECTION_LEFT_RIGHT)
             place_fp(fps, ref, x, y, rot)
-    band_stubs(b)
-    critical_routes(b)
     missing = sorted(set(fps) - set(PLACE) - set(TRANSPLANT_REFS.values()) - {"U1", "J1", "J2", "J3", "J4"})
     if missing:
         print("  not placed yet:", ", ".join(missing))
@@ -420,23 +433,23 @@ def stage_zones(pours: bool = True, keepouts: bool = True):
 
     # Every polygon is built before anything is removed: after a Remove(),
     # pcbnew's SWIG proxies for the remaining zones can return garbage.
-    # The vendor's regulator corner (its zones outside the pad ring), grown 0.15 mm.
+    # The regulator corner: L1's body, where no other top copper may run (chips/rp2350.md), grown
+    # 0.15 mm. Its copper is the router's now (no locked vendor copy: LESSONS.md, [routing]).
     reg = pcbnew.SHAPE_POLY_SET()
-    for z in zones:
-        if z.GetZoneName().startswith("transplant") and z.GetAssignedPriority() >= 4:
-            reg.BooleanAdd(z.Outline())
-    l1_body = pcbnew.SHAPE_POLY_SET()                   # chips/rp2350.md: no other top copper under L1
-    l1_body.Append(fps["L1"].GetCourtyard(pcbnew.F_CrtYd))
-    reg.BooleanAdd(l1_body)
+    reg.Append(fps["L1"].GetCourtyard(pcbnew.F_CrtYd))
     reg.Inflate(pcbnew.FromMM(0.15), pcbnew.CORNER_STRATEGY_ROUND_ALL_CORNERS, pcbnew.FromMM(0.01))
-    # No L2 copper under the switch node: the VREG_LX zone's own outline and
-    # L1's LX pad, each grown 0.3 mm (a bounding box would swallow the PGND vias).
-    lx = [z for z in zones if z.GetZoneName().startswith("transplant") and z.GetNetname().endswith("VREG_LX")][0]
-    cut = lx.Outline().CloneDropTriangulation()
-    pad = [p for p in fps["L1"].Pads() if p.GetNumber() == "2"][0]
-    pad_poly = pcbnew.SHAPE_POLY_SET()
-    pad.TransformShapeToPolygon(pad_poly, pcbnew.F_Cu, 0, pcbnew.FromMM(0.005), pcbnew.ERROR_INSIDE)
-    cut.BooleanAdd(pad_poly)
+    # No L2 copper under the switch node: the VREG_LX pads (L1's and U1's) and whatever VREG_LX
+    # copper is on L1 already (after routing), each grown 0.3 mm (a bounding box would swallow
+    # the PGND vias).
+    cut = pcbnew.SHAPE_POLY_SET()
+    for fp in (fps["L1"], fps["U1"]):
+        for pad in fp.Pads():
+            if pad.GetNetname().endswith("VREG_LX"):
+                pad.TransformShapeToPolygon(cut, pcbnew.F_Cu, 0, pcbnew.FromMM(0.005), pcbnew.ERROR_INSIDE)
+    for t in b.GetTracks():
+        if t.GetNetname().endswith("VREG_LX") and t.GetLayer() == pcbnew.F_Cu:
+            t.TransformShapeToPolygon(cut, pcbnew.F_Cu, 0, pcbnew.FromMM(0.005), pcbnew.ERROR_INSIDE)
+    cut.Simplify()
     cut.Inflate(pcbnew.FromMM(0.3), pcbnew.CORNER_STRATEGY_ROUND_ALL_CORNERS, pcbnew.FromMM(0.01))
     for z in zones:
         if z.GetZoneName().startswith((PLANE_TAG, SOFT_TAG)):
@@ -696,7 +709,6 @@ def stage_route():
     run([sys.executable, str(SKILL / "stitch.py"), str(HW), "--net", "VBUS", "--tag", "twin VBUS"])
     run([sys.executable, __file__, "unroute"])    # the old route would block pad-via spots
     run([sys.executable, __file__, "zones-for-routing"])
-    run([sys.executable, __file__, "padvias"])
     run([sys.executable, __file__, "fill"])       # the router joins plane nets through the fill
     # A 35 um grid: the default 50 um left the QFN's 0.4 mm pitch escapes short of room.
     run([sys.executable, str(SKILL / "autoroute.py"), str(HW), "--planes", "In1.Cu,In2.Cu",
@@ -796,7 +808,7 @@ def stage_finish():
                 [sys.executable, str(SKILL / "via_nudge.py"), str(HW)],
                 # VBUS needs two vias per layer change (nets_check: 0.75 A peak x 1.5 > 0.8 A)
                 [sys.executable, str(SKILL / "stitch.py"), str(HW), "--net", "VBUS", "--twin",
-                 "--tag", "twin VBUS", "--lock"],
+                 "--tag", "twin VBUS"],
                 [sys.executable, str(SKILL / "stitch.py"), str(HW), "--net", "GND", "--net", "+3V3",
                  "--grid", "1.6", "--fix"],
                 [sys.executable, __file__, "fill"],

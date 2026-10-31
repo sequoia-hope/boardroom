@@ -1,5 +1,8 @@
 # Gate 7: routing
 
+> **Stale (2026-10-31).** The board was re-routed with ultraroute 63679d9 from a bare board, with no locked copper (LESSONS.md, [routing]); this gate's evidence is for the old route. See design/status.json and decisions.md.
+
+
 Status: **passed** (2026-10-24, final route after the release-review fixes)
 
 `scripts/board.py route` then `scripts/board.py finish`:

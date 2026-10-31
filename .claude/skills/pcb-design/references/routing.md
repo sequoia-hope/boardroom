@@ -14,6 +14,15 @@ Claude is bad at hand-routing by picking coordinates. So route in this order, an
 
 ## The KiCad flow, with the scripts
 
+**No copper is locked** (LESSONS.md, [routing], 2026-10-31). A board routes deterministically from a
+bare board with ultraroute (`--strip`, fixed seed, threads and timeout), so Circuit Composer can move a
+part and Route can lay the board again. Where the steps below say "locked" (the vendor copy, the
+critical pre-routes, the pad vias), that was the first easy2350 layout's method, now superseded: what
+each pre-route achieved becomes a router input (net-class widths and length limits, rule areas,
+`--regions`, `--via-avoid`) or, where ultraroute can't yet, a request to ultraroute, and the gate stays
+open until it can. Only footprints the mechanics or the floorplan spec fix are locked; a footprint's
+`(locked yes)` is the lock Composer and `ccomp` read.
+
 What routed the example board (`examples/easy2350`, RP2350A QFN-60, 4 layers,
 21 × 51 mm); each step is a script so a re-run gives the same board.
 

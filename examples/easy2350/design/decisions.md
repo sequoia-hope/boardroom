@@ -57,3 +57,23 @@ Every non-obvious decision, logged as it is made. Newest at the bottom.
 | 2026-10-24 | One via (5.9, 11.9) where the LED branch of VBUS (to D2) leaves L1, on the final route; no room for a second | That via carries only the LED branch: ≤ 160 mA of pixels plus the 1 mA bleed and the D7 clamp's few mA, against 0.8 A for one 0.3 mm via (nets_check's model). nets_check's "2 vias" is derived from the whole net's 0.75 A peak, which flows on L1 from J1 to U3 and U2 without changing layer. The J3 pin 20 and D2 ends have pairs | Re-route until a second fits |
 | 2026-10-24 | No "not Pico pinout" line on the silk (review-release #6) | Searched on every route since it was added; no via-free strip that long is left outside the reservations. README, intent.md and the bottom pin labels (GP23/24/25/29, no 3V3_EN/ADC_VREF) say it | Smaller text (below the fab minimum); drop a limit line instead |
 | 2026-10-26 | VBUS tracks at least 0.20 mm everywhere, pads included: `easy2350.kicad_dru` rule "VBUS current width" | The first ultraroute route (2c2d604, seed 1) necked VBUS to the board minimum, 0.09 mm, for 2.4 mm beside U2 and U3 to reach crowded pads. nets_check and DRC both passed it, because the class width is only what the router aims for. 0.75 A peak (nets.csv), IPC-2221 outer 1 oz at 10 °C rise: 11 mil², 0.20 mm. The released Freerouting board passes the rule; autoroute.py's KiCad judge now rejects any route that breaks it | Widen the necks after routing (a workaround script; the router should honour the rule, requested from ultraroute) |
+
+## 2026-10-31: re-route from a bare board, no locked copper
+
+**Decision.** easy2350 routes deterministically with ultraroute from a bare board. No copper is locked: the vendor regulator
+copy (transplant, 84 items), the critical pre-routes (56), the pad vias (80), the band stubs and the VBUS twins (12) are
+gone as locked copper, and the router lays every track. Footprints are locked only where Circuit Composer's floorplan
+spec fixes them: J1-J4, U1, C14, C15, L1, TP3, SW1, SW2, D1, D3-D6 (`board.py`, `LOCKED`).
+
+**Why.** The user: "easypcb should not be locked like that, it should route deterministically with ultraroute". The
+locked copper stayed behind when Composer moved a part (U1's fan-out shorted 17 of its pads), and Route's bare-board
+start keeps locked copper. Each pre-route answered a review finding; those findings become router rules or requests to
+ultraroute, not locks (LESSONS.md). The user chose that the router lays the regulator copper too, and to overwrite
+variant A rather than open a variant B.
+
+**Result.** ultraroute 63679d9, `--planes In1.Cu,In2.Cu --cell 0.035`, 1 thread, 240 s: seeds 0-3 each leave one
+connection open, VREG_LX U1-48 to L1-2 (`--blame`: fixed parts C14, C15, U1 in the way; at 0.25 mm still blocked);
+kept seed 2, 129 vias. The VREG_LX connection is requested of ultraroute. Gates 7-10 are stale until it routes.
+
+**Alternatives.** Keep the vendor regulator copy as a fixed block (declined by the user); unlock the pre-routes but
+route round them without `--strip` (Route's bare-board default would remove them).

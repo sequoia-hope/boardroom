@@ -1,5 +1,8 @@
 # Gate 10: release
 
+> **Stale (2026-10-31).** The board was re-routed with ultraroute 63679d9 from a bare board, with no locked copper (LESSONS.md, [routing]); this gate's evidence is for the old route. See design/status.json and decisions.md.
+
+
 Status: **ready for release; awaiting the user's approval** (2026-10-24)
 
 Fab outputs: `python3 scripts/fab.py` → `hw/easy2350/a/fab/`:
