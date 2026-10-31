@@ -247,6 +247,16 @@ Done means: on the Pages site, a phone or laptop can open easy2350, move U1 in C
 in Route, reload the page, and still see the moved, routed board with both steps in the
 history. Download changes then gives a `.kicad_pcb` that opens in KiCad.
 
+**Met 2026-10-31**, on the live Pages site in Chrome as a 390×844 touch phone. In
+Boardroom's Composer tab U1 was tapped, dragged from (110.5, 126.5) to (112.55, 128.55) and
+saved. In the Route tab the board was routed in the tab (9 minutes, 13 connections left open)
+and saved. After a reload, History listed the changed files from both apps: Composer's
+`placement.json`; Route's board, run report and `design/status.json`. The Board tab drew the
+routed board (1098 tracks, 230 vias, against 819 and 191 published). Download changes gave a
+zip of those files whose `.kicad_pcb` has U1 at its new place, and `kicad-cli pcb export svg`
+opens it. Left over: the router in a tab leaves more open than the published native run did
+(13 against 1); that is ultraroute's to close.
+
 ## Decisions
 
 The owner's answers to the draft's questions, 2026-10-30:
