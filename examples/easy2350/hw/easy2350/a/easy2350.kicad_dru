@@ -5,3 +5,74 @@
 (rule "VBUS current width"
   (condition "A.NetName == 'VBUS'")
   (constraint track_width (min 0.2mm)))
+
+# The regulator corner (chips/rp2350.md): under L1's body no copper but the
+# regulator's own, VREG_LX from U1 pin 48 and 1V1 out to C15. The area is a
+# rule area board.py's zones stage draws round L1's courtyard (+0.15 mm).
+(rule "regulator corner: its own nets only"
+  (condition "A.intersectsArea('plane regulator corner') && A.NetName != '/VREG_LX' && A.NetName != '+1V1'")
+  (constraint disallow track via))
+
+# Inside U1's pad ring (chips/rp2350.md: no foreign net crosses it): the
+# exposed GND pad, and the 1V1 and 3V3 copper that feeds the core pins.
+(rule "U1 pad ring: power nets only"
+  (condition "A.intersectsArea('plane U1 ring') && A.NetName != 'GND' && A.NetName != '+1V1' && A.NetName != '+3V3'")
+  (constraint disallow track via))
+
+# Length limits from design/nets.csv (length_limit), and no vias where its reason
+# says so. KiCad DRC enforces them, so autoroute.py's judge passes over a seed
+# that breaks one (QSPI_SD0 once ran 27.5 mm of 25).
+(rule "VREG_LX length"
+  (condition "A.NetName == '/VREG_LX'")
+  (constraint length (max 5mm)))
+(rule "VREG_AVDD length"
+  (condition "A.NetName == '/VREG_AVDD'")
+  (constraint length (max 10mm)))
+(rule "USB_DP_C length"
+  (condition "A.NetName == '/USB_DP_C'")
+  (constraint length (max 20mm)))
+(rule "USB_DM_C length"
+  (condition "A.NetName == '/USB_DM_C'")
+  (constraint length (max 20mm)))
+(rule "USB_DP length"
+  (condition "A.NetName == '/USB_DP'")
+  (constraint length (max 20mm)))
+(rule "USB_DM length"
+  (condition "A.NetName == '/USB_DM'")
+  (constraint length (max 20mm)))
+(rule "USB_DP_MCU length"
+  (condition "A.NetName == '/USB_DP_MCU'")
+  (constraint length (max 5mm)))
+(rule "USB_DM_MCU length"
+  (condition "A.NetName == '/USB_DM_MCU'")
+  (constraint length (max 5mm)))
+(rule "QSPI_SCLK length"
+  (condition "A.NetName == '/QSPI_SCLK'")
+  (constraint length (max 25mm)))
+(rule "QSPI_SD0 length"
+  (condition "A.NetName == '/QSPI_SD0'")
+  (constraint length (max 25mm)))
+(rule "QSPI_SD1 length"
+  (condition "A.NetName == '/QSPI_SD1'")
+  (constraint length (max 25mm)))
+(rule "QSPI_SD2 length"
+  (condition "A.NetName == '/QSPI_SD2'")
+  (constraint length (max 25mm)))
+(rule "QSPI_SD3 length"
+  (condition "A.NetName == '/QSPI_SD3'")
+  (constraint length (max 25mm)))
+(rule "QSPI_SS length"
+  (condition "A.NetName == '/QSPI_SS'")
+  (constraint length (max 25mm)))
+(rule "XIN length"
+  (condition "A.NetName == '/XIN'")
+  (constraint length (max 10mm)))
+(rule "XIN no vias"
+  (condition "A.NetName == '/XIN'")
+  (constraint via_count (max 0)))
+(rule "XOUT length"
+  (condition "A.NetName == '/XOUT'")
+  (constraint length (max 5mm)))
+(rule "XOUT_R length"
+  (condition "A.NetName == '/XOUT_R'")
+  (constraint length (max 5mm)))

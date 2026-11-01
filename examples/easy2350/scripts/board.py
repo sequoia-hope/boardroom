@@ -417,10 +417,29 @@ def stage_place():
 # ---------------------------------------------------------------- planes (phase 7)
 
 PLANE_TAG = "plane"
-SOFT_TAG = "soft-novia"   # ultraroute: vias cost a detour here but are allowed
 
 
-def stage_zones(pours: bool = True, keepouts: bool = True):
+def _hull(poly):
+    """The convex hull of every point of `poly`, as a SHAPE_LINE_CHAIN."""
+    pts = sorted({(poly.COutline(i).CPoint(j).x, poly.COutline(i).CPoint(j).y)
+                  for i in range(poly.OutlineCount()) for j in range(poly.COutline(i).PointCount())})
+    def half(ps):
+        h = []
+        for p in ps:
+            while len(h) >= 2 and ((h[-1][0] - h[-2][0]) * (p[1] - h[-2][1])
+                                   - (h[-1][1] - h[-2][1]) * (p[0] - h[-2][0])) <= 0:
+                h.pop()
+            h.append(p)
+        return h
+    ring = half(pts)[:-1] + half(pts[::-1])[:-1]
+    chain = pcbnew.SHAPE_LINE_CHAIN()
+    for x, y in ring:
+        chain.Append(x, y)
+    chain.SetClosed(True)
+    return chain
+
+
+def stage_zones(pours: bool = True):
     """Ground on L2 (and filling L1/L4), 3V3 on L3 under the RP2350 and flash,
     and the layer-2 cut-out under VREG_LX (stackup.md, chips/rp2350.md).
     With pours=False only the L2 and L3 planes and the cut-out, for routing:
@@ -446,13 +465,20 @@ def stage_zones(pours: bool = True, keepouts: bool = True):
         for pad in fp.Pads():
             if pad.GetNetname().endswith("VREG_LX"):
                 pad.TransformShapeToPolygon(cut, pcbnew.F_Cu, 0, pcbnew.FromMM(0.005), pcbnew.ERROR_INSIDE)
+    # Before routing there is no VREG_LX copper yet: the strip between the two
+    # pads (their hull) is where it will run, so no via lands there that the
+    # cut-out redrawn round the routed copper would then cover.
+    cut.Simplify()
+    hull = pcbnew.SHAPE_POLY_SET()
+    hull.AddOutline(_hull(cut))
+    cut.BooleanAdd(hull)
     for t in b.GetTracks():
         if t.GetNetname().endswith("VREG_LX") and t.GetLayer() == pcbnew.F_Cu:
             t.TransformShapeToPolygon(cut, pcbnew.F_Cu, 0, pcbnew.FromMM(0.005), pcbnew.ERROR_INSIDE)
     cut.Simplify()
     cut.Inflate(pcbnew.FromMM(0.3), pcbnew.CORNER_STRATEGY_ROUND_ALL_CORNERS, pcbnew.FromMM(0.01))
     for z in zones:
-        if z.GetZoneName().startswith((PLANE_TAG, SOFT_TAG)):
+        if z.GetZoneName().startswith((PLANE_TAG, "soft-novia")):
             b.Remove(z)
 
     def box(x0, y0, x1, y1):
@@ -529,13 +555,6 @@ def stage_zones(pours: bool = True, keepouts: bool = True):
         bb = ps.BBox()
         bb.Inflate(pcbnew.FromMM(0.15))
         p = tx.GetPosition()
-        # J2 pins 1-11: GPIO0-5 drop to L4 beside these labels to get past
-        # the flash. As no-via areas the router left 3-4 connections open on
-        # every seed (Freerouting twice, ultraroute 574caac seeds 0-3), so
-        # they are soft: a via there costs the router a detour but is allowed
-        # (KiCad ignores the area). finish moves any via that still lands
-        # under one (via_nudge.py) and the silk stage nudges the text
-        soft = tx.GetHorizJustify() == pcbnew.GR_TEXT_H_ALIGN_RIGHT and pcbnew.ToMM(p.y) - Y0 < PIN1 + 2.54 * 10.5
         poly = pcbnew.SHAPE_POLY_SET()
         poly.NewOutline()
         for x, y in ((bb.GetLeft(), bb.GetTop()), (bb.GetRight(), bb.GetTop()),
@@ -553,17 +572,26 @@ def stage_zones(pours: bool = True, keepouts: bool = True):
                     hole.Append(x, y)
                 poly.BooleanSubtract(hole)
         z = pcbnew.ZONE(b)
-        z.SetZoneName(f"{SOFT_TAG if soft else PLANE_TAG} silk {tx.GetText()}")
+        z.SetZoneName(f"{PLANE_TAG} silk {tx.GetText()}")
         z.SetLayerSet(pcbnew.LSET.AllCuMask())
         z.SetIsRuleArea(True)
         z.SetDoNotAllowCopperPour(False)
         z.SetDoNotAllowTracks(False)
-        z.SetDoNotAllowVias(not soft)
+        z.SetDoNotAllowVias(True)
         z.SetDoNotAllowPads(False)
         z.SetDoNotAllowFootprints(False)
         poly.thisown = False
         z.SetOutline(poly)
         b.Add(z)
+    # U1's pin-1 dot, 0.45 mm out from pad 1 on the diagonal, where the silk
+    # stage put it on the 2026-10-24 route: no vias there, or the router's
+    # 3V3 via for IOVDD lands beside pad 1 and leaves the dot no room.
+    pin1 = next(x for x in fps["U1"].Pads() if x.GetNumber() == "1").GetPosition()
+    dx, dy = pcbnew.ToMM(pin1.x) - X0, pcbnew.ToMM(pin1.y) - Y0
+    dot = rect("silk U1 pin 1", pcbnew.F_Cu, None, X0 + dx - 0.65, Y0 + dy - 0.65, X0 + dx - 0.25, Y0 + dy - 0.25,
+               keepout=True)
+    dot.SetDoNotAllowTracks(False)          # tracks are fine under silk; pads and vias are not
+    dot.SetDoNotAllowCopperPour(False)
     k = pcbnew.ZONE(b)
     k.SetZoneName(f"{PLANE_TAG} no copper under VREG_LX")
     k.SetLayer(pcbnew.In1_Cu)
@@ -618,34 +646,27 @@ def stage_zones(pours: bool = True, keepouts: bool = True):
         strip.thisown = False
         e.SetOutline(strip)
         b.Add(e)
-    # The regulator corner (vendor zones outside the pad ring: VREG_LX, the 1V1
-    # and 3V3 patches, PGND) is the vendor's copper only. While routing, no
-    # other net's tracks (a tracks-only rule area: a no-pour rule area would
-    # stop the vendor zones filling too). After routing, the GND pour is cut
-    # around it, since PGND must join GND at its two vias alone (chips/rp2350.md).
-    if not pours and keepouts:
+    # The regulator corner (L1's body) and the inside of U1's pad ring: named rule
+    # areas that restrict nothing themselves, for the rules in easy2350.kicad_dru,
+    # which keep every other net's tracks out (chips/rp2350.md) and let the
+    # regulator's own nets in: the router lays VREG_LX and 1V1 to L1's pads and
+    # the 1V1 and 3V3 copper inside the ring (no locked copper: LESSONS.md,
+    # [routing]). A tracks keepout here left VREG_LX unroutable. Kept on the
+    # finished board too, so KiCad's DRC checks the same rules.
+    def area(name, poly):
         k = pcbnew.ZONE(b)
-        k.SetZoneName(f"{PLANE_TAG} regulator corner")
+        k.SetZoneName(name)
         k.SetLayer(pcbnew.F_Cu)
         k.SetIsRuleArea(True)
-        k.SetDoNotAllowCopperPour(False)
-        k.SetDoNotAllowTracks(True)
-        k.SetDoNotAllowVias(False)
-        k.SetDoNotAllowPads(False)
-        k.SetDoNotAllowFootprints(False)
-        reg.thisown = False
-        k.SetOutline(reg)
+        for f in (k.SetDoNotAllowCopperPour, k.SetDoNotAllowTracks, k.SetDoNotAllowVias,
+                  k.SetDoNotAllowPads, k.SetDoNotAllowFootprints):
+            f(False)
+        poly.thisown = False
+        k.SetOutline(poly)
         b.Add(k)
-    else:
-        pass                            # the GND L1 pour above is cut around it
-    if not pours and keepouts:
-        # Routing only: nothing new inside U1's pad ring, where the vendor's 1V1
-        # ring and 3V3 band live (chips/rp2350.md: no foreign net crosses it).
-        # Removed again before the pours, because the vendor's own spoke vias
-        # sit inside it.
-        ux, uy = U1_AT
-        rect("routing keepout U1 ring", pcbnew.F_Cu, None, X0 + ux - 3.0, Y0 + uy - 3.0,
-             X0 + ux + 3.0, Y0 + uy + 3.0, keepout=True)
+    ux, uy = U1_AT
+    area(f"{PLANE_TAG} regulator corner", pcbnew.SHAPE_POLY_SET(reg))
+    area(f"{PLANE_TAG} U1 ring", box(X0 + ux - 3.0, Y0 + uy - 3.0, X0 + ux + 3.0, Y0 + uy + 3.0))
     pcbnew.SaveBoard(str(PCB), b)
 
 
@@ -713,8 +734,6 @@ def stage_route():
     # A 35 um grid: the default 50 um left the QFN's 0.4 mm pitch escapes short of room.
     run([sys.executable, str(SKILL / "autoroute.py"), str(HW), "--planes", "In1.Cu,In2.Cu",
          "--extra", "--cell 0.035"])
-    # The routing keepouts go before the outer pours (they stop the copied zones filling).
-    run([sys.executable, __file__, "zones-bare"])
     print(f"route: {signals_unrouted()} signal connections unrouted")
 
 
@@ -1186,7 +1205,6 @@ def stage_silk():
 
 STAGES = {"sync": [stage_sync], "refresh": [stage_refresh], "outline": [stage_outline], "place": [stage_place],
           "zones": [stage_zones], "zones-for-routing": [lambda: stage_zones(pours=False)],
-          "zones-bare": [lambda: stage_zones(pours=False, keepouts=False)],
           "route": [stage_route], "stubs": [lambda: _with_board(band_stubs)],
           "critical": [lambda: _with_board(critical_routes)],
           "pours": [stage_zones], "padvias": [stage_padvias], "unroute": [stage_unroute], "clean": [stage_clean], "fill": [fill], "finish": [stage_finish], "silk": [stage_silk]}

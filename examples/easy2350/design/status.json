@@ -1,11 +1,13 @@
 {
   "board": "easy2350",
   "phase": "7 routing",
-  "doing": "Re-routing with ultraroute from a bare board: no locked copper, the vendor regulator copy and locked pre-routes gone, footprints locked only where Circuit Composer's floorplan spec fixes them (J1-J4, U1, C14, C15, L1, TP3, SW1, SW2, D1, D3-D6). Seeds 0-3 each leave only VREG_LX open (U1-48 to L1-2), 0 new errors; that connection is asked of ultraroute. Then re-run gates 7-10.",
+  "doing": "Routed completely with ultraroute 770ef73 from a bare board (seed 2, 125 vias): DRC 0 errors, 0 unconnected, length and no-via limits from nets.csv now in the .kicad_dru. Regulator corner and U1 pad ring kept to their own nets by dru rules. Next: independent layout/SI/silk review, then gates 7-10 rewritten and the release review.",
   "needs_user": [],
   "checks": {
-    "DRC": "1 error (a +1V1 via in the CERN-OHL-P-2.0 silk no-via area), 1 unconnected (VREG_LX U1-48 to L1-2); 53 lib_footprint_mismatch warnings (board-local footprint copies, gate 7)",
-    "schematic parity": "0 differences",
+    "DRC": "0 errors, 0 unconnected; 53 lib_footprint_mismatch warnings (board-local footprint copies)",
+    "schematic parity": "0 differences (sync_check with BOM and CPL: PASS, 58/58/54/54)",
+    "nets_check --rules --routed": "PASS, 0 errors",
+    "silk_check": "PASS, 0 errors",
     "locks": "16 footprints locked, no locked copper"
   },
   "gates_passed": [
@@ -70,16 +72,16 @@
   "updated": "2026-10-31",
   "gates": {
     "7": {
-      "stale_because": "re-routed 2026-10-31 with ultraroute 63679d9 from a bare board, no locked copper (LESSONS.md, [routing]); 1 connection open (VREG_LX, U1-48 to L1-2: the router can't reach the QFN pin past C14/C15; requested of ultraroute) and 1 via in a silk no-via area"
+      "stale_because": "re-routed 2026-10-31 with ultraroute 770ef73 from a bare board: DRC 0/0 and every check passes; awaiting the independent layout review"
     },
     "8": {
-      "stale_because": "re-routed 2026-10-31 with ultraroute 63679d9 from a bare board, no locked copper (LESSONS.md, [routing]); the copper simulations ran on the old route"
+      "stale_because": "re-routed 2026-10-31 with ultraroute 770ef73; the copper simulations ran on the old route and are to be re-run"
     },
     "9": {
-      "stale_because": "re-routed 2026-10-31 with ultraroute 63679d9 from a bare board, no locked copper (LESSONS.md, [routing]); silk stage found no room for the GP8 label, U1's pin-1 dot, L1's 1V1 dot and the \"not Pico pinout\" note"
+      "stale_because": "re-routed 2026-10-31; silk_check passes (the \"not Pico pinout\" note still has no room, as logged 2026-10-24); awaiting review"
     },
     "10": {
-      "stale_because": "re-routed 2026-10-31 with ultraroute 63679d9 from a bare board, no locked copper (LESSONS.md, [routing]); the fab outputs in hw/easy2350/a/fab/ are from the old route; do not order from them"
+      "stale_because": "re-routed 2026-10-31; fab outputs regenerated from the new route but not released: do not order until the release review and your sign-off"
     }
   }
 }
