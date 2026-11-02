@@ -16,13 +16,13 @@
  "thickness": 1.6,
  "plate": "#c8c8c8",
  "body": "body.svg",
- "vias": 136,
+ "vias": 141,
  "nets": 72,
  "footprints": 58,
  "front": 55,
  "back": 3,
- "tracks": 622,
- "length_mm": 934.8,
+ "tracks": 604,
+ "length_mm": 866.6,
  "layers": [
   {
    "name": "F.Cu",
@@ -31,14 +31,14 @@
    "file": "f.svg",
    "color": "#C83434",
    "note": "Top copper.",
-   "tracks": 438,
-   "length_mm": 451.8,
+   "tracks": 427,
+   "length_mm": 437.8,
    "pads": 272,
    "zones": [
-    "/VREG_AVDD",
     "+3V3",
-    "+1V1",
     "GND",
+    "/VREG_AVDD",
+    "+1V1",
     "/VREG_LX"
    ]
   },
@@ -77,12 +77,12 @@
    "file": "b.svg",
    "color": "#4D7FC4",
    "note": "Bottom copper.",
-   "tracks": 184,
-   "length_mm": 483.0,
+   "tracks": 177,
+   "length_mm": 428.8,
    "pads": 62,
    "zones": [
-    "GND",
-    "+1V1"
+    "+1V1",
+    "GND"
    ]
   },
   {

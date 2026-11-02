@@ -1,10 +1,10 @@
 {
   "board": "easy2350",
   "phase": "7 routing",
-  "doing": "Re-routed on ultraroute 07b8c8a: all four B.Cu 1V1 spokes now have a via at each end (review A1), every reference zone joined; DRC 0 errors, 0 unconnected, parity 0; pad_joints, silk, nets and placement pass. Date silk moved 2.5 mm down to free spoke 2's ring via. Left for review: 15 redundant router 1V1 tracks beside the ring (12 mm), two VBUS layer changes with no room for a second via. Next: final independent layout review, then gates 7-10.",
+  "doing": "Re-routed on ultraroute 07b8c8a with the review-2 fixes: all four B.Cu 1V1 spokes have a via at each end (A1), tracks end inside pads (A2), LDO output joined to its 10 uF on L1 (B4), AVDD on top (B2), pin 38 on reference 3V3 (B6). DRC 0 errors, 0 unconnected, parity 0; pad_joints, silk, nets, placement and sync pass. Waiting on ultraroute for a via of its own at each decoupler's ground pad (B5: C20, C17, C4 2.0-3.4 mm from a via). Then the final independent layout review and gates 7-10.",
   "needs_user": [],
   "checks": {
-    "DRC": "0 errors, 0 unconnected, parity 0; warnings: 56 lib_footprint_mismatch only (board-local silk trims)",
+    "DRC": "0 errors, 0 unconnected, parity 0; warnings: 56 lib_footprint_mismatch only (board-local footprints)",
     "schematic parity": "0 differences (sync_check with BOM and CPL: PASS, 58/58/54/54)",
     "nets_check --rules --routed": "PASS, 0 errors",
     "silk_check": "PASS, 0 errors (now also footprint silk over vias)",

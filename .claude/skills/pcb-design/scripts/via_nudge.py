@@ -68,6 +68,7 @@ def main() -> int:
     ds = b.GetDesignSettings()
     copper = [l for l in range(pcbnew.PCB_LAYER_ID_COUNT) if pcbnew.IsCopperLayer(l) and b.IsLayerEnabled(l)]
     hole_to_hole = getattr(ds, "m_HoleToHoleMin", F(0.25))
+    hole_gap = getattr(ds, "m_HoleClearance", F(0.2))
     edge_gap = ds.m_CopperEdgeClearance
     outline = pcbnew.SHAPE_POLY_SET()
     b.GetBoardPolygonOutlines(outline)
@@ -152,6 +153,11 @@ def main() -> int:
                     else it.GetDrillSizeX() if it.Type() == pcbnew.PCB_PAD_T and it.HasHole() else 0)
             if hole and math.dist((it.GetPosition().x, it.GetPosition().y), (pos.x, pos.y)) < \
                     (drill + hole) / 2 + hole_to_hole:
+                return False
+            # no via hole in or at an SMD pad, its own net's included (stitch.py
+            # does the same): the board's dru may ask it, and KiCad has no slack
+            if it.Type() == pcbnew.PCB_PAD_T and it.GetAttribute() == pcbnew.PAD_ATTRIB_SMD \
+                    and it.GetEffectiveShape(it.GetLayer()).Collide(pcbnew.SHAPE_CIRCLE(pos, drill // 2), hole_gap):
                 return False
             if it.GetNetCode() == net.GetNetCode():
                 continue

@@ -77,3 +77,41 @@ kept seed 2, 129 vias. The VREG_LX connection is requested of ultraroute. Gates 
 
 **Alternatives.** Keep the vendor regulator copy as a fixed block (declined by the user); unlock the pre-routes but
 route round them without `--strip` (Route's bare-board default would remove them).
+
+## 2026-11-01: RP2350 reference power copper as zones, not router wire
+
+**Decision.** `board.py regzones` places Raspberry Pi's reference power copper round U1 as unlocked zones: the six
+vendor pours, plus each vendor power track (+1V1, +3V3, GND, VREG_AVDD, VREG_LX) turned into a zone of its own
+("transplant track NET i", priority 8, islands kept). ultraroute (07b8c8a) treats a kept island no wider than 2 mm as
+laid copper and joins it to its net, with a via at each end that lies over the net's copper: all four B.Cu 1V1
+spokes now carry current from the ring to DVDD pins 6, 23, 39 and 50 as the reference does (review-layout
+2026-11-01 A1).
+
+**Why.** The user chose "reference pours as zones" over letting the router lay the regulator's copper: the router's
+1V1 was 35-38 mm of 0.2-0.25 mm wire with VREG_FB looping 10 mm through two vias (review-layout 2026-10-31 M3,
+2026-11-01 A1). Zones keep the reference geometry and nothing is locked.
+
+**Alternatives.** Router-laid power copper with width rules (the first choice, reviewed and rejected); a locked vendor
+copy (declined by the user, 2026-10-31).
+
+## 2026-11-01: routing rules in the .kicad_dru, not keepouts
+
+| Date | Decision | Why | Alternatives considered |
+|---|---|---|---|
+| 2026-11-01 | Old tracks keepouts ("regulator corner", "U1 ring") replaced by rule areas that restrict nothing plus `.kicad_dru` rules that disallow other nets' tracks and vias there; the ring allows GND, +1V1, +3V3 | The keepouts blocked the regulator's own nets (VREG_LX stayed open); a dru rule can name the nets allowed | Keepouts with exceptions (KiCad has none); no rule (other nets crossed the corner) |
+| 2026-11-01 | nets.csv length limits go in the dru as `length (max …)`; XIN gets `via_count (max 0)` | ultraroute steers lengths from the dru, so the limit is enforced while routing, not only checked after | Checking lengths after routing and re-routing by hand |
+| 2026-11-01 | "no via hole in an SMD pad": `physical_hole_clearance (min 0.2mm)` from every outer-layer SMD pad, U1.61 and U3.9 (thermal pads) exempt | Review 2026-10-31 M1 (holes in 12 pads) and 2026-11-01 B1 (rings over pads at 0.1 mm); an open hole wicks solder. stitch.py honours it too | 0.1 mm (left rings over pads at the mask-dam limit) |
+| 2026-11-01 | Crystal: rule area round Y1 (+0.5 mm), dru allows only XIN, XOUT_R, GND | Review M2: PIX12 ran between Y1's pads | Placement change (no room) |
+| 2026-11-01 | VREG_AVDD: no vias | Review m1/B2: it dropped to L4 under the switch node; on L1 it follows the reference | A width rule (did not stop the layer change) |
+| 2026-11-01 | autoroute.py counts plane-net opens apart from signal opens and keeps trying seeds until none | Seed 0 of 4ed8d5d left C4/C17 grounds joined only to each other, with no room for a stitch via | Rely on stitching (no room) |
+| 2026-11-01 | A 3V3 zone on L1 from the LDO output (U3.1) to its 10 µF (C3.1) | Review B4: the output-cap loop went through two vias and L3 | A locked track (no locked copper) |
+
+## 2026-11-01: silkscreen
+
+| Date | Decision | Why | Alternatives considered |
+|---|---|---|---|
+| 2026-11-01 | Top "5V" removed; J1 labelled "5V IN" beside the receptacle | Review M5: the only spot by the USB-C read as a label for J2 pin 2 (GP1) | Keep it inside J1's outline (under the body) |
+| 2026-11-01 | The bottom date moves 2.5 mm down to (7.5, 29.5) | Its no-via area kept the ring-end via of the 1V1 spoke to pin 6 out | Shrinking the reservation (still over the strip) |
+| 2026-11-01 | The silk stage trims footprint silk that router vias land on; silk_check tests footprint silk against vias | Review m9: silk over vias in seven footprints; the router places vias after the footprints | Board-local footprint edits by hand each route |
+| 2026-11-01 | SWD pin names stay on the bottom ("DIO GND CLK"); the top says only "SWD" | Review B7: the brief asked for names on the top, but the strip above J4 holds BOOT, SWD and RST with no room for three more words at 0.8 mm; a probe plugs in from the top, so the bottom names are read before it goes in | Smaller text (under the fab minimum); dropping BOOT/RST (buttons need them) |
+| 2026-11-01 | "not Pico pinout" goes on when the route leaves room, else it's dropped | It's a courtesy line; on some routes no via-free strip is long enough. On the 07b8c8a route it fits | A reserved spot (costs routing room under U1) |

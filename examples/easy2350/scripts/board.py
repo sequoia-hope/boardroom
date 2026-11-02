@@ -636,6 +636,12 @@ def stage_zones(pours: bool = True):
     # 3V3 is a whole-board plane on L3, present while routing so the router
     # drops 3V3 vias into it (a pour added after routing left 3V3 islands).
     rect("3V3 L3", pcbnew.In2_Cu, "+3V3", *full)
+    # The LDO's output to its 10 uF on L1, pad to pad, so the output-cap loop
+    # isn't two vias through L3 (review-layout 2026-11-01 B4). Present while
+    # routing, so the router keeps other nets out of the 2 mm gap.
+    uo, co = fps["U3"].FindPadByNumber("1").GetPosition(), fps["C3"].FindPadByNumber("1").GetPosition()
+    rect("3V3 LDO out", pcbnew.F_Cu, "+3V3", pcbnew.ToMM(co.x), pcbnew.ToMM(uo.y),
+         pcbnew.ToMM(uo.x) + 0.12, pcbnew.ToMM(co.y), priority=2)
     if pours:
         rect("GND L1", pcbnew.F_Cu, "GND", *full, minus=corner)
         # 3V3 on L1 around U1, over the ground pour: the vendor joins IOVDD, its
