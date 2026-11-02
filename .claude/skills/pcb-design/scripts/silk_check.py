@@ -249,6 +249,18 @@ def main() -> int:
             p0 = hits[0].GetPosition()
             rep.error("silk-over-via", f"{side} silk {s_[:30]!r} over {len(hits)} via(s), first at "
                                        f"({pcbnew.ToMM(p0.x):.2f}, {pcbnew.ToMM(p0.y):.2f})")
+    # and footprint silk lines and shapes (outlines, pin-1 marks): the ink breaks
+    # over a via ring as it does over text (review-layout 2026-10-31 m9)
+    for fp in fps:
+        for item in fp.GraphicalItems():
+            if item.GetClass() == "PCB_TEXT" or item.GetLayer() not in (pcbnew.F_SilkS, pcbnew.B_SilkS):
+                continue
+            hits = [v for v in vias if item.HitTest(pcbnew.VECTOR2I(v.GetPosition()), v.GetWidth(pcbnew.F_Cu) // 2 + gap)]
+            if hits:
+                side = "bottom" if item.GetLayer() == pcbnew.B_SilkS else "top"
+                p0 = hits[0].GetPosition()
+                rep.error("silk-over-via", f"{side} silk of {fp.GetReference()} ({item.GetShapeStr()}) over "
+                                           f"{len(hits)} via(s), first at ({pcbnew.ToMM(p0.x):.2f}, {pcbnew.ToMM(p0.y):.2f})")
 
     # 5. Pin-1 and polarity marks.
     import math

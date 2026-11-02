@@ -414,6 +414,80 @@ def stage_place():
     pcbnew.SaveBoard(str(PCB), b)
 
 
+# ---------------------------------------------------------------- regulator pours
+
+REG_TAG = "transplant"                      # the zone names transplant.py gives
+
+
+def _zone_dump(path):
+    """Print the transplanted zones of the board at `path` as JSON (run in its
+    own process: pcbnew holds one board per process)."""
+    import json
+    b = pcbnew.LoadBoard(str(path))
+    out = []
+    for z in b.Zones():
+        if not z.GetZoneName().startswith(REG_TAG):
+            continue
+        o = z.Outline()
+        out.append({"name": z.GetZoneName(), "net": z.GetNetname(), "layer": z.GetLayer(),
+                    "priority": z.GetAssignedPriority(), "connect": int(z.GetPadConnection()),
+                    "clearance": z.GetLocalClearance() or 0, "min": z.GetMinThickness(),
+                    "gap": z.GetThermalReliefGap(), "spoke": z.GetThermalReliefSpokeWidth(),
+                    "outline": [[[o.COutline(i).CPoint(j).x, o.COutline(i).CPoint(j).y]
+                                 for j in range(o.COutline(i).PointCount())] for i in range(o.OutlineCount())]})
+    print(json.dumps(out))
+
+
+def stage_regzones():
+    """The RP2350 power pours from Raspberry Pi's reference layout (chips/rp2350.md),
+    as zones placed relative to U1: the 1V1 ring and 3V3 band under the chip and
+    the regulator corner's VREG_LX, 1V1, 3V3 and PGND patches. Zones, not locked
+    copper: the router routes round them and they follow U1 (the user's choice,
+    2026-11-01; review-layout 2026-10-31 M3). The vendor's tracks and vias stay
+    behind; the router joins the pours."""
+    import json
+    import shutil
+    import subprocess
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        copy = Path(tmp) / PCB.name
+        shutil.copy(PCB, copy)
+        r = subprocess.run([sys.executable, str(SKILL / "transplant.py"), str(VENDOR), str(copy),
+                            "--anchor", "U1=U1", "--refs", ",".join(f"{a}={b}" for a, b in TRANSPLANT_REFS.items()),
+                            "--nets", ",".join(f"{a}={b}" for a, b in TRANSPLANT_NETS.items()),
+                            "--box", TRANSPLANT_BOX, "--exclude", TRANSPLANT_EXCLUDE], capture_output=True, text=True)
+        if r.returncode:
+            sys.exit(r.stderr)
+        r = subprocess.run([sys.executable, __file__, "_zone-dump", str(copy)], capture_output=True, text=True)
+        if r.returncode:
+            sys.exit(r.stderr)
+        zones = json.loads(r.stdout.strip().splitlines()[-1])
+    b = pcbnew.LoadBoard(str(PCB))
+    for z in [z for z in b.Zones() if z.GetZoneName().startswith(REG_TAG)]:
+        b.Remove(z)
+    for d in zones:
+        z = pcbnew.ZONE(b)
+        z.SetZoneName(d["name"])
+        z.SetLayer(d["layer"])
+        z.SetNet(b.FindNet(d["net"]))
+        z.SetAssignedPriority(d["priority"])
+        z.SetPadConnection(d["connect"])
+        z.SetLocalClearance(d["clearance"])
+        z.SetMinThickness(d["min"])
+        z.SetThermalReliefGap(d["gap"])
+        z.SetThermalReliefSpokeWidth(d["spoke"])
+        poly = pcbnew.SHAPE_POLY_SET()
+        for ring in d["outline"]:
+            poly.NewOutline()
+            for x, y in ring:
+                poly.Append(x, y)
+        poly.thisown = False
+        z.SetOutline(poly)
+        b.Add(z)
+    pcbnew.SaveBoard(str(PCB), b)
+    print(f"regzones: {len(zones)} reference pours round U1")
+
+
 # ---------------------------------------------------------------- planes (phase 7)
 
 PLANE_TAG = "plane"
@@ -468,6 +542,10 @@ def stage_zones(pours: bool = True):
     # Before routing there is no VREG_LX copper yet: the strip between the two
     # pads (their hull) is where it will run, so no via lands there that the
     # cut-out redrawn round the routed copper would then cover.
+    # and the reference VREG_LX pour (stage_regzones), whose outline is where LX runs
+    for z in zones:
+        if z.GetZoneName().startswith(REG_TAG) and z.GetNetname().endswith("VREG_LX"):
+            cut.BooleanAdd(z.Outline())
     cut.Simplify()
     hull = pcbnew.SHAPE_POLY_SET()
     hull.AddOutline(_hull(cut))
@@ -477,6 +555,15 @@ def stage_zones(pours: bool = True):
             t.TransformShapeToPolygon(cut, pcbnew.F_Cu, 0, pcbnew.FromMM(0.005), pcbnew.ERROR_INSIDE)
     cut.Simplify()
     cut.Inflate(pcbnew.FromMM(0.3), pcbnew.CORNER_STRATEGY_ROUND_ALL_CORNERS, pcbnew.FromMM(0.01))
+    # The outer GND pour keeps 0.3 mm off the regulator corner's pours (not the
+    # ring and band under U1), so PGND joins GND through its own vias only.
+    corner = pcbnew.SHAPE_POLY_SET(reg)
+    for z in zones:
+        if z.GetZoneName().startswith(REG_TAG) and z.GetAssignedPriority() >= 4:
+            grown = pcbnew.SHAPE_POLY_SET(z.Outline())
+            grown.Inflate(pcbnew.FromMM(0.3), pcbnew.CORNER_STRATEGY_ROUND_ALL_CORNERS, pcbnew.FromMM(0.01))
+            corner.BooleanAdd(grown)
+    corner.Simplify()
     for z in zones:
         if z.GetZoneName().startswith((PLANE_TAG, "soft-novia")):
             b.Remove(z)
@@ -526,12 +613,12 @@ def stage_zones(pours: bool = True):
     # drops 3V3 vias into it (a pour added after routing left 3V3 islands).
     rect("3V3 L3", pcbnew.In2_Cu, "+3V3", *full)
     if pours:
-        rect("GND L1", pcbnew.F_Cu, "GND", *full, minus=reg)
+        rect("GND L1", pcbnew.F_Cu, "GND", *full, minus=corner)
         # 3V3 on L1 around U1, over the ground pour: the vendor joins IOVDD, its
         # band and the decouplers to 3V3 with a top pour like this; without it they
         # were one island the router and stitcher could not reach (phase 7).
         ux, uy = U1_AT
-        keep_out = pcbnew.SHAPE_POLY_SET(reg)
+        keep_out = pcbnew.SHAPE_POLY_SET(corner)
         keep_out.BooleanAdd(box(X0 + ux - 3.0, Y0 + uy - 3.0, X0 + ux + 3.0, Y0 + uy + 3.0))   # the pad ring
         rect("3V3 L1 around U1", pcbnew.F_Cu, "+3V3", X0 + ux - 7.2, Y0 + uy - 5.2,
              X0 + ux + 7.2, Y0 + uy + 5.2, priority=1, minus=keep_out)
@@ -584,11 +671,12 @@ def stage_zones(pours: bool = True):
         z.SetOutline(poly)
         b.Add(z)
     # U1's pin-1 dot, 0.45 mm out from pad 1 on the diagonal, where the silk
+    # (0.8 mm square: two 3V3 vias 0.55 mm from the spot still crowded it out)
     # stage put it on the 2026-10-24 route: no vias there, or the router's
     # 3V3 via for IOVDD lands beside pad 1 and leaves the dot no room.
     pin1 = next(x for x in fps["U1"].Pads() if x.GetNumber() == "1").GetPosition()
     dx, dy = pcbnew.ToMM(pin1.x) - X0, pcbnew.ToMM(pin1.y) - Y0
-    dot = rect("silk U1 pin 1", pcbnew.F_Cu, None, X0 + dx - 0.65, Y0 + dy - 0.65, X0 + dx - 0.25, Y0 + dy - 0.25,
+    dot = rect("silk U1 pin 1", pcbnew.F_Cu, None, X0 + dx - 0.95, Y0 + dy - 0.95, X0 + dx - 0.15, Y0 + dy - 0.25,
                keepout=True)
     dot.SetDoNotAllowTracks(False)          # tracks are fine under silk; pads and vias are not
     dot.SetDoNotAllowCopperPour(False)
@@ -667,6 +755,11 @@ def stage_zones(pours: bool = True):
     ux, uy = U1_AT
     area(f"{PLANE_TAG} regulator corner", pcbnew.SHAPE_POLY_SET(reg))
     area(f"{PLANE_TAG} U1 ring", box(X0 + ux - 3.0, Y0 + uy - 3.0, X0 + ux + 3.0, Y0 + uy + 3.0))
+    # The crystal with 0.5 mm round it, where only its own nets may run (review-layout M2)
+    crystal = pcbnew.SHAPE_POLY_SET()
+    crystal.Append(fps["Y1"].GetCourtyard(pcbnew.F_CrtYd))
+    crystal.Inflate(pcbnew.FromMM(0.5), pcbnew.CORNER_STRATEGY_ROUND_ALL_CORNERS, pcbnew.FromMM(0.01))
+    area(f"{PLANE_TAG} crystal", crystal)
     pcbnew.SaveBoard(str(PCB), b)
 
 
@@ -729,6 +822,7 @@ def stage_route():
     # be routed through: the next finish replaces it and cuts the route.
     run([sys.executable, str(SKILL / "stitch.py"), str(HW), "--net", "VBUS", "--tag", "twin VBUS"])
     run([sys.executable, __file__, "unroute"])    # the old route would block pad-via spots
+    run([sys.executable, __file__, "regzones"])
     run([sys.executable, __file__, "zones-for-routing"])
     run([sys.executable, __file__, "fill"])       # the router joins plane nets through the fill
     # A 35 um grid: the default 50 um left the QFN's 0.4 mm pitch escapes short of room.
@@ -900,8 +994,10 @@ def silk_fixed(b):
                         ("VBUS out 50mA", 9.95, 17.25, 90), ("3.3V logic only", 7.0, 12.5, 90),
                         ("no VBUS in", W / 2, 3.25, 0), ("with USB in", W / 2, 4.65, 0)):
         out.append(make(s_, x, y, angle=a))
-    # Top: the USB-C input and the GPIO25 LED
-    out += [make("5V", 4.2, 3.75, top=True), make("25", 17.2, 18.15, top=True)]
+    # Top: the GPIO25 LED. No "5V" by the USB-C: the only spot beside it reads as
+    # a label for J2 pin 2 (GP1), and inside J1's outline it is under the body
+    # (review-layout 2026-10-31 M5); the bottom's VBUS label marks the 5 V pin.
+    out += [make("25", 17.2, 18.15, top=True)]
     # The buttons and SWD in the strip above J4: BOOT as far left and SWD as far
     # right as they go, so they don't read as one phrase (review-layout #14);
     # SWD can't sit over J4's middle (U4's courtyard ends 0.2 mm above J4's pads)
@@ -971,9 +1067,11 @@ def stage_silk():
                     or not edge.Contains(bb.GetOrigin()) or not edge.Contains(bb.GetEnd()) \
                     or any(bb.Intersects(c) for c in copper[side]) \
                     or any(bb.Intersects(c) for c in others) \
-                    or any(bb.GetInflated(pcbnew.FromMM(0.15)).Intersects(t) for t in theirs):
+                    or any(bb.GetInflated(pcbnew.FromMM(0.15)).Intersects(t) for t in theirs) \
+                    or any(item.HitTest(v, rv) for v, rv in vias):
                 # header outlines go entirely (the pin labels do their job); other
-                # silk goes where it meets pads, the edge or a neighbour's body
+                # silk goes where it meets pads, the edge, a neighbour's body or a
+                # router via (review-layout 2026-10-31 m9; stitch vias keep off it)
                 trimmed.append((fp, item))
     # 2. Designators off the silk (policy none); values off.
     for fp in fps.values():
@@ -1155,6 +1253,8 @@ def stage_silk():
             text(tx.GetText(), x, y, slide=[(sign * dx, dy) for dx, dy in wide], width=0.6,
                  **dict(args, quiet=False))
     label("1V1", "TP3", side=True)             # after the fixed text, which cannot move far
+    # J1's label, beside the receptacle rather than by a header pin (review-layout M5)
+    label("5V IN", "J1")
     # The rest goes at the free spot nearest where it would like to be (a 2D
     # search, vertical first). Only the Pico warning is left to search: it was
     # added at the release review, after the reserved spots were chosen.
@@ -1200,16 +1300,19 @@ def stage_silk():
                           *[(f"D{i}", "1", "pin 1") for i in range(3, 7)]):   # the pixels' chamfer line
         dot(ref, pad, why)
     pcbnew.SaveBoard(str(PCB), b)
-    print(f"silk: trimmed {len(trimmed)} footprint silk items that met pads or the edge")
+    print(f"silk: trimmed {len(trimmed)} footprint silk items that met pads, vias or the edge")
 
 
 STAGES = {"sync": [stage_sync], "refresh": [stage_refresh], "outline": [stage_outline], "place": [stage_place],
-          "zones": [stage_zones], "zones-for-routing": [lambda: stage_zones(pours=False)],
+          "zones": [stage_zones], "regzones": [stage_regzones], "zones-for-routing": [lambda: stage_zones(pours=False)],
           "route": [stage_route], "stubs": [lambda: _with_board(band_stubs)],
           "critical": [lambda: _with_board(critical_routes)],
           "pours": [stage_zones], "padvias": [stage_padvias], "unroute": [stage_unroute], "clean": [stage_clean], "fill": [fill], "finish": [stage_finish], "silk": [stage_silk]}
 
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "_zone-dump":
+        _zone_dump(sys.argv[2])
+        sys.exit()
     if len(sys.argv) != 2 or sys.argv[1] not in STAGES:
         sys.exit(__doc__)
     for fn in STAGES[sys.argv[1]]:

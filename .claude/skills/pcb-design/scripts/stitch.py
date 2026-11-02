@@ -347,6 +347,13 @@ def main() -> int:
             ps = pcbnew.SHAPE_POLY_SET()
             d.TransformTextToPolySet(ps, 0, FromMM(0.005), pcbnew.ERROR_INSIDE)
             silk_text.append(ps)
+    # footprint silk lines too (outlines, pin-1 marks): silk_check fails a via under them
+    for fp in b.GetFootprints():
+        for item in fp.GraphicalItems():
+            if item.GetClass() != "PCB_TEXT" and item.GetLayer() in (pcbnew.F_SilkS, pcbnew.B_SilkS):
+                ps = pcbnew.SHAPE_POLY_SET()
+                item.TransformShapeToPolygon(ps, item.GetLayer(), 0, FromMM(0.005), pcbnew.ERROR_INSIDE)
+                silk_text.append(ps)
 
     def under_silk(pos, dia):
         return any(ps.Collide(pos, dia // 2 + FromMM(0.1)) for ps in silk_text)

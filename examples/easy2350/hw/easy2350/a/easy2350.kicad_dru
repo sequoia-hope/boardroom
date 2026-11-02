@@ -76,3 +76,17 @@
 (rule "XOUT_R length"
   (condition "A.NetName == '/XOUT_R'")
   (constraint length (max 5mm)))
+
+# No via hole in or at an SMD pad (review-layout 2026-10-31 M1): an open hole in
+# a reflow pad wicks paste, and on a 0.4 mm QFN pad the via is wider than the
+# pad. The exposed pads of U1 and U3 take their thermal vias.
+(rule "no via hole in an SMD pad"
+  (condition "A.Type == 'Via' && B.Type == 'Pad' && B.Pad_Type == 'SMD' && !(B.memberOfFootprint('U1') && B.Pad_Number == '61') && !(B.memberOfFootprint('U3') && B.Pad_Number == '9')")
+  (constraint physical_hole_clearance (min 0.1mm)))
+
+# The crystal (review-layout M2: PIX12 ran between Y1's pads): under Y1 and
+# 0.5 mm round it, only its own nets. The area is board.py's rule area round
+# Y1's courtyard.
+(rule "crystal: its own nets only"
+  (condition "A.intersectsArea('plane crystal') && A.NetName != '/XIN' && A.NetName != '/XOUT_R' && A.NetName != 'GND'")
+  (constraint disallow track via))

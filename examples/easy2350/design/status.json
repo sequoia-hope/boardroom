@@ -1,13 +1,13 @@
 {
   "board": "easy2350",
   "phase": "7 routing",
-  "doing": "Routed completely with ultraroute 770ef73 from a bare board (seed 2, 125 vias): DRC 0 errors, 0 unconnected, length and no-via limits from nets.csv now in the .kicad_dru. Regulator corner and U1 pad ring kept to their own nets by dru rules. Next: independent layout/SI/silk review, then gates 7-10 rewritten and the release review.",
+  "doing": "Fixing the independent layout review (2026-10-31): RP2350 reference pours back as zones (your choice), crystal kept to its own nets, length rules routed to (ultraroute 0b9016f), footprint silk trimmed at vias, J1 labelled \"5V IN\". Routes complete on every seed; 24 vias drilled in SMD pads remain, now a DRC rule; asked of ultraroute. Then re-route, re-review, gates 7-10.",
   "needs_user": [],
   "checks": {
-    "DRC": "0 errors, 0 unconnected; 53 lib_footprint_mismatch warnings (board-local footprint copies)",
+    "DRC": "0 unconnected; 24 errors: vias drilled in SMD pads (new rule, router support requested), 1 via in the pin-1 dot reservation (next route)",
     "schematic parity": "0 differences (sync_check with BOM and CPL: PASS, 58/58/54/54)",
     "nets_check --rules --routed": "PASS, 0 errors",
-    "silk_check": "PASS, 0 errors",
+    "silk_check": "PASS, 0 errors (now also footprint silk over vias)",
     "locks": "16 footprints locked, no locked copper"
   },
   "gates_passed": [
@@ -72,7 +72,7 @@
   "updated": "2026-10-31",
   "gates": {
     "7": {
-      "stale_because": "re-routed 2026-10-31 with ultraroute 770ef73 from a bare board: DRC 0/0 and every check passes; awaiting the independent layout review"
+      "stale_because": "review-layout 2026-10-31 found vias in pads, PIX12 through the crystal and router-laid regulator copper; fixes in progress"
     },
     "8": {
       "stale_because": "re-routed 2026-10-31 with ultraroute 770ef73; the copper simulations ran on the old route and are to be re-run"
