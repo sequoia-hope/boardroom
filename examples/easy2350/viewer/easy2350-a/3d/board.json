@@ -1,9 +1,9 @@
 {
  "board": "easy2350.kicad_pcb",
- "generated": "2026-10-31",
+ "generated": "2026-11-01",
  "glb": "board.glb",
- "bytes": 2823108,
- "kicad_bytes": 14443564,
+ "bytes": 2689304,
+ "kicad_bytes": 13087720,
  "parts": 58,
  "modelled": 51,
  "no_model": [
@@ -76,6 +76,6 @@
   "legacy": 3,
   "found": 0
  },
- "triangles": 244044,
+ "triangles": 230782,
  "primitives": 139
 }
