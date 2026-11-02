@@ -105,6 +105,8 @@ def main() -> int:
     ap.add_argument("--return-reach", type=float, default=1.5, help="mm, signal via to return via (centres)")
     ap.add_argument("--fast-reach", type=float, default=1.0, help="mm, the same for --fast-class nets")
     ap.add_argument("--fast-class", action="append", default=[], help="net class whose vias get --fast-reach")
+    ap.add_argument("--at", action="append", default=[], metavar="X,Y",
+                    help="a via of the (one) --net at this spot, KiCad mm, or within 0.25 mm of it")
     ap.add_argument("--tag", default="stitch", help="group name; a re-run replaces this group only")
     ap.add_argument("--lock", action="store_true", help="lock the vias (pre-route: the autorouter keeps them)")
     args = ap.parse_args()
@@ -177,8 +179,10 @@ def main() -> int:
     b.GetBoardPolygonOutlines(outline)
     edge_gap = ds.m_CopperEdgeClearance
 
-    def fits(pos, net, dia, drill, stub=None):
-        """True if a via (and its stub segment) clears every other net on every layer."""
+    def fits(pos, net, dia, drill, stub=None, zones_block=True):
+        """True if a via (and its stub segment) clears every other net on every layer.
+        zones_block=False skips other nets' fixed zones (for --at: spots taken from a
+        reference layout, whose zones overlap by priority as the reference's do)."""
         r = dia // 2
         if not outline.Contains(pos):
             return False
@@ -222,7 +226,7 @@ def main() -> int:
                     return False
         # other nets' zones on outer layers that are not ordinary pours (e.g. a
         # copied regulator layout) are obstacles, not copper to flow around
-        for z in zones:
+        for z in zones if zones_block else []:
             if z.GetIsRuleArea() or z.GetNetCode() == net.GetNetCode():
                 continue
             if z.GetZoneName().startswith("plane"):
@@ -364,6 +368,32 @@ def main() -> int:
 
     def under_silk(pos, dia):
         return any(ps.Collide(pos, dia // 2 + FromMM(0.1)) for ps in silk_text)
+
+    if args.at:
+        # Given spots (a reference layout's vias in its zones, board.py regzones):
+        # skip a spot that already has a via of the net, else the nearest that fits.
+        net = nets[args.net[0]]
+        dia, drill = via_size(net)
+        here = [t for t in tracks if t.Type() == pcbnew.PCB_VIA_T and t.GetNetCode() == net.GetNetCode()]
+        for spot in args.at:
+            x, y = (FromMM(float(v)) for v in spot.split(","))
+            # "there already": a via of the net on the spot (the router lays the
+            # reference's spoke vias within 0.05 mm); one further off doesn't count
+            if any(math.dist((v.GetPosition().x, v.GetPosition().y), (x, y)) < FromMM(0.15)
+                   for v in here + [a for a in added if a.Type() == pcbnew.PCB_VIA_T]):
+                report.append(f"{net.GetNetname()} at ({mm(x):.2f}, {mm(y):.2f}): a via is there already")
+                continue
+            tries = [(0, 0)] + [(r * math.cos(k * math.pi / 4), r * math.sin(k * math.pi / 4))
+                                for r in (FromMM(0.1), FromMM(0.2), FromMM(0.25)) for k in range(8)]
+            for dx, dy in tries:
+                pos = pcbnew.VECTOR2I(int(x + dx), int(y + dy))
+                if fits(pos, net, dia, drill, zones_block=False) and not under_silk(pos, dia):
+                    add_via(pos, net, dia, drill)
+                    break
+            else:
+                report.append(f"{net.GetNetname()} at ({mm(x):.2f}, {mm(y):.2f}): no room")
+        report.append(f"{net.GetNetname()}: {len(added)} vias at given spots")
+        pcbnew.SaveBoard(str(pcb_path), b)
 
     if args.twin:
         for n, net in nets.items():
@@ -605,7 +635,7 @@ def main() -> int:
                 break
         pcbnew.SaveBoard(str(pcb_path), b)
 
-    if not (args.pads or args.twin or args.grid or args.fix or args.ret or args.fence):
+    if not (args.pads or args.twin or args.grid or args.fix or args.ret or args.fence or args.at):
         pcbnew.SaveBoard(str(pcb_path), b)          # no mode: just remove the --tag group
     print(f"stitch: {pcb_path.name}")
     for line in report:

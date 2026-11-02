@@ -10,8 +10,8 @@ USB_DP_C,DIFF_HS,3.6,,,90 diff,20,"USB FS D+, connector to ESD array; pair with 
 USB_DM_C,DIFF_HS,3.6,,,90 diff,20,"USB FS D-, connector to ESD array"
 USB_DP,DIFF_HS,3.6,,,90 diff,20,"USB FS D+, ESD array to 27 R"
 USB_DM,DIFF_HS,3.6,,,90 diff,20,"USB FS D-, ESD array to 27 R"
-USB_DP_MCU,DIFF_HS,3.6,,,90 diff,5,"27 R to RP2350 pin 52; resistor at the chip (hardware design guide); 5 mm: the vendor copy measures 4.10 mm (si-review.md §3)"
-USB_DM_MCU,DIFF_HS,3.6,,,90 diff,5,"27 R to RP2350 pin 51; 5 mm as D+"
+USB_DP_MCU,USB_MCU,3.6,,,90 diff,5,"27 R to RP2350 pin 52; resistor at the chip (hardware design guide); 5 mm: the vendor copy measures 4.10 mm (si-review.md §3); USB_MCU: 0.15 mm as the reference routes it, between its 1V1 FB and 3V3 strips (2026-11-02)"
+USB_DM_MCU,USB_MCU,3.6,,,90 diff,5,"27 R to RP2350 pin 51; 5 mm as D+"
 QSPI_SCLK,SE_HS,3.6,,,,25,"Flash clock, up to 133 MHz (flash.md); short, over solid ground"
 QSPI_SD0,SE_HS,3.6,,,,25,Flash data
 QSPI_SD1,SE_HS,3.6,,,,25,Flash data

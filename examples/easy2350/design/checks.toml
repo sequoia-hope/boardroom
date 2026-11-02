@@ -52,3 +52,8 @@ identity = ["name", "rev", "date", "repo", "license"]
 decoupler_mm = 4.5           # centre to centre; the vendor RP2350 layout we copy puts C12 (our C11) 4.1 mm from pin 53
 crystal_mm = 8.0             # vendor layout: Y1 12.4 mm below U1's centre; ours is 10 mm, XIN pad 7.4 mm from pin 21
 keep_apart = [["U3", "Y1", 5.0], ["U3", "D3", 5.0], ["U3", "J1", 0.5]]   # ldo-3v3.md: LDO heat away from crystal and pixels; J1 see decisions.md
+
+[nets]
+# USB D+/D- from the 27 R to the RP2350: DIFF_HS at the reference's 0.15 mm, so they fit
+# between its protected 1V1 and 3V3 strips at pins 50-53 (decisions.md 2026-11-02)
+extra_classes = ["USB_MCU"]

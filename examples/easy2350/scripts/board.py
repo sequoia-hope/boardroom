@@ -457,7 +457,12 @@ def _zone_dump(path):
                         "min": pcbnew.FromMM(0.1), "gap": pcbnew.FromMM(0.2), "spoke": pcbnew.FromMM(0.3),
                         "islands": False,
                         "outline": [[[o.CPoint(j).x, o.CPoint(j).y] for j in range(o.PointCount())]]})
-    print(json.dumps(out))
+    # and the vendor's vias on those nets, for the finish stage to put back where
+    # they fit (review-layout 2026-11-02 A2: PGND's two vias; B2: COUT's second)
+    vias = [{"net": t.GetNetname(), "x": pcbnew.ToMM(t.GetPosition().x), "y": pcbnew.ToMM(t.GetPosition().y)}
+            for t in b.GetTracks() if t.Type() == pcbnew.PCB_VIA_T and t.GetParentGroup() is not None
+            and t.GetParentGroup().GetName() == REG_TAG and t.GetNetname() in REG_TRACK_NETS]
+    print(json.dumps({"zones": out, "vias": vias}))
 
 
 def stage_regzones():
@@ -483,7 +488,10 @@ def stage_regzones():
         r = subprocess.run([sys.executable, __file__, "_zone-dump", str(copy)], capture_output=True, text=True)
         if r.returncode:
             sys.exit(r.stderr)
-        zones = json.loads(r.stdout.strip().splitlines()[-1])
+        dump = json.loads(r.stdout.strip().splitlines()[-1])
+    zones = dump["zones"]
+    (HW / "route").mkdir(exist_ok=True)
+    REF_VIAS.write_text(json.dumps(dump["vias"], indent=1) + "\n")
     b = pcbnew.LoadBoard(str(PCB))
     for z in [z for z in b.Zones() if z.GetZoneName().startswith(REG_TAG)]:
         b.Remove(z)
@@ -509,7 +517,87 @@ def stage_regzones():
         z.SetOutline(poly)
         b.Add(z)
     pcbnew.SaveBoard(str(PCB), b)
+    _protect_zones(zones)
     print(f"regzones: {len(zones)} reference pours round U1")
+
+
+DRU = HW / "easy2350.kicad_dru"
+REF_VIAS = HW / "route" / "refvias.json"      # the reference's vias, written by regzones
+PROTECT_BEGIN = "# BEGIN reference zones (board.py regzones writes this block)"
+PROTECT_END = "# END reference zones"
+
+
+def stage_refvias():
+    """The reference's own vias in its zones (regzones listed them), put in before
+    routing, unlocked: PGND's pair to the plane, COUT's second, the spokes' ends
+    (review-layout 2026-11-02 A2, B2). Each must sit in the fill of a reference
+    zone of its net: ultraroute (a3ba419) then counts it as part of that protected
+    copper, keeps it through --strip and routes round it."""
+    import json
+    import subprocess
+    ref = json.loads(REF_VIAS.read_text()) if REF_VIAS.exists() else []
+    # COUT's second via (reference (0.5, -5.2) from U1) sits in the only channel
+    # USB_DM_MCU has from R4 to pin 51 (our USB resistors are above U1, the
+    # reference's aren't): with it, every seed left a USB_MCU leg open
+    # (2026-11-02). One COUT via stays; review 3 called B2 small enough to log.
+    ux, uy = U1_AT
+    skip = [("+1V1", X0 + ux + 0.5, Y0 + uy - 5.2)]
+    ref = [v for v in ref if not any(v["net"] == n and abs(v["x"] - x) < 0.15 and abs(v["y"] - y) < 0.15
+                                     for n, x, y in skip)]
+    b = pcbnew.LoadBoard(str(PCB))
+    zones = [z for z in b.Zones() if z.GetZoneName().startswith(REG_TAG)]
+    pcbnew.ZONE_FILLER(b).Fill(zones)
+    inside = [v for v in ref if any(
+        z.GetNetname() == v["net"] and z.GetFilledPolysList(l).Contains(pcbnew.VECTOR2I(pcbnew.FromMM(v["x"]), pcbnew.FromMM(v["y"])))
+        for z in zones for l in z.GetLayerSet().Seq())]
+    for v in ref:
+        if v not in inside:
+            print(f"refvias: {v['net']} at ({v['x']:.2f}, {v['y']:.2f}) is outside its zones' fill; left out")
+    del b
+    for net in sorted({v["net"] for v in inside}):
+        r = subprocess.run([sys.executable, str(SKILL / "stitch.py"), str(HW), "--net", net, "--tag", f"refvias {net}",
+                            *[a for v in inside if v["net"] == net for a in ("--at", f"{v['x']:.4f},{v['y']:.4f}")]],
+                           capture_output=True, text=True)
+        print("\n".join(l for l in r.stdout.splitlines() if "leak" not in l and "Debug" not in l))
+        if r.returncode:
+            sys.exit(r.stderr[-2000:])
+
+
+def _protect_zones(zones):
+    """A rule per reference zone in the .kicad_dru: no other net's track or via
+    inside it, so KiCad's refill can't cut it and the router counts it as copper
+    that joins its pads and vias (review-layout 2026-11-02 A1: a router GND via
+    split the 1V1 ring). A zone allows the nets of the reference zones over it,
+    those of higher priority on its layer (the 1V1 ring and spokes sit over the
+    3V3 band). The block goes at the end of the file: later rules win."""
+    def poly(d):
+        p = pcbnew.SHAPE_POLY_SET()
+        for ring in d["outline"]:
+            p.NewOutline()
+            for x, y in ring:
+                p.Append(x, y)
+        return p
+    rules = []
+    for name in sorted({d["name"] for d in zones}):
+        parts = [d for d in zones if d["name"] == name]
+        allowed = {parts[0]["net"]}
+        for d in parts:
+            for o in zones:
+                if o["layer"] != d["layer"] or o["priority"] <= d["priority"] or o["net"] == d["net"]:
+                    continue
+                cut = poly(d)
+                cut.BooleanIntersection(poly(o))
+                if cut.OutlineCount() and abs(cut.Area()) > 0:
+                    allowed.add(o["net"])
+        others = " && ".join(f"A.NetName != '{n}'" for n in sorted(allowed))
+        rules.append(f'(rule "reference zone: {name}"\n'
+                     f'  (condition "A.intersectsArea(\'{name}\') && {others}")\n'
+                     f'  (constraint disallow track via))')
+    text = DRU.read_text()
+    if PROTECT_BEGIN in text:
+        text = text[:text.index(PROTECT_BEGIN)].rstrip() + "\n"
+    text += "\n" + PROTECT_BEGIN + "\n" + "\n".join(rules) + "\n" + PROTECT_END + "\n"
+    DRU.write_text(text)
 
 
 # ---------------------------------------------------------------- planes (phase 7)
@@ -566,14 +654,19 @@ def stage_zones(pours: bool = True):
     # Before routing there is no VREG_LX copper yet: the strip between the two
     # pads (their hull) is where it will run, so no via lands there that the
     # cut-out redrawn round the routed copper would then cover.
-    # and the reference VREG_LX pour (stage_regzones), whose outline is where LX runs
+    # and the reference VREG_LX pour (stage_regzones), whose outline is where LX runs.
+    # With that pour, no hull: it took in PGND's two via spots, which the reference
+    # keeps over L2 copper (review-layout 2026-11-02 A2).
+    lx_zone = False
     for z in zones:
         if z.GetZoneName().startswith(REG_TAG) and z.GetNetname().endswith("VREG_LX"):
             cut.BooleanAdd(z.Outline())
+            lx_zone = True
     cut.Simplify()
-    hull = pcbnew.SHAPE_POLY_SET()
-    hull.AddOutline(_hull(cut))
-    cut.BooleanAdd(hull)
+    if not lx_zone:
+        hull = pcbnew.SHAPE_POLY_SET()
+        hull.AddOutline(_hull(cut))
+        cut.BooleanAdd(hull)
     for t in b.GetTracks():
         if t.GetNetname().endswith("VREG_LX") and t.GetLayer() == pcbnew.F_Cu:
             t.TransformShapeToPolygon(cut, pcbnew.F_Cu, 0, pcbnew.FromMM(0.005), pcbnew.ERROR_INSIDE)
@@ -854,6 +947,7 @@ def stage_route():
     run([sys.executable, __file__, "unroute"])    # the old route would block pad-via spots
     run([sys.executable, __file__, "regzones"])
     run([sys.executable, __file__, "zones-for-routing"])
+    run([sys.executable, __file__, "refvias"])
     run([sys.executable, __file__, "fill"])       # the router joins plane nets through the fill
     # A 35 um grid: the default 50 um left the QFN's 0.4 mm pitch escapes short of room.
     # Every GND/3V3 pad gets a via of its own within 1 mm, edge to edge, placed by the
@@ -1341,7 +1435,7 @@ def stage_silk():
 
 
 STAGES = {"sync": [stage_sync], "refresh": [stage_refresh], "outline": [stage_outline], "place": [stage_place],
-          "zones": [stage_zones], "regzones": [stage_regzones], "zones-for-routing": [lambda: stage_zones(pours=False)],
+          "zones": [stage_zones], "regzones": [stage_regzones], "refvias": [stage_refvias], "zones-for-routing": [lambda: stage_zones(pours=False)],
           "route": [stage_route], "stubs": [lambda: _with_board(band_stubs)],
           "critical": [lambda: _with_board(critical_routes)],
           "pours": [stage_zones], "padvias": [stage_padvias], "unroute": [stage_unroute], "clean": [stage_clean], "fill": [fill], "finish": [stage_finish], "silk": [stage_silk]}

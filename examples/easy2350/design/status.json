@@ -1,7 +1,7 @@
 {
   "board": "easy2350",
   "phase": "7 routing",
-  "doing": "Re-routed from a bare board on ultraroute d791d9b (seed 4 of up to 8): nothing locked; every GND/3V3 pad that has room gets a via of its own within 1 mm (52 of 74); 1V1 spokes joined at both ends; LDO output on L1. DRC 0 errors, 0 unconnected, parity 0; pad_joints, silk, nets, placement and sync pass. Open for review: C20/C17/C4 grounds still 1.1-2.5 mm from a via (B5), three VBUS layer changes with no room for a second via. Next: final independent layout review, then gates 7-10.",
+  "doing": "Re-routed from a bare board on ultraroute fe903ff (seed 0): nothing locked; reference zones protected by .kicad_dru rules (the 1V1 ring fills as one piece, PGND has 2 GND vias inside its zone); 16 vendor reference vias placed where they fit (COUT's second is left out because it blocks USB_DM_MCU); USB at the chip on its own 0.15 mm class. DRC 0 errors, 0 unconnected, parity 0; no duplicate segments; pad_joints, silk, nets, placement and sync pass. Review 3 (2026-11-02) found A1/A2 on the previous route, and this route resolves both. Next: re-review the regulator corner, then write gates 7-9. Fab outputs are not released.",
   "needs_user": [],
   "checks": {
     "DRC": "0 errors, 0 unconnected, parity 0; warnings: 56 lib_footprint_mismatch only (board-local footprints)",
@@ -9,8 +9,10 @@
     "nets_check --rules --routed": "PASS, 0 errors",
     "silk_check": "PASS, 0 errors (now also footprint silk over vias)",
     "locks": "16 footprints locked, no locked copper",
-    "pad_joints": "PASS: 205 SMD pads, 0 thin joints (ultraroute d791d9b)",
-    "plane_pad_vias": "52 of 74 GND/3V3 SMD pads have a via of their own within 1.0 mm (ultraroute-lab plane_pad_vias.py)"
+    "pad_joints": "PASS: 205 SMD pads, 0 thin joints (ultraroute fe903ff)",
+    "plane_pad_vias": "47 of 74 GND/3V3 SMD pads have a via of their own within 1.0 mm (ultraroute-lab plane_pad_vias.py)",
+    "reference zones": "1V1 ring 1 piece; PGND 2 GND vias inside; LX 1 piece; 0 duplicate segments",
+    "USB lengths": "DP_C 7.69 / DM_C 8.01 mm; DP_MCU 3.91 / DM_MCU 3.79 mm"
   },
   "gates_passed": [
     0,

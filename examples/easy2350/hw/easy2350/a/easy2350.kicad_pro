@@ -360,6 +360,24 @@
         "via_diameter": 0.6,
         "via_drill": 0.3,
         "wire_width": 6
+      },
+      {
+        "bus_width": 12,
+        "clearance": 0.15,
+        "diff_pair_gap": 0.25,
+        "diff_pair_via_gap": 0.25,
+        "diff_pair_width": 0.15,
+        "line_style": 0,
+        "microvia_diameter": 0.3,
+        "microvia_drill": 0.1,
+        "name": "USB_MCU",
+        "pcb_color": "rgba(0, 0, 0, 0.000)",
+        "priority": -2147483648,
+        "schematic_color": "rgba(0, 0, 0, 0.000)",
+        "track_width": 0.15,
+        "via_diameter": 0.5,
+        "via_drill": 0.2,
+        "wire_width": 6
       }
     ],
     "meta": {
@@ -398,7 +416,15 @@
       },
       {
         "netclass": "DIFF_HS",
-        "pattern": "/USB_D*"
+        "pattern": "/USB_D?"
+      },
+      {
+        "netclass": "DIFF_HS",
+        "pattern": "/USB_D?_C"
+      },
+      {
+        "netclass": "USB_MCU",
+        "pattern": "/USB_D?_MCU"
       },
       {
         "netclass": "SE_HS",

@@ -97,3 +97,75 @@
 (rule "VREG_AVDD no vias"
   (condition "A.NetName == '/VREG_AVDD'")
   (constraint via_count (max 0)))
+
+# BEGIN reference zones (board.py regzones writes this block)
+(rule "reference zone: transplant 0 +3V3"
+  (condition "A.intersectsArea('transplant 0 +3V3') && A.NetName != '+1V1' && A.NetName != '+3V3'")
+  (constraint disallow track via))
+(rule "reference zone: transplant 1 +3V3"
+  (condition "A.intersectsArea('transplant 1 +3V3') && A.NetName != '+3V3'")
+  (constraint disallow track via))
+(rule "reference zone: transplant 2 GND"
+  (condition "A.intersectsArea('transplant 2 GND') && A.NetName != 'GND'")
+  (constraint disallow track via))
+(rule "reference zone: transplant 3 +1V1"
+  (condition "A.intersectsArea('transplant 3 +1V1') && A.NetName != '+1V1'")
+  (constraint disallow track via))
+(rule "reference zone: transplant 4 /VREG_LX"
+  (condition "A.intersectsArea('transplant 4 /VREG_LX') && A.NetName != '/VREG_LX'")
+  (constraint disallow track via))
+(rule "reference zone: transplant 5 +1V1"
+  (condition "A.intersectsArea('transplant 5 +1V1') && A.NetName != '+1V1'")
+  (constraint disallow track via))
+(rule "reference zone: transplant track +1V1 0"
+  (condition "A.intersectsArea('transplant track +1V1 0') && A.NetName != '+1V1'")
+  (constraint disallow track via))
+(rule "reference zone: transplant track +1V1 1"
+  (condition "A.intersectsArea('transplant track +1V1 1') && A.NetName != '+1V1'")
+  (constraint disallow track via))
+(rule "reference zone: transplant track +1V1 2"
+  (condition "A.intersectsArea('transplant track +1V1 2') && A.NetName != '+1V1'")
+  (constraint disallow track via))
+(rule "reference zone: transplant track +1V1 3"
+  (condition "A.intersectsArea('transplant track +1V1 3') && A.NetName != '+1V1'")
+  (constraint disallow track via))
+(rule "reference zone: transplant track +3V3 0"
+  (condition "A.intersectsArea('transplant track +3V3 0') && A.NetName != '+3V3'")
+  (constraint disallow track via))
+(rule "reference zone: transplant track +3V3 1"
+  (condition "A.intersectsArea('transplant track +3V3 1') && A.NetName != '+3V3'")
+  (constraint disallow track via))
+(rule "reference zone: transplant track +3V3 2"
+  (condition "A.intersectsArea('transplant track +3V3 2') && A.NetName != '+3V3'")
+  (constraint disallow track via))
+(rule "reference zone: transplant track +3V3 3"
+  (condition "A.intersectsArea('transplant track +3V3 3') && A.NetName != '+3V3'")
+  (constraint disallow track via))
+(rule "reference zone: transplant track +3V3 4"
+  (condition "A.intersectsArea('transplant track +3V3 4') && A.NetName != '+3V3'")
+  (constraint disallow track via))
+(rule "reference zone: transplant track +3V3 5"
+  (condition "A.intersectsArea('transplant track +3V3 5') && A.NetName != '+3V3'")
+  (constraint disallow track via))
+(rule "reference zone: transplant track /VREG_AVDD 0"
+  (condition "A.intersectsArea('transplant track /VREG_AVDD 0') && A.NetName != '/VREG_AVDD'")
+  (constraint disallow track via))
+(rule "reference zone: transplant track GND 0"
+  (condition "A.intersectsArea('transplant track GND 0') && A.NetName != 'GND'")
+  (constraint disallow track via))
+(rule "reference zone: transplant track GND 1"
+  (condition "A.intersectsArea('transplant track GND 1') && A.NetName != 'GND'")
+  (constraint disallow track via))
+(rule "reference zone: transplant track GND 2"
+  (condition "A.intersectsArea('transplant track GND 2') && A.NetName != 'GND'")
+  (constraint disallow track via))
+(rule "reference zone: transplant track GND 3"
+  (condition "A.intersectsArea('transplant track GND 3') && A.NetName != 'GND'")
+  (constraint disallow track via))
+(rule "reference zone: transplant track GND 4"
+  (condition "A.intersectsArea('transplant track GND 4') && A.NetName != 'GND'")
+  (constraint disallow track via))
+(rule "reference zone: transplant track GND 5"
+  (condition "A.intersectsArea('transplant track GND 5') && A.NetName != 'GND'")
+  (constraint disallow track via))
+# END reference zones
