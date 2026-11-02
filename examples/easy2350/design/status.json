@@ -1,14 +1,15 @@
 {
   "board": "easy2350",
   "phase": "7 routing",
-  "doing": "Re-routed with ultraroute 0b0f336 and the RP2350 reference pours as zones: DRC 0 errors, 0 unconnected, parity 0; nets, silk, placement and sync checks pass. Second independent layout review running; then gates 7-10.",
+  "doing": "Second layout review (2026-11-01) fixes: the reference's power tracks now come across as zones too (DVDD/FB pins all on reference copper); via rings kept off SMD pads; VREG_AVDD kept on top. Waiting on ultraroute for two things: joining the reference zones' islands with vias (8 isolated now) and ending tracks inside pads (pad_joints.py: J1.B7, R6.1 under the fab minimum). Then re-route, review, gates 7-10.",
   "needs_user": [],
   "checks": {
-    "DRC": "0 errors, 0 unconnected, parity 0; 54 lib_footprint_mismatch warnings (board-local footprint copies)",
+    "DRC": "0 errors, 0 unconnected, parity 0; warnings: 55 lib_footprint_mismatch, 8 isolated_copper (reference zones the router has yet to join), 1 sliver",
     "schematic parity": "0 differences (sync_check with BOM and CPL: PASS, 58/58/54/54)",
     "nets_check --rules --routed": "PASS, 0 errors",
     "silk_check": "PASS, 0 errors (now also footprint silk over vias)",
-    "locks": "16 footprints locked, no locked copper"
+    "locks": "16 footprints locked, no locked copper",
+    "pad_joints": "FAIL: J1.B7 0.087 mm, R6.1 0.051 mm (track ends outside the pad; asked of ultraroute)"
   },
   "gates_passed": [
     0,
@@ -72,7 +73,7 @@
   "updated": "2026-10-31",
   "gates": {
     "7": {
-      "stale_because": "re-routed 2026-11-01 after review-layout 2026-10-31; DRC 0/0, every check passes; second review running"
+      "stale_because": "review-layout 2 (2026-11-01): 1V1/FB reference copper not joined (A1), thin pad joints (A2); router features requested"
     },
     "8": {
       "stale_because": "re-routed 2026-10-31 with ultraroute 770ef73; the copper simulations ran on the old route and are to be re-run"

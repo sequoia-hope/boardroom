@@ -417,6 +417,7 @@ def stage_place():
 # ---------------------------------------------------------------- regulator pours
 
 REG_TAG = "transplant"                      # the zone names transplant.py gives
+REG_TRACK_NETS = {"+1V1", "+3V3", "GND", "/VREG_AVDD", "/VREG_LX"}
 
 
 def _zone_dump(path):
@@ -435,6 +436,27 @@ def _zone_dump(path):
                     "gap": z.GetThermalReliefGap(), "spoke": z.GetThermalReliefSpokeWidth(),
                     "outline": [[[o.COutline(i).CPoint(j).x, o.COutline(i).CPoint(j).y]
                                  for j in range(o.COutline(i).PointCount())] for i in range(o.OutlineCount())]})
+    # The vendor's power tracks (the 1V1 spokes and DVDD feeds, the 3V3 stubs to
+    # the band, PGND, AVDD) as zones of the same outline, one per piece of copper:
+    # the reference geometry with nothing locked. Top priority, as tracks are
+    # (the pours fill round them), and kept as islands until the router's vias
+    # join them (review-layout 2026-11-01 A1).
+    merged = {}
+    for t in b.GetTracks():
+        g = t.GetParentGroup()
+        if t.Type() == pcbnew.PCB_VIA_T or g is None or g.GetName() != REG_TAG or t.GetNetname() not in REG_TRACK_NETS:
+            continue
+        ps = merged.setdefault((t.GetNetname(), t.GetLayer()), pcbnew.SHAPE_POLY_SET())
+        t.TransformShapeToPolygon(ps, t.GetLayer(), 0, pcbnew.FromMM(0.005), pcbnew.ERROR_INSIDE)
+    for (net, layer), ps in merged.items():
+        ps.Simplify()
+        for i in range(ps.OutlineCount()):
+            o = ps.COutline(i)
+            out.append({"name": f"{REG_TAG} track {net} {i}", "net": net, "layer": layer, "priority": 8,
+                        "connect": int(pcbnew.ZONE_CONNECTION_FULL), "clearance": pcbnew.FromMM(0.1),
+                        "min": pcbnew.FromMM(0.1), "gap": pcbnew.FromMM(0.2), "spoke": pcbnew.FromMM(0.3),
+                        "islands": False,
+                        "outline": [[[o.CPoint(j).x, o.CPoint(j).y] for j in range(o.PointCount())]]})
     print(json.dumps(out))
 
 
@@ -476,6 +498,8 @@ def stage_regzones():
         z.SetMinThickness(d["min"])
         z.SetThermalReliefGap(d["gap"])
         z.SetThermalReliefSpokeWidth(d["spoke"])
+        if not d.get("islands", True):
+            z.SetIslandRemovalMode(pcbnew.ISLAND_REMOVAL_MODE_NEVER)
         poly = pcbnew.SHAPE_POLY_SET()
         for ring in d["outline"]:
             poly.NewOutline()
@@ -559,7 +583,7 @@ def stage_zones(pours: bool = True):
     # ring and band under U1), so PGND joins GND through its own vias only.
     corner = pcbnew.SHAPE_POLY_SET(reg)
     for z in zones:
-        if z.GetZoneName().startswith(REG_TAG) and z.GetAssignedPriority() >= 4:
+        if z.GetZoneName().startswith(REG_TAG) and 4 <= z.GetAssignedPriority() <= 7:
             grown = pcbnew.SHAPE_POLY_SET(z.Outline())
             grown.Inflate(pcbnew.FromMM(0.3), pcbnew.CORNER_STRATEGY_ROUND_ALL_CORNERS, pcbnew.FromMM(0.01))
             corner.BooleanAdd(grown)

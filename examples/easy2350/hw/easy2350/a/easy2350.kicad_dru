@@ -79,10 +79,11 @@
 
 # No via hole in or at an SMD pad (review-layout 2026-10-31 M1): an open hole in
 # a reflow pad wicks paste, and on a 0.4 mm QFN pad the via is wider than the
-# pad. The exposed pads of U1 and U3 take their thermal vias.
+# pad. The exposed pads of U1 and U3 take their thermal vias. 0.2 mm, so the
+# 0.15 mm ring clears the pad too and the mask keeps a dam (review 2 B1).
 (rule "no via hole in an SMD pad"
-  (condition "A.Type == 'Via' && B.Type == 'Pad' && B.Pad_Type == 'SMD' && !(B.memberOfFootprint('U1') && B.Pad_Number == '61') && !(B.memberOfFootprint('U3') && B.Pad_Number == '9')")
-  (constraint physical_hole_clearance (min 0.1mm)))
+  (condition "A.Type == 'Via' && B.Type == 'Pad' && B.Pad_Type == 'SMD' && (B.existsOnLayer('F.Cu') || B.existsOnLayer('B.Cu')) && !(B.memberOfFootprint('U1') && B.Pad_Number == '61') && !(B.memberOfFootprint('U3') && B.Pad_Number == '9')")
+  (constraint physical_hole_clearance (min 0.2mm)))
 
 # The crystal (review-layout M2: PIX12 ran between Y1's pads): under Y1 and
 # 0.5 mm round it, only its own nets. The area is board.py's rule area round
@@ -90,3 +91,9 @@
 (rule "crystal: its own nets only"
   (condition "A.intersectsArea('plane crystal') && A.NetName != '/XIN' && A.NetName != '/XOUT_R' && A.NetName != 'GND'")
   (constraint disallow track via))
+
+# The regulator's analog supply stays on the top, beside the corner, as the
+# reference runs it; not under the switch node on L4 (review 2 B2).
+(rule "VREG_AVDD no vias"
+  (condition "A.NetName == '/VREG_AVDD'")
+  (constraint via_count (max 0)))

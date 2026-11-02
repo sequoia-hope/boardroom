@@ -152,6 +152,7 @@ If a run hits its time or memory budget, report that, along with the unrouted co
 - DRC: **0 errors, 0 unrouted**. Paste the report.
 - Schematic parity: 0 differences.
 - `nets_check.py --rules --routed`: every `length_limit` met, no via on a "no vias" net. A limit placement can't meet is a placement finding, or a logged decision with the physics; never a silent edit of `nets.csv`.
+- `pad_joints.py`: every SMD pad joined by at least a track's width. A track ending just outside a pad joins it only by its end-cap's lens, which can be far under the fab minimum while DRC calls it connected.
 - Every DRC warning is explained in the gate file, or fixed.
 - Current capacity check script: for each POWER/POWER_HI net, the narrowest copper neck along the path and the via count at each layer transition meet `nets.csv` derived values.
 - Plane integrity script: report splits and slots in GND plane, and any DIFF_HS/SE_HS trace that crosses one.
@@ -161,6 +162,7 @@ If a run hits its time or memory budget, report that, along with the unrouted co
 
 - [ ] DRC 0 errors, 0 unrouted (pasted)
 - [ ] Parity 0 differences
+- [ ] `pad_joints.py` passes (no pad joint under the fab minimum)
 - [ ] Current capacity check passes
 - [ ] Plane integrity check passes
 - [ ] Every warning explained
