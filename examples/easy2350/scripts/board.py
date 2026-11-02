@@ -109,14 +109,24 @@ def _with_board(fn):
 
 def stage_refresh():
     """Reload project-library footprints whose library copy changed (KiCad's
-    'Update footprints from library'), keeping position, side, fields and nets."""
+    'Update footprints from library'), keeping position, side, fields and nets.
+    A footprint counts as changed when its pads differ."""
     b = pcbnew.LoadBoard(str(PCB))
     lib = HW / "lib/easy2350.pretty"
     old = [fp for fp in list(b.GetFootprints()) if fp.GetFPID().GetLibNickname().wx_str() == "easy2350"]
+
+    def pads(fp):                                # footprint-local, so placement doesn't count
+        return sorted((p.GetNumber(), p.GetFPRelativePosition().x, p.GetFPRelativePosition().y,
+                       p.GetSizeX(), p.GetSizeY(), p.GetDrillSizeX(), p.GetAttribute()) for p in fp.Pads())
+
     saved = []
     for fp in old:
         name = fp.GetFPID().GetLibItemName().wx_str()
         new = pcbnew.FootprintLoad(str(lib), name)
+        # Pads only: the silk stage trims footprint silk on the board on purpose,
+        # and reloading an unchanged footprint would bring back what it trimmed.
+        if pads(new) == pads(fp):
+            continue
         saved.append((fp, new, fp.GetPosition(), fp.GetOrientation(), fp.IsFlipped(), fp.IsLocked(),
                       {p.GetNumber(): p.GetNet() for p in fp.Pads()},
                       {f.GetName(): (f.GetText(), f.IsVisible(), f.GetPosition(), f.GetLayer())

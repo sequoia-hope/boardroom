@@ -1094,87 +1094,7 @@ L112.684 121.052
 <path d="M112.684 121.052
 L112.673 121.04
 " />
-</g></g>
-<g style="fill:none;
-stroke:#DDE1E8; stroke-width:0.11; stroke-opacity:1;
-stroke-linecap:round; stroke-linejoin:round;">
-<g transform="rotate(-90 115.6 112.6)">
-<text x="115.6" y="112.975"
-textLength="1.68" font-size="1" lengthAdjust="spacingAndGlyphs"
-text-anchor="middle" opacity="0" stroke-opacity="0">U3</text>
-</g>
-<g class="stroked-text">
-<path d="M115.191 113.171
-L115.798 113.171
-" />
-<path d="M115.798 113.171
-L115.87 113.136
-" />
-<path d="M115.87 113.136
-L115.906 113.1
-" />
-<path d="M115.906 113.1
-L115.941 113.029
-" />
-<path d="M115.941 113.029
-L115.941 112.886
-" />
-<path d="M115.941 112.886
-L115.906 112.814
-" />
-<path d="M115.906 112.814
-L115.87 112.779
-" />
-<path d="M115.87 112.779
-L115.798 112.743
-" />
-<path d="M115.798 112.743
-L115.191 112.743
-" />
-<path d="M115.191 112.457
-L115.191 111.993
-" />
-<path d="M115.191 111.993
-L115.477 112.243
-" />
-<path d="M115.477 112.243
-L115.477 112.136
-" />
-<path d="M115.477 112.136
-L115.513 112.064
-" />
-<path d="M115.513 112.064
-L115.548 112.029
-" />
-<path d="M115.548 112.029
-L115.62 111.993
-" />
-<path d="M115.62 111.993
-L115.798 111.993
-" />
-<path d="M115.798 111.993
-L115.87 112.029
-" />
-<path d="M115.87 112.029
-L115.906 112.064
-" />
-<path d="M115.906 112.064
-L115.941 112.136
-" />
-<path d="M115.941 112.136
-L115.941 112.35
-" />
-<path d="M115.941 112.35
-L115.906 112.421
-" />
-<path d="M115.906 112.421
-L115.87 112.457
-" />
-</g></g>
-<g style="fill:none;
-stroke:#DDE1E8; stroke-width:0.04; stroke-opacity:1;
-stroke-linecap:round; stroke-linejoin:round;">
-<g transform="rotate(-90 114.7 121.45)">
+</g><g transform="rotate(-90 114.7 121.45)">
 <text x="114.7" y="121.575"
 textLength="0.796" font-size="0.333" lengthAdjust="spacingAndGlyphs"
 text-anchor="middle" opacity="0" stroke-opacity="0">C13</text>
@@ -4026,7 +3946,87 @@ L104.784 142.702
 <path d="M104.784 142.702
 L104.773 142.69
 " />
-</g><g transform="rotate(-90 108.4 119.1)">
+</g></g>
+<g style="fill:none;
+stroke:#DDE1E8; stroke-width:0.11; stroke-opacity:1;
+stroke-linecap:round; stroke-linejoin:round;">
+<g transform="rotate(-90 115.6 112.6)">
+<text x="115.6" y="112.975"
+textLength="1.68" font-size="1" lengthAdjust="spacingAndGlyphs"
+text-anchor="middle" opacity="0" stroke-opacity="0">U3</text>
+</g>
+<g class="stroked-text">
+<path d="M115.191 113.171
+L115.798 113.171
+" />
+<path d="M115.798 113.171
+L115.87 113.136
+" />
+<path d="M115.87 113.136
+L115.906 113.1
+" />
+<path d="M115.906 113.1
+L115.941 113.029
+" />
+<path d="M115.941 113.029
+L115.941 112.886
+" />
+<path d="M115.941 112.886
+L115.906 112.814
+" />
+<path d="M115.906 112.814
+L115.87 112.779
+" />
+<path d="M115.87 112.779
+L115.798 112.743
+" />
+<path d="M115.798 112.743
+L115.191 112.743
+" />
+<path d="M115.191 112.457
+L115.191 111.993
+" />
+<path d="M115.191 111.993
+L115.477 112.243
+" />
+<path d="M115.477 112.243
+L115.477 112.136
+" />
+<path d="M115.477 112.136
+L115.513 112.064
+" />
+<path d="M115.513 112.064
+L115.548 112.029
+" />
+<path d="M115.548 112.029
+L115.62 111.993
+" />
+<path d="M115.62 111.993
+L115.798 111.993
+" />
+<path d="M115.798 111.993
+L115.87 112.029
+" />
+<path d="M115.87 112.029
+L115.906 112.064
+" />
+<path d="M115.906 112.064
+L115.941 112.136
+" />
+<path d="M115.941 112.136
+L115.941 112.35
+" />
+<path d="M115.941 112.35
+L115.906 112.421
+" />
+<path d="M115.906 112.421
+L115.87 112.457
+" />
+</g></g>
+<g style="fill:none;
+stroke:#DDE1E8; stroke-width:0.04; stroke-opacity:1;
+stroke-linecap:round; stroke-linejoin:round;">
+<g transform="rotate(-90 108.4 119.1)">
 <text x="108.4" y="119.225"
 textLength="0.796" font-size="0.333" lengthAdjust="spacingAndGlyphs"
 text-anchor="middle" opacity="0" stroke-opacity="0">C11</text>
@@ -4951,15 +4951,6 @@ L112 121.2
 <path style="fill:none;
 stroke:#DDE1E8; stroke-width:0.1; stroke-opacity:1;
 stroke-linecap:round; stroke-linejoin:round;fill:none"
-d="M 117.1,114.1
-114.85,114.1
-114.1,113.35
-114.1,111.1
-117.1,111.1
-Z" />
-<path style="fill:none;
-stroke:#DDE1E8; stroke-width:0.1; stroke-opacity:1;
-stroke-linecap:round; stroke-linejoin:round;fill:none"
 d="M 114.95,120.95
 114.45,120.95
 114.45,121.95
@@ -5358,6 +5349,15 @@ Z" />
 <path style="fill:none;
 stroke:#DDE1E8; stroke-width:0.1; stroke-opacity:1;
 stroke-linecap:round; stroke-linejoin:round;fill:none"
+d="M 117.1,114.1
+114.85,114.1
+114.1,113.35
+114.1,111.1
+117.1,111.1
+Z" />
+<path style="fill:none;
+stroke:#DDE1E8; stroke-width:0.1; stroke-opacity:1;
+stroke-linecap:round; stroke-linejoin:round;fill:none"
 d="M 108.15,119.6
 108.65,119.6
 108.65,118.6
@@ -5485,15 +5485,6 @@ d="M 113.1,135.4
 Z" />
 </g>
 <g style="fill:#c8c8c8; fill-opacity:1; stroke:none;">
-<circle cx="114.85" cy="112.6" r="0.125" />
-</g>
-<g style="fill:#c8c8c8; fill-opacity:1; stroke:none;">
-<circle cx="115.6" cy="112.6" r="0.125" />
-</g>
-<g style="fill:#c8c8c8; fill-opacity:1; stroke:none;">
-<circle cx="116.35" cy="112.6" r="0.125" />
-</g>
-<g style="fill:#c8c8c8; fill-opacity:1; stroke:none;">
 <circle cx="107.96" cy="149.63" r="0.5" />
 </g>
 <g style="fill:#c8c8c8; fill-opacity:1; stroke:none;">
@@ -5523,6 +5514,21 @@ L106.18 105.77
 <path d="M106.18 102.44
 L106.18 101.84
 " />
+</g>
+<g style="fill:#c8c8c8; fill-opacity:1; stroke:none;">
+<circle cx="114.5" cy="112.6" r="0.125" />
+</g>
+<g style="fill:#c8c8c8; fill-opacity:1; stroke:none;">
+<circle cx="115.05" cy="112.6" r="0.125" />
+</g>
+<g style="fill:#c8c8c8; fill-opacity:1; stroke:none;">
+<circle cx="115.6" cy="112.6" r="0.125" />
+</g>
+<g style="fill:#c8c8c8; fill-opacity:1; stroke:none;">
+<circle cx="116.15" cy="112.6" r="0.125" />
+</g>
+<g style="fill:#c8c8c8; fill-opacity:1; stroke:none;">
+<circle cx="116.7" cy="112.6" r="0.125" />
 </g>
 <g style="fill:#c8c8c8; fill-opacity:1; stroke:none;">
 <circle cx="109.125" cy="125.125" r="0.125" />

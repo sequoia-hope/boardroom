@@ -1,7 +1,7 @@
 {
   "board": "easy2350",
   "phase": "7 routing",
-  "doing": "Re-routed from a bare board on ultraroute fe903ff (seed 0): nothing locked; reference zones protected by .kicad_dru rules (the 1V1 ring fills as one piece, PGND has 2 GND vias inside its zone); 16 vendor reference vias placed where they fit (COUT's second is left out because it blocks USB_DM_MCU); USB at the chip on its own 0.15 mm class. DRC 0 errors, 0 unconnected, parity 0; no duplicate segments; pad_joints, silk, nets, placement and sync pass. Review 3 (2026-11-02) found A1/A2 on the previous route, and this route resolves both. Next: re-review the regulator corner, then write gates 7-9. Fab outputs are not released.",
+  "doing": "Routed on ultraroute 44dd222 (seed 2) with nothing locked but 16 footprints. The regulator corner matches Raspberry Pi's reference (review 4: every zone within 0.05 mm\u00b2, 8 of 9 vias within 0.01 mm). U3 now has 5 thermal vias. DRC 0 errors, 0 unconnected, parity 0; every check passes. Review 4: no blockers or majors. Next: re-route on ultraroute's USB pair fix when it lands, then write gates 7-9 and the release review. Fab outputs are not released.",
   "needs_user": [],
   "checks": {
     "DRC": "0 errors, 0 unconnected, parity 0; warnings: 56 lib_footprint_mismatch only (board-local footprints)",
@@ -9,10 +9,11 @@
     "nets_check --rules --routed": "PASS, 0 errors",
     "silk_check": "PASS, 0 errors (now also footprint silk over vias)",
     "locks": "16 footprints locked, no locked copper",
-    "pad_joints": "PASS: 205 SMD pads, 0 thin joints (ultraroute fe903ff)",
-    "plane_pad_vias": "47 of 74 GND/3V3 SMD pads have a via of their own within 1.0 mm (ultraroute-lab plane_pad_vias.py)",
-    "reference zones": "1V1 ring 1 piece; PGND 2 GND vias inside; LX 1 piece; 0 duplicate segments",
-    "USB lengths": "DP_C 7.69 / DM_C 8.01 mm; DP_MCU 3.91 / DM_MCU 3.79 mm"
+    "pad_joints": "PASS: 205 SMD pads, 0 thin joints (ultraroute 44dd222)",
+    "plane_pad_vias": "48 of 74 GND/3V3 SMD pads have a via of their own within 1.0 mm",
+    "reference zones": "1V1 ring 1 piece; PGND 2 GND vias inside; LX 1 piece; L2/L3 one piece each; 0 duplicate segments",
+    "USB lengths": "DP_C 7.69 / DM_C 8.01 mm (loosely coupled, logged); DP_MCU 3.91 / DM_MCU 3.79 mm",
+    "LDO thermal": "U3 EP 5 vias (ldo-3v3.md asks >= 5)"
   },
   "gates_passed": [
     0,
@@ -24,6 +25,10 @@
     6
   ],
   "links": [
+    {
+      "label": "Layout review 4",
+      "href": "design/gates/review-layout-2026-11-02b.md"
+    },
     {
       "label": "Design intent",
       "href": "design/intent.md"
