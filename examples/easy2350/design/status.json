@@ -1,10 +1,10 @@
 {
   "board": "easy2350",
   "phase": "7 routing",
-  "doing": "Fixing the independent layout review (2026-10-31): RP2350 reference pours back as zones (your choice), crystal kept to its own nets, length rules routed to (ultraroute 0b9016f), footprint silk trimmed at vias, J1 labelled \"5V IN\". Routes complete on every seed; 24 vias drilled in SMD pads remain, now a DRC rule; asked of ultraroute. Then re-route, re-review, gates 7-10.",
+  "doing": "Re-routed with ultraroute 0b0f336 and the RP2350 reference pours as zones: DRC 0 errors, 0 unconnected, parity 0; nets, silk, placement and sync checks pass. Second independent layout review running; then gates 7-10.",
   "needs_user": [],
   "checks": {
-    "DRC": "0 unconnected; 24 errors: vias drilled in SMD pads (new rule, router support requested), 1 via in the pin-1 dot reservation (next route)",
+    "DRC": "0 errors, 0 unconnected, parity 0; 54 lib_footprint_mismatch warnings (board-local footprint copies)",
     "schematic parity": "0 differences (sync_check with BOM and CPL: PASS, 58/58/54/54)",
     "nets_check --rules --routed": "PASS, 0 errors",
     "silk_check": "PASS, 0 errors (now also footprint silk over vias)",
@@ -72,7 +72,7 @@
   "updated": "2026-10-31",
   "gates": {
     "7": {
-      "stale_because": "review-layout 2026-10-31 found vias in pads, PIX12 through the crystal and router-laid regulator copper; fixes in progress"
+      "stale_because": "re-routed 2026-11-01 after review-layout 2026-10-31; DRC 0/0, every check passes; second review running"
     },
     "8": {
       "stale_because": "re-routed 2026-10-31 with ultraroute 770ef73; the copper simulations ran on the old route and are to be re-run"
