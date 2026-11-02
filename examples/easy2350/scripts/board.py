@@ -856,8 +856,13 @@ def stage_route():
     run([sys.executable, __file__, "zones-for-routing"])
     run([sys.executable, __file__, "fill"])       # the router joins plane nets through the fill
     # A 35 um grid: the default 50 um left the QFN's 0.4 mm pitch escapes short of room.
-    run([sys.executable, str(SKILL / "autoroute.py"), str(HW), "--planes", "In1.Cu,In2.Cu",
-         "--extra", "--cell 0.035"])
+    # Every GND/3V3 pad gets a via of its own within 1 mm, edge to edge, placed by the
+    # router before it routes (review-layout 2026-11-01 B5: decoupler grounds 2-3 mm
+    # from a via; after routing there was no room, and before it they'd be locked).
+    # Up to 8 seeds: with the pad vias, seeds 0-3 of d791d9b each left a QSPI
+    # length over its limit or a GND pair joined only to itself.
+    run([sys.executable, str(SKILL / "autoroute.py"), str(HW), "--planes", "In1.Cu,In2.Cu", "--seeds", "8",
+         "--extra", "--cell 0.035 --plane-via-reach 1.0"])
     print(f"route: {signals_unrouted()} signal connections unrouted")
 
 

@@ -1,7 +1,7 @@
 {
   "board": "easy2350",
   "phase": "7 routing",
-  "doing": "Re-routed on ultraroute 07b8c8a with the review-2 fixes: all four B.Cu 1V1 spokes have a via at each end (A1), tracks end inside pads (A2), LDO output joined to its 10 uF on L1 (B4), AVDD on top (B2), pin 38 on reference 3V3 (B6). DRC 0 errors, 0 unconnected, parity 0; pad_joints, silk, nets, placement and sync pass. Waiting on ultraroute for a via of its own at each decoupler's ground pad (B5: C20, C17, C4 2.0-3.4 mm from a via). Then the final independent layout review and gates 7-10.",
+  "doing": "Re-routed from a bare board on ultraroute d791d9b (seed 4 of up to 8): nothing locked; every GND/3V3 pad that has room gets a via of its own within 1 mm (52 of 74); 1V1 spokes joined at both ends; LDO output on L1. DRC 0 errors, 0 unconnected, parity 0; pad_joints, silk, nets, placement and sync pass. Open for review: C20/C17/C4 grounds still 1.1-2.5 mm from a via (B5), three VBUS layer changes with no room for a second via. Next: final independent layout review, then gates 7-10.",
   "needs_user": [],
   "checks": {
     "DRC": "0 errors, 0 unconnected, parity 0; warnings: 56 lib_footprint_mismatch only (board-local footprints)",
@@ -9,7 +9,8 @@
     "nets_check --rules --routed": "PASS, 0 errors",
     "silk_check": "PASS, 0 errors (now also footprint silk over vias)",
     "locks": "16 footprints locked, no locked copper",
-    "pad_joints": "PASS: 205 SMD pads, 0 thin joints (ultraroute 07b8c8a)"
+    "pad_joints": "PASS: 205 SMD pads, 0 thin joints (ultraroute d791d9b)",
+    "plane_pad_vias": "52 of 74 GND/3V3 SMD pads have a via of their own within 1.0 mm (ultraroute-lab plane_pad_vias.py)"
   },
   "gates_passed": [
     0,
