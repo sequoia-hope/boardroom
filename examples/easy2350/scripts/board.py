@@ -1011,9 +1011,11 @@ def silk_fixed(b):
     out.append(make("DIO GND CLK", W / 2, H - PIN1 - 1.75))
     out += [make(s, URL_X + URL_PITCH * i, URL_Y[i], angle=90) for i, s in enumerate(URL_LINES)]
     # Identity, limits and warnings, one line each, where the free-spot search
-    # put them on the 2026-10-23 route (no via-free strip is over 13 mm)
+    # put them on the 2026-10-23 route (no via-free strip is over 13 mm). The
+    # date sits 2.5 mm below that spot, clear of the B.Cu 1V1 spoke to pin 6,
+    # whose ring-end via its no-via area kept out (2026-11-01).
     tb = b.GetTitleBlock()
-    for s_, x, y, a in ((f"{tb.GetTitle()} rev {tb.GetRevision()}", 11.0, 41.25, 90), (tb.GetDate()[:7], 7.5, 27.0, 90),
+    for s_, x, y, a in ((f"{tb.GetTitle()} rev {tb.GetRevision()}", 11.0, 41.25, 90), (tb.GetDate()[:7], 7.5, 29.5, 90),
                         ("CERN-OHL-P-2.0", 12.0, 19.0, 90), ("3V3 out 100mA", 13.2, 41.5, 90),
                         ("VBUS out 50mA", 9.95, 17.25, 90), ("3.3V logic only", 7.0, 12.5, 90),
                         ("no VBUS in", W / 2, 3.25, 0), ("with USB in", W / 2, 4.65, 0)):

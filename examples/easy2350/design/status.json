@@ -1,15 +1,15 @@
 {
   "board": "easy2350",
   "phase": "7 routing",
-  "doing": "Re-routed on ultraroute 4ed8d5d (reference zone islands joined with vias): DRC 0 errors, 0 unconnected, 0 warnings beyond footprint-library mismatches; pad_joints passes. Open for review A1: of the four B.Cu 1V1 spokes only pin 50's has vias at both ends, so pins 6/23/39 still draw through about 21 mm of router wire. Asked ultraroute to join strip islands at both ends. Then review, gates 7-10.",
+  "doing": "Re-routed on ultraroute 07b8c8a: all four B.Cu 1V1 spokes now have a via at each end (review A1), every reference zone joined; DRC 0 errors, 0 unconnected, parity 0; pad_joints, silk, nets and placement pass. Date silk moved 2.5 mm down to free spoke 2's ring via. Left for review: 15 redundant router 1V1 tracks beside the ring (12 mm), two VBUS layer changes with no room for a second via. Next: final independent layout review, then gates 7-10.",
   "needs_user": [],
   "checks": {
-    "DRC": "0 errors, 0 unconnected, parity 0; warnings: 55 lib_footprint_mismatch only",
+    "DRC": "0 errors, 0 unconnected, parity 0; warnings: 56 lib_footprint_mismatch only (board-local silk trims)",
     "schematic parity": "0 differences (sync_check with BOM and CPL: PASS, 58/58/54/54)",
     "nets_check --rules --routed": "PASS, 0 errors",
     "silk_check": "PASS, 0 errors (now also footprint silk over vias)",
     "locks": "16 footprints locked, no locked copper",
-    "pad_joints": "PASS: 205 SMD pads, 0 thin joints (ultraroute 4ed8d5d)"
+    "pad_joints": "PASS: 205 SMD pads, 0 thin joints (ultraroute 07b8c8a)"
   },
   "gates_passed": [
     0,

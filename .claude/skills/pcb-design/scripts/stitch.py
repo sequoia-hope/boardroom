@@ -203,6 +203,13 @@ def main() -> int:
             if hole and math.dist((item.GetPosition().x, item.GetPosition().y), (pos.x, pos.y)) < \
                     (drill + hole) / 2 + hole_to_hole:
                 return False
+            # no via hole in or at an SMD pad, its own net's included: the board's
+            # dru may ask that (easy2350 "no via hole in an SMD pad"), and an open
+            # hole by a pad wicks its solder; KiCad checks it with no slack
+            if item.Type() == pcbnew.PCB_PAD_T and item.GetAttribute() == pcbnew.PAD_ATTRIB_SMD:
+                l = item.GetLayer()
+                if item.GetEffectiveShape(l).Collide(pcbnew.SHAPE_CIRCLE(pos, drill // 2), hole_gap):
+                    return False
             if item.GetNetCode() == net.GetNetCode():
                 continue
             need = max(cl, clearance(item.GetNet())) if item.GetNet() is not None else cl
