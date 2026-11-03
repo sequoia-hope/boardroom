@@ -7,8 +7,8 @@ built. Questions for the owner are under **Open questions**; answers to Circuit 
 questions are under **Answers to circuit-composer**.
 
 **Name:** the suite's main app is **Boardroom** (chosen 2026-10-29), formerly the placeholder
-easy_pcb. The GitHub repository is now `sequoia-hope/boardroom`; the local folder is still
-`easy_pcb`, and `ccomp import easy-pcb` keeps its name for now.
+easy_pcb. The GitHub repository is now `sequoia-hope/boardroom` and the local folder
+`~/Software/boardroom`; `ccomp import easy-pcb` keeps its name for now.
 
 ## Built so far (2026-10-30)
 

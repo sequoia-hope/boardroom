@@ -5,8 +5,8 @@ Status: draft, 2026-10-29. Written from the owner's description for the three si
 says so under **Open questions**.
 
 **Name:** the suite's main app is **Boardroom** (chosen 2026-10-29), formerly the placeholder
-easy_pcb. The repository and folder are still called `easy_pcb` until they are renamed;
-`ccomp import easy-pcb` keeps its name for now.
+easy_pcb. The GitHub repository is now `sequoia-hope/boardroom` and the local folder
+`~/Software/boardroom`; `ccomp import easy-pcb` keeps its name for now.
 
 ## The idea in one paragraph
 
