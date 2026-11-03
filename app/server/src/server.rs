@@ -29,25 +29,24 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 use tower_http::{services::{ServeDir, ServeFile}, set_header::SetResponseHeaderLayer};
 
-struct App {
+pub(crate) struct App {
+    pub(crate) config_dir: PathBuf,
     list: Mutex<ProjectList>,
     /// Bus messages, already JSON.
     bus: broadcast::Sender<String>,
     watcher: Mutex<Option<notify::RecommendedWatcher>>,
 }
 
-type Shared = Arc<App>;
+pub(crate) type Shared = Arc<App>;
 type ApiResult<T> = Result<T, (StatusCode, String)>;
 
 fn bad(status: StatusCode, msg: impl Into<String>) -> (StatusCode, String) {
     (status, msg.into())
 }
 
-pub async fn run(host: &str, port: u16, web: PathBuf) -> Result<(), String> {
+pub fn router(config_dir: PathBuf, list: ProjectList, web: PathBuf) -> (Router, Shared) {
     let (bus, _) = broadcast::channel(256);
-    let app = Arc::new(App { list: Mutex::new(ProjectList::load()?), bus, watcher: Mutex::new(None) });
-    start_watcher(&app);
-
+    let app = Arc::new(App { config_dir, list: Mutex::new(list), bus, watcher: Mutex::new(None) });
     let index = ServeFile::new(web.join("index.html"));
     let router = Router::new()
         .route("/api/projects", get(projects).post(add_project))
@@ -60,9 +59,11 @@ pub async fn run(host: &str, port: u16, web: PathBuf) -> Result<(), String> {
         .route("/api/projects/{id}/open/{what}", post(open))
         .route("/api/pick-folder", post(pick_folder))
         .route("/api/bus", get(bus_socket))
+        // An unknown API path is a 404, not the web app's page with a 200.
+        .route("/api/{*rest}", any(|| async { (StatusCode::NOT_FOUND, "no such API") }))
         .route("/apps/{name}", get(apps::slash))
-        .route("/apps/{name}/", any(|peer, UrlPath(name): UrlPath<String>, req| apps::proxy(peer, UrlPath((name, String::new())), req)))
-        .route("/apps/{name}/{*rest}", any(apps::proxy))
+        .route("/apps/{name}/", any(|state, peer, UrlPath(name): UrlPath<String>, req| apps::serve(state, peer, UrlPath((name, String::new())), req)))
+        .route("/apps/{name}/{*rest}", any(apps::serve))
         .fallback_service(ServeDir::new(&web).fallback(index))
         .layer(SetResponseHeaderLayer::overriding(
             header::HeaderName::from_static("cross-origin-opener-policy"),
@@ -78,7 +79,14 @@ pub async fn run(host: &str, port: u16, web: PathBuf) -> Result<(), String> {
         ))
         .layer(SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, HeaderValue::from_static("no-cache")))
         .layer(middleware::from_fn(local_changes_only))
-        .with_state(app);
+        .with_state(app.clone());
+    (router, app)
+}
+
+pub async fn run(host: &str, port: u16, web: PathBuf) -> Result<(), String> {
+    let config_dir = config::config_dir();
+    let (router, app) = router(config_dir.clone(), ProjectList::load_from(&config_dir)?, web);
+    start_watcher(&app);
 
     let listener = tokio::net::TcpListener::bind((host, port)).await.map_err(|e| format!("{host}:{port}: {e}"))?;
     println!("Boardroom: http://localhost:{port}/");
@@ -164,7 +172,7 @@ async fn add_project(State(app): State<Shared>, Json(body): Json<AddBody>) -> Ap
     let path = {
         let mut list = app.list.lock().unwrap();
         let path = list.add(&expanded).map_err(|e| bad(StatusCode::BAD_REQUEST, e))?;
-        list.save().map_err(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        list.save_to(&app.config_dir).map_err(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, e))?;
         path
     };
     watch(&app, &path);
@@ -177,7 +185,7 @@ async fn remove_project(State(app): State<Shared>, UrlPath(id): UrlPath<String>)
     {
         let mut list = app.list.lock().unwrap();
         list.remove(&path);
-        list.save().map_err(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        list.save_to(&app.config_dir).map_err(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     }
     if let Some(w) = app.watcher.lock().unwrap().as_mut() {
         let _ = w.unwatch(&path.join("design"));
