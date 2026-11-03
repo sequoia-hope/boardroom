@@ -1,7 +1,7 @@
 {
   "board": "easy2350",
   "phase": "7 routing",
-  "doing": "Routed on ultraroute 44dd222 (seed 2) with nothing locked but 16 footprints. The regulator corner matches Raspberry Pi's reference (review 4: every zone within 0.05 mm\u00b2, 8 of 9 vias within 0.01 mm). U3 now has 5 thermal vias. DRC 0 errors, 0 unconnected, parity 0; every check passes. Review 4: no blockers or majors. Next: re-route on ultraroute's USB pair fix when it lands, then write gates 7-9 and the release review. Fab outputs are not released.",
+  "doing": "Re-routed on ultraroute 41e07ce (seed 2) with nothing locked but 16 footprints. The USB connector pair (USB_DP_C/DM_C) now runs on F.Cu with 0 vias (was 2 each, review 4 M1). DRC 0 errors, 0 unconnected, parity 0; every check passes. Next: rewrite gates 7-9 for this route, an independent layout review, then the release review. Fab outputs are not released.",
   "needs_user": [],
   "checks": {
     "DRC": "0 errors, 0 unconnected, parity 0; warnings: 56 lib_footprint_mismatch only (board-local footprints)",
@@ -9,11 +9,12 @@
     "nets_check --rules --routed": "PASS, 0 errors",
     "silk_check": "PASS, 0 errors (now also footprint silk over vias)",
     "locks": "16 footprints locked, no locked copper",
-    "pad_joints": "PASS: 205 SMD pads, 0 thin joints (ultraroute 44dd222)",
-    "plane_pad_vias": "48 of 74 GND/3V3 SMD pads have a via of their own within 1.0 mm",
-    "reference zones": "1V1 ring 1 piece; PGND 2 GND vias inside; LX 1 piece; L2/L3 one piece each; 0 duplicate segments",
-    "USB lengths": "DP_C 7.69 / DM_C 8.01 mm (loosely coupled, logged); DP_MCU 3.91 / DM_MCU 3.79 mm",
-    "LDO thermal": "U3 EP 5 vias (ldo-3v3.md asks >= 5)"
+    "pad_joints": "PASS: 205 SMD pads, 0 thin joints (ultraroute 41e07ce)",
+    "plane_pad_vias": "48 of 74 GND/3V3 SMD pads have a via of their own within 1.0 mm (measured on 44dd222; re-measure at the layout review)",
+    "reference zones": "1V1 ring 1 piece; PGND 2 GND vias inside; LX 1 piece; L2/L3 one piece each; 0 duplicate segments (measured on 44dd222; re-measure at the layout review)",
+    "USB lengths": "DP_C 8.82 / DM_C 6.89 mm net copper, F.Cu, 0 vias (each includes J1's A/B bridge; DM_C carries a tuning bump); DP 10.83 / DM 11.01; DP_MCU 3.91 / DM_MCU 3.79 mm",
+    "LDO thermal": "U3 EP 5 vias (ldo-3v3.md asks >= 5)",
+    "sync_check": "PASS with BOM and CPL (fab outputs regenerated on 41e07ce)"
   },
   "gates_passed": [
     0,
@@ -78,7 +79,7 @@
       "href": "hw/easy2350/a/fab/"
     }
   ],
-  "updated": "2026-11-01",
+  "updated": "2026-11-02",
   "gates": {
     "7": {
       "stale_because": "review-layout 2 (2026-11-01): 1V1/FB reference copper not joined (A1), thin pad joints (A2); router features requested"
