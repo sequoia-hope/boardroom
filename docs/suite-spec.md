@@ -1,9 +1,11 @@
 # Boardroom and Waffle Iron: an electromechanical suite — spec (draft)
 
-Status: draft, 2026-11-03. Written from the owner's direction for four sibling projects
-(Waffle Iron, Boardroom, Circuit Composer, UltraRoute) to read and push back on. Nothing here is
-built yet except what "What exists today" lists. Choices the owner has not confirmed are marked
-**Recommended**, and every open one is under **Open questions**.
+Status: agreed between the Boardroom and Waffle Iron agents, 2026-11-03, after two rounds of review, with
+the owner confirming explicit sync and the split of work. Written from the owner's direction for four
+sibling projects (Waffle Iron, Boardroom, Circuit Composer, UltraRoute). Composer and UltraRoute have
+not reviewed it yet.
+Nothing here is built yet except what "What exists today" lists. Choices the owner has not confirmed
+are marked **Recommended**, and every open one is under **Open questions**.
 
 Builds on [`platform-spec.md`](platform-spec.md), [`shell-spec.md`](shell-spec.md) and
 [`demo-spec.md`](demo-spec.md), and on Waffle Iron's `specs/waffle_v4_document_model.md` and
@@ -15,30 +17,42 @@ Mechanical CAD and board design become one suite. A Waffle Iron project and a Bo
 stay **linked for as long as the product is being developed**. Either side can change at any
 time, the other side can see that it is behind and what changed, and the person chooses to
 update or to stay pinned on an older version. The board outline can be designed in Waffle Iron
-or in Circuit Composer and synced in either direction. There is no start or finish to this
+or in Circuit Composer. **One side drives it at a time,** the other shows it locked, and the drive
+changes hands only when someone explicitly takes it over. There is no start or finish to this
 workflow, and neither app is the permanent owner of the board's shape.
+
+It runs as one local power app: Boardroom's native window, with Waffle Iron and Composer inside it,
+project files and git on disk, and an embedded terminal that can reach all of them.
 
 ## The owner's direction
 
 1. **A continuous lifecycle, not a handoff.** Board and CAD designs are always being updated.
-2. **The outline syncs both ways.** Design it in Waffle Iron or Composer and sync it either way.
+2. **The outline can start on either side, with one driver at a time.** The driver stays the driver
+   until someone explicitly changes it. The other side shows "Outline controlled by Waffle Iron" with
+   an unlock "at your peril", and unlocking warns what is lost (constraints or a generator recipe).
+   Editing on both sides and merging is not a goal for now.
 3. **Link, stale, update or pin.** A Waffle Iron file or project is linked to a Boardroom project.
    If either is updated the other reports it, and can sync to the latest or stay pinned.
 4. **Version tracking is a suite feature.** It was missing from Boardroom's spec, and should be
    considered for Waffle Iron as well.
 5. **DXF carries the shared geometry,** with Waffle Iron's exporter extended to put the necessary
    information into it.
-6. **First the same browser tab, later a relay.** Waffle Iron starts as a micro-app under Boardroom
-   in one tab, sharing browser storage. A connector or relay on a Cloudflare Worker comes later.
+6. **First a local native window, later the browser and a relay.** Waffle Iron runs as a micro-app
+   under Boardroom in its native window, the way Boardroom already runs here, because cross-app work
+   is easier there than on GitHub Pages, where Boardroom's functionality is still partial. Shared
+   browser storage and a Cloudflare Worker relay come later.
 7. **Normalize the newer projects toward Waffle Iron's toolkit,** including plain upgrades where
    they help.
+8. **True arcs in Composer.** Composer's outlines keep real arcs.
+9. **Stable IDs are a requirement.** If Waffle Iron lacks any part of them, it gets added.
+10. **An embedded terminal** in the app, able to work with Waffle Iron as well as the board tools.
 
 ## What exists today
 
 | Piece | Where | State |
 |---|---|---|
 | Board import into CAD: outline as a derived solid, one instance per footprint, a connector on each mounting hole | Waffle Iron `specs/kicad_board_link.md` | Landed, one-way. Writing back is a stated non-goal |
-| Re-sync that keeps the user's work, reconciling parts by footprint UUID | same, rows R1–R6 | Landed |
+| Re-sync that keeps the user's work, reconciling by `external_key` (footprint UUID for instances, `"board"` for the board) | same, rows R1–R6 | Landed |
 | Links pinned to a commit or following a branch or tag, with the loaded commit and a content hash | Waffle Iron `crates/file-format/src/sources.rs`, v4 spec §2.4 | Landed |
 | "Update to tip" and "Pin" as explicit actions | Waffle Iron Sources panel, v4 spec §7.3 | Landed |
 | Host adapters: `resolve_ref`, `fetch_blob`, `put_file` | Waffle Iron v4 spec §7.2 | Landed for GitHub, GitLab, Gitea. Local git is listed as a future desktop host |
@@ -46,23 +60,26 @@ workflow, and neither app is the permanent owner of the board's shape.
 | One-view DXF writer, R12, `LINE`, `ARC`, `CIRCLE`, `POLYLINE`, layers | Waffle Iron `crates/kernel-v2/src/dxf_export.rs` | Landed |
 | DXF reader: `LWPOLYLINE`, `CIRCLE`, `LINE` only | Composer `crates/shape/src/import.rs` | Landed. Cannot read Waffle Iron's `ARC` or `POLYLINE`, ignores layers, flattens arcs, drops open chains |
 | Apps embedded on one origin | Boardroom `/apps/<name>/`, `docs/shell-spec.md` "One origin" | Landed for Composer and Studio |
-| Browser workspace with per-file revisions and a history | `docs/demo-spec.md` | Specified, one workspace per tab |
+| Browser workspace with per-file revisions and a history | `docs/demo-spec.md`, `app/store/store.js` | Store module exists, one workspace per tab |
 | Gates going stale when judged inputs change | `docs/shell-spec.md` "Gates tab" | Specified. The server reads a stale reason; computing one is not confirmed |
 | Git ahead/behind per project | Boardroom `app/server/src/project.rs` | Landed |
+| Boardroom's native window, file API with revisions and conflicts, bus | `app/gtk`, `app/server/src/server.rs` | Landed. The embedded terminal is specified in `shell-spec.md`, not built (no `/api/term` route) |
+| Waffle Iron's agent link: an MCP server paired with one tab, whose tools run in that tab's engine | Waffle Iron `relay/`, `specs/waffle_mcp_server.md` | Landed |
+| Waffle Iron's native headless host and viewer sync | Waffle Iron `crates/waffle-host`, `specs/waffle_server_mode.md` | Landed in checkpoints. It has no native window |
 | `.kicad_pcb` reader and writer | UltraRoute `core/crates/kicad-pcb`, used by Composer through a git pin | Landed. Waffle Iron has its own smaller reader with a shared origin |
 
 ## Principles
 
 1. **Share results, keep recipes private.** A Waffle Iron constraint means nothing to Composer, and
    Composer's generators mean nothing to Waffle Iron. Only resolved geometry crosses between apps.
-2. **Each project owns its own history.** Nothing writes to a file that two projects share. Each
-   project publishes its own interface and follows the other's.
+2. **Each project owns its own history.** Nothing writes to a file that two projects share. The
+   driver's project publishes the interface and the other follows it. A handover moves who publishes.
 3. **A version is a git commit, a release is a git tag.** The suite does not invent a version
-   system. Where there is no git yet (stage 1), content-addressed revisions stand in with the same
+   system. Where there is no git (the browser stage), content-addressed revisions stand in with the same
    interface and map onto git later.
 4. **Stale means the interface changed.** A change the other side does not depend on is never
    reported as work to do.
-5. **Sync is explicit (Recommended).** A half-finished sketch must not move a routed board. Every
+5. **Sync is explicit (the owner's decision).** A half-finished sketch must not move a routed board. Every
    sync is a reviewable change.
 6. **Files are the seam,** as in `platform-spec.md`, and KiCad files stay the truth for schematic
    and board. Each app stays usable on its own.
@@ -100,7 +117,10 @@ pin_reason = ""               # why, when ref is a Commit
 ```
 
 In a Waffle Iron document it is a new source kind, `BoardInterface`, in the existing `sources`
-table. Adding a kind and the `Workspace` locator below is part of a format version bump.
+table, rather than an extension of `KicadPcb`, since its content is two files, not one board file.
+No format version bump: an older Waffle Iron keeps an unknown kind or locator verbatim and reports it
+unresolvable (`sources.rs:182-205`, `:368-381`). `SourceEntry` gains an `interface_hash` beside
+`content_hash`, and a remembered base.
 
 ### Link states
 
@@ -110,7 +130,9 @@ table. Adding a kind and the `Workspace` locator below is part of a format versi
 | **New revision, no interface change** | The other project committed something this side does not depend on | Quiet. The loaded commit advances on the next check |
 | **Update available** | Following a ref, and the interface changed | Notice with a diff and its consequences |
 | **Pinned, behind** | Deliberate. "Pinned at rev B, latest is D, two holes moved" | Information, never a warning |
-| **Diverged** | Both sides changed since the last sync | Boardroom inbox item |
+| **Locked** | The other side drives this outline | "Outline controlled by Waffle Iron", with unlock "at your peril" |
+| **Changed outside the suite** | A third party edited it, such as KiCad's `Edge.Cuts` or a re-save in another CAD program. | Boardroom inbox item: import it? |
+| **Competing take overs** | Both sides took over from the same revision before seeing each other (see "Handing over the drive") | Boardroom inbox item: pick one |
 | **Unavailable** | The other project cannot be reached | Notice. The last loaded version keeps working |
 
 An update shows what changed before it is accepted, including its consequences: which mates lose
@@ -129,14 +151,29 @@ warnings like that soon get ignored. The suite compares only what the other side
 | Connector or mounting hole moved | Stale, listing what changed |
 | Outline or thickness changed | Stale, and the Boardroom gates that depend on it go stale |
 
-Two interface hashes are needed: **board shape** (below), and **mechanical placement** for what
-Waffle Iron reads from a board: footprint UUID, side, position, rotation and 3D model.
+Two interface hashes are needed: **board shape** (below), and **mechanical** for what changes geometry
+or assembly in Waffle Iron (`kicad_board_link.md:66-143`):
+
+- **Board:** thickness (`general` or the stackup sum).
+- **Each footprint:** `uuid` or `tstamp`, layer, `(at x y rot)`, each model's path, `offset`, `scale`
+  and `rotate`, and `attr` (`board_only` or `exclude_from_bom` with no model makes no instance).
+- **Mounting-hole footprints:** also pad kind, position, drill and size.
+
+Reference, Value, Footprint and Datasheet properties, the title block, nets and the copper layer count
+are reported quietly, never as stale. `git_blob_sha1` stays as the file's identity.
+
+### Rules when a `.kicad_pcb` and an interface are both linked
+
+- **Outline and thickness:** the interface drives them, and the `.kicad_pcb` gives only footprints and
+  models. A difference over 1 nm is a warning naming which is ahead.
+- **Holes:** interface holes are board-level drilled holes only. Footprint holes stay with their
+  footprint, so no hole is mated twice.
 
 ## The interface files
 
 ```
 interface/<board>/board-shape.dxf     outline, cutouts, holes, keepouts, with IDs
-interface/<board>/board-shape.json    revision, parent, author, thickness, geometry hash
+interface/<board>/board-shape.json    revision, parent, author, driver, thickness, geometry hash
 ```
 
 Only the shared library below writes in `interface/`, which adds one rule to `platform-spec.md`'s
@@ -151,8 +188,11 @@ the moment it was needed. With a manifest beside it, a hash mismatch becomes a u
 ### `board-shape.dxf`
 
 DXF R12 (`AC1009`), the dialect Waffle Iron already writes (**Recommended**, pending the check under
-Open questions). Millimetres, board coordinates, KiCad's frame (Y down), so board files need no
-conversion. Waffle Iron converts at its boundary as `kicad_board_link.md` §2.3 already specifies.
+Open questions). Millimetres, Y up, as DXF expects (**Recommended**): a Y-down file would look
+mirrored in any other CAD program, and Composer's reader already negates Y on the way in. A point
+`(x, y)` in KiCad's frame is written as `(x, -y)`. Arcs are counter-clockwise in this Y-up frame, as
+DXF defines them, so a Y flip must also reverse each arc's direction. Waffle Iron converts at its
+boundary as `kicad_board_link.md` §2.3 already specifies.
 
 | Layer | Entities | Meaning |
 |---|---|---|
@@ -163,8 +203,13 @@ conversion. Waffle Iron converts at its boundary as `kicad_board_link.md` §2.3 
 
 Extended entity data under the application name `BOARD_INTERFACE` attaches, per entity:
 
-- `id`: a stable ID. Without one, a moved hole looks like one deleted and one added, which would
-  break the mates attached to it. Composer's `Hole` has no ID today and needs one.
+- `id`: a stable, namespaced ID, **a requirement**. Without one, a moved hole looks like one deleted
+  and one added, which would break the mates attached to it. The ID is minted once by the app that
+  authors the element, `waffle:<sketch feature uuid>/<entity id>` or `composer:<id>`, and **a pulled
+  shape keeps the IDs it arrived with**, through re-publishing and take over. Waffle Iron's sketch
+  entity IDs already persist in the document. Two gaps remain: derived sketches renumber from 1 on each
+  derive (`kicad.rs:1193-1203`), and Composer's `Hole` has no ID.
+- Arcs: start and end points, which the hash uses (below).
 - `loop`: which loop a segment belongs to.
 - Holes: `plated`, `clearance`.
 - Keepouts: `side`, `max_height_mm`.
@@ -184,6 +229,8 @@ are put to the person.
   "revision": "<geometry hash>",
   "parent": "<revision this was based on, or null>",
   "author": {"app": "waffle", "source": "<commit or workspace revision>", "at": "2026-11-03T12:00:00Z"},
+  "driver": "waffle",
+  "last_handover": null,
   "thickness_mm": 1.6,
   "geometry_hash": "<hash>",
   "approximate": false
@@ -194,30 +241,58 @@ are put to the person.
 
 Computed from parsed geometry, never from file bytes, so re-saving a file is not a design change:
 
-1. Convert every coordinate to whole nanometres, KiCad's own unit. Float metres would make a round
-   trip change the hash when nothing changed.
+1. Convert every coordinate to whole nanometres, KiCad's own unit, in KiCad's frame (Y down). Float
+   metres would make a round trip change the hash when nothing changed.
 2. Normalize each loop's direction and start point, and sort loops and elements, so entity order in
    the file does not matter.
 3. Hash that canonical form with IDs and attributes, plus thickness.
 
-Whether arc endpoints survive centre, radius and angle to the nanometre is unproven. The round-trip
-test below settles it. If they do not, endpoints are also carried in extended data.
+Arc endpoints are hashed from the extended data, not recomputed from angles, where a value could land
+on the other side of a rounding boundary. Loops chain through the same endpoints, so chaining needs no
+tolerance.
+
+**Publish nothing when nothing moved.** A sketch is solved numerically, so re-solving an unchanged one
+can move a point by about 1e-13 m, enough to flip about one coordinate in 10⁴ across a nanometre
+boundary. A publish first compares each element with the base within 1 nm, and writes nothing if none
+moved.
+
+Output is deterministic: no hash-map iteration order, no exponents in `f64` text, and one exactness
+test file that both apps run in CI.
 
 ### Comparing versions
 
-Each side remembers the base: the revision it last synced with.
+Each side remembers the base: the revision it last synced with. Only the driver publishes. A publish
+from the other side is **refused, not merged,** and it also fails if the base has moved.
 
-| Mine vs base | Theirs vs base | Result |
-|---|---|---|
-| Same | Same | In sync |
-| Changed | Same | Offer to publish |
-| Same | Changed | Offer to pull |
-| Changed | Changed | Diverged, unless the changes merge |
+| Theirs vs base | Result on the locked side |
+|---|---|
+| Same | In sync |
+| Changed by the driver | Offer to pull |
+| Changed, and the manifest does not match the file | Changed outside the suite, import it? |
 
-Merging is per element: if one side moves a hole and the other adds a keepout, both apply
-automatically. The outline itself is all-or-nothing, because merging two edited outlines can produce
-an invalid shape. Publishing fails if the base has moved, which also protects against two apps
-writing at once.
+Merging holes and keepouts per element could come later if wanted. Outlines never merge.
+
+### Handing over the drive
+
+In separate repositories there is no shared lock, so "refused" can only be enforced by what each side has
+seen. The revision chain settles it:
+
+- Each publish names its `parent`. A take over is a publish whose `driver` differs from its parent's,
+  with `last_handover` recording who and when.
+- The current shape is the newest revision reachable through parents, whichever repository holds it.
+  The old driver sees the new revision through its link, shows the outline locked, and stops publishing.
+  Its own file stays in its history and is not rewritten.
+- **A take over counts only if its parent is the driver's latest revision.** Taking over from an older
+  one would silently drop a change the person never saw, so it is reported like the next case.
+- Two revisions with the same parent mean competing take overs: both people changed it before either
+  saw the other. The suite reports this, changes nothing, and a person picks one, as it does for edits
+  outside the suite. So apps cannot silently overwrite each other, though they can still collide.
+- **Both sides always hold a link to the other's interface, including the driver.** That link is how a
+  driving document learns it no longer drives: on each check it compares the other side's newest manifest
+  with what it last published.
+
+In Waffle Iron a `BoardInterface` source holds what it follows, since `sources` holds inputs only. The
+publish target and `last_published` live on the Board shape feature.
 
 Inside a Boardroom project there are two editors, Composer and KiCad. Someone will edit `Edge.Cuts`
 directly at some point. That appears as a third changed copy that can be imported, and a later
@@ -226,33 +301,70 @@ regeneration must not overwrite it. This follows Composer's hash rule already in
 
 ### `board-interface`, the shared library
 
+**The neutral record** is what the crate hands to both apps. Coordinates are whole nanometres (`i64`) in
+KiCad's frame (Y down), the frame the hash uses:
+
+- Arcs: centre, start, end and a direction flag, as a Waffle Iron sketch `Arc` is stored, so nothing is
+  recomputed.
+- Circles and holes: centre and **diameter**. A KiCad drill can be an odd number of nanometres, which a
+  whole-nanometre radius cannot hold.
+- Loops of elements, each with its ID string. Holes with `plated` and `clearance`. Keepouts with `side`
+  and height limit.
+- The manifest as its own struct: `driver`, `parent`, `last_handover`, thickness, `approximate`.
+
+**Functions:** `read(dxf, manifest)` returning a typed error for each kind of malformed input, `write`,
+`hash`, `compare(base, theirs)` giving per-ID changes and the take-over classification, and `within(a, b,
+1 nm)` for the publish-nothing rule.
+
+**Rules:** no I/O and no clock, so callers pass bytes and times; no `HashMap` iteration in any output; a
+version tag to pin; and golden files both projects run in CI: a round board, a rectangle with arc corners,
+easy2350, and one file per typed error.
+
+
 A small Rust crate in its own repository, in the pattern of `board-draw`: no dependencies on any
 app, clean under WASM, MIT. It reads and writes the DXF dialect, computes the hash, and does the
 comparison and the diff, so Waffle Iron and Composer cannot drift apart in how they interpret it.
+Waffle Iron's use stays out of its kernel stack (`feature-engine` and the WASM bridge), so its kernel
+gates are not involved. With no `#[wasm_bindgen]` it has no wasm-bindgen dependency, so the version
+difference between the projects does not arise. It reuses `dxf_export.rs`'s formatting rules: nine fixed
+decimals, no exponents, `-0.0` written as `0.0`.
 
-## Pulling over a recipe
+## Pulling, locking and taking over
 
 If the bolt earring was shaped with sliders in Composer and Waffle Iron publishes a new outline, the
 generator cannot reproduce it. Waffle Iron has the same problem in reverse with a constrained sketch.
 Both apps behave the same way:
 
-1. The incoming outline becomes read-only **synced geometry**.
+1. The incoming outline becomes read-only **synced geometry**, shown locked.
 2. The old recipe is kept, set aside, with a clear warning.
-3. Editing is an explicit **take over**, which starts a new recipe from the synced shape.
+3. Editing is an explicit **take over**, which warns what is lost, starts a new recipe from the synced
+   shape, keeps its IDs, and changes `driver` on the next publish.
 
-Waffle Iron has much of this. `Derived` features are read-only, and a re-sync regenerates them in
-place so sketches on the board's faces still resolve (R1). Publishing and taking over are new.
-Updating dimensions while keeping constraints when only sizes changed is a later improvement.
+**In Waffle Iron,** a dedicated **Board shape** feature selects what is published. It references one
+sketch and holds the board name, thickness, and a role per sketch entity: outline, cutout, hole (plated
+or not, with clearance) or keepout (side and height limit). Pulled shapes arrive as `Derived`, so a
+re-sync regenerates them in place and sketches on the board's faces still resolve (R1), with holes as
+connectors keyed by interface ID. Waffle Iron has no DXF reader, so `board-interface` reads the file
+into a neutral record and a new step in `feature-engine` derives from it, sharing the outline half of
+`derive_board`. Editing the feature is an ordinary undoable edit. Publishing is not: like saving to
+git, it writes outside the document. Taking over does not bring constraints across.
 
-Composer's resolved outline is polygons, so a Waffle Iron arc would come back as many short lines
-and the two outlines would never compare equal. Composer must carry arcs through and use polygons
-only for its own algorithms.
+**In Composer,** outlines keep **true arcs** (the owner's decision):
+
+- **Synced geometry** is carried as it arrived, arcs intact, with polygons used only for Composer's own
+  algorithms. It never enters Clipper2, so it cannot change.
+- **Outlines Composer authors** publish true arcs. Clipper2 works on polygons and its rounded corners
+  are chords within 0.005 mm, so `Rect`, `Circle`, `Slot` and `corner_radius` must produce arcs as
+  segments of the published shape. How far arcs survive the add and subtract booleans has yet to be
+  worked out (Open questions). Anything still approximate is marked so in the manifest.
+
+Thickness and keepout height limits are new fields in Composer's `shape.json`.
 
 ## What crosses, and in which direction
 
 | Data | Edited in | Sync |
 |---|---|---|
-| Outline, cutouts, holes, thickness, height limits | Waffle Iron, Composer, KiCad | Both ways |
+| Outline, cutouts, holes, thickness, height limits | Waffle Iron, Composer, KiCad | Either way, one driver at a time |
 | Connector positions | Mostly Composer and KiCad, but an enclosure often dictates them | Both ways by footprint UUID, after the outline works |
 | Other part placement | Composer, KiCad | To Waffle Iron only, for now |
 | Copper and nets | KiCad, UltraRoute | Not shared, beyond the data Waffle Iron already reads |
@@ -283,52 +395,102 @@ pins follow the one pattern: what was asked for, plus what was actually loaded.
 It already has versioned sources. New:
 
 - Publishing an interface, and the interface hashes.
-- Named design releases, if they do not already exist (to confirm).
-- Linked projects must be saved in a versioned store. Browser-only storage is still the default.
+- Named releases need nothing new: a git tag already is one (`waffle_v4_document_model.md:162`).
+- Linked projects must be saved in a versioned store. Browser-only storage is still the default for
+  Waffle Iron used alone.
 
-## Where versions live: three stages
+## Where it runs: four stages
 
-All three use the same link records and the same adapter interface (`resolve_ref`, `fetch_blob`,
+All stages use the same link records and the same adapter interface (`resolve_ref`, `fetch_blob`,
 `put_file`). Only the backend changes.
 
-| Stage | Versions live in | What it gives |
-|---|---|---|
-| **1. Same tab** | IndexedDB workspace on Pages; Boardroom's server for local projects | Linked projects, staleness and pinning, no accounts |
-| **2. Git** | GitHub, or a local repo through Boardroom's server | Durable history, releases, work across machines |
-| **3. Worker relay** | Still git. The relay carries notices only | Live updates across devices and people |
+| Stage | Runs in | Versions live in | What it gives |
+|---|---|---|---|
+| **1. Local native** | Boardroom's window, on this machine | Files and git in the project, through Boardroom's server | Linked projects, staleness, pinning, real history, the terminal |
+| **2. Hosted git** | Same | GitHub and other hosts | Work across machines, and Waffle Iron standalone following a pushed interface |
+| **3. Browser** | Pages | IndexedDB workspace | Linked projects with no install |
+| **4. Worker relay** | Any | Still git. The relay carries notices only | Live updates across devices and people |
 
-### Stage 1: same tab
+### Stage 1: local native window
 
-Waffle Iron runs as a micro-app under Boardroom. Pages already gives one origin
-(`sequoia-hope.github.io/waffle-iron/`, `…/boardroom/`), and locally the `/apps/` proxy does.
+Boardroom's server already gives one origin, a file API with revisions and conflicts, git and a bus.
+Starting here (owner's direction) means versions are real commits from the first day, and removes what
+the browser made hard: per-tab workspaces, storage eviction, separate stores per address, and a
+new `Workspace` locator.
 
-- Add `waffle` to `APPS` in `app/server/src/apps.rs`, built with `BASE_PATH=/apps/waffle`.
-- Waffle Iron gets a Boardroom workspace **storage provider**, behind its existing provider
-  interface.
-- Storage is IndexedDB, not `localStorage` (`demo-spec.md`: about 5 MB, strings only, and it blocks).
-- Change notices use the existing `BroadcastChannel('boardroom')` messages.
-- Workspace revisions use git-style blob hashes, so they map onto real git at stage 2.
-- A new `Workspace` locator, because Waffle Iron treats `Local` as not shareable and its KiCad link
-  refuses it.
+- **Normal use is a static build,** `BASE_PATH=/apps/waffle npm run build` from a host checkout at a pinned
+  commit (no trailing slash; no Rust needed, as the WASM is committed). Boardroom's server serves that
+  directory itself at `/apps/waffle/`, sending unknown paths to `index.html`, as routing is client-side.
+  **Development** can proxy to Waffle Iron's dev server instead, published from its container on its
+  registered port, with Vite's hot-reload socket passed through.
+- **Boardroom's server implements `resolve_ref`, `fetch_blob` and `put_file` for local repositories,**
+  so Waffle Iron sees unpushed commits without a desktop build of its own.
+- `DocumentStore` grows `put(doc, {base}) → {rev} | {conflict}`, a rev from `get`, and optional `watch`,
+  which Waffle Iron wants anyway, so conflicts are never silently overwritten.
+- Waffle Iron fixes its root-absolute `/api` clients (`examplesApi.js`, `testCaseApi.js`,
+  `assayCaseApi.js`), which would otherwise reach Boardroom's `/api`, and the manifest's `start_url`.
+- Waffle Iron stays usable alone, and browser-only stays its default (`waffle_server_mode.md` C1).
 
 Things stage 1 must handle:
 
-- **Lasting workspaces.** `demo-spec.md` gives each tab its own. A permanent link needs a named
-  project that survives across tabs.
-- **Data safety.** Browser storage can be cleared or evicted and stays on one device, and clearing
-  the origin's site data wipes every app at once. Project export and import come early, with a "not
-  backed up" warning and `navigator.storage.persist()`.
-- **Separate addresses mean separate stores.** Pages, `localhost` through Boardroom, and Waffle
-  Iron's own port do not see each other's data. Existing Waffle Iron documents need importing.
+- **One origin is one trust boundary.** Waffle Iron keeps git host tokens in `localStorage`
+  (`git/tokens.js:8`, `github-auth.js:14`), readable by every app on that origin. Acceptable for our own
+  apps, so nothing third-party may ever be served under it.
+- **WebKitGTK.** Boardroom's window is WebKitGTK 2.52 on this machine, while the embedding test ran in
+  Chrome. Waffle Iron has to be tried there first. Playwright's WebKit is built from the same port, so its
+  nightly run is a fair stand-in for the engine: one failure, a drag test. Known traps: mouse coordinates
+  truncated to whole pixels, and two clicks in a row are not a double-click. Chromium's app window, which
+  Boardroom also supports, is the fallback.
+- **What the shell must do, which Playwright cannot show.** Checked against `app/gtk/src/main.rs`:
 
-### Stage 2: git
+  | Need | State |
+  |---|---|
+  | One persistent website-data directory shared by all windows, or documents could vanish on restart | No session is configured, so it uses WebKit's default. To set explicitly and test across a restart |
+  | Handle the `download` signal, or exports do nothing | **Missing** |
+  | WebGL and hardware acceleration | Done |
+  | No shell shortcuts taking Ctrl+Z, Ctrl+S, Delete or Escape from the page | None registered today. Keep it so |
+- Sign-in and the relay's WebSocket under COOP and COEP, not yet tested. Waffle Iron does not need
+  those headers itself and `require-corp` should not block its CORS traffic.
 
-Waffle Iron's adapters work against hosted git, so it cannot see an unpushed Boardroom commit.
-Boardroom's server implements the same three calls for local repositories, which gives Waffle Iron
-local versions without a desktop build. Waffle Iron's existing hosted adapters cover everything
-that is pushed.
+### The embedded terminal
 
-### Stage 3: Cloudflare Worker relay
+`shell-spec.md` already has Boardroom's server owning terminals over `/api/term/<id>`, as real Claude
+Code sessions. It is not built. Waffle Iron's half mostly exists: its relay is an MCP server paired with
+one tab, and its tools (sketching, features, assemblies, measuring, export) run in that tab's engine. A
+terminal session given that relay can therefore work on the document on screen, the same way it runs
+`ccomp` for Composer.
+
+- **The relay belongs to the session, not to Boardroom.** It serves one agent and one tab, so the project's
+  `.mcp.json` declares it and Claude Code starts it, on the host, with `--app-url`, `--allow-origin` set to
+  Boardroom's origin, and `--persistent-link` pointing to a secret under a gitignored `.boardroom/`.
+- **Pairing:** the agent calls `waffle_connect`, the frame opens the link and the person consents once. The
+  persistent link then survives relay restarts, so Boardroom can load the frame at it.
+- **The tab connects out to the relay,** so nothing is proxied. COEP should not cover WebSockets, but this is
+  untested and on the stage 1 checklist.
+- **Viewport tools need a visible tab.** A Waffle Iron tab behind another could have its rendering paused, so
+  those calls could hang. Either bring it forward through a `focus` message on the bus, or refuse with a clear
+  message. Other tools run in the engine worker and are unaffected.
+
+**One shell.** Waffle Iron does not build a second window. Alone, it opens in the same binary, for example
+`boardroom-gtk --app waffle`, with no project chrome. More speed comes later from `waffle-host` running the
+engine (a 44-feature model loaded in 168 s natively against 274 s in WASM), with the window as its viewer.
+
+### Stage 2: hosted git
+
+Waffle Iron's existing hosted adapters cover everything that is pushed.
+
+### Stage 3: browser
+
+Waffle Iron runs under Boardroom on Pages, on the shared origin the embedding test used. It gets a
+workspace storage provider and a `Workspace` locator, since `Local` is not shareable. Then:
+
+- **Lasting workspaces.** `demo-spec.md` gives each tab its own. A permanent link needs a named project
+  that survives across tabs.
+- **Data safety.** Browser storage can be cleared or evicted, and stays on one device. Project export
+  and import come early, with a "not backed up" warning and `navigator.storage.persist()`.
+- **Separate addresses mean separate stores.** Existing Waffle Iron documents need importing.
+
+### Stage 4: Cloudflare Worker relay
 
 Git stays the source of truth. Two browsers can already sync through GitHub, so the relay adds speed
 and reach, not storage: pushing "a new revision exists" to other devices, passing on GitHub webhooks,
@@ -369,24 +531,49 @@ lighter version of `governance/`.
 ## Milestones
 
 1. **Embedding feasibility.** Passed on 2026-11-03, with the limits listed under "Embedding test".
-   Fix Waffle Iron's large-file bug, found by that test, before relying on linked boards.
-2. **Toolchain and CI** for the three newer projects. Low risk, and everything below relies on it.
-3. **`board-interface` and the round trip.** See the acceptance test.
-4. **Composer** reads and writes the interface: `ARC`, `POLYLINE`, layers, arcs carried through, hole
-   IDs, a DXF writer.
-5. **Waffle Iron** publishes and pulls: a sketch-level writer beside the existing one, a DXF reader if
-   it has none, `BoardInterface` sources.
-6. **Links and versions in Boardroom:** `design/links.toml`, link states, the Versions view, gates
+   Waffle Iron's large-file bug, found by that test, is fixed on its `main`.
+2. **Toolchain and CI** for the three newer projects. Low risk, and can run alongside the rest.
+3. **`board-interface` and the automated round trip.** See "Acceptance tests". This is what proves the
+   data model.
+4. **Waffle Iron in Boardroom's window:** try it in WebKitGTK, the shell's storage and downloads,
+   `/apps/waffle/`, Waffle Iron's fixes, and the local repository adapters.
+5. **Waffle Iron** publishes and pulls: the Board shape feature, `BoardInterface` sources, derive from a
+   shape, kept IDs.
+6. **Composer** reads and writes the interface: true arcs, `ARC`, `POLYLINE`, layers, hole IDs, board
+   thickness, keepout height limits, a DXF writer, the locked state and unlock.
+7. **The owner's hands-on test.** See "Acceptance tests".
+8. **Links and versions in Boardroom:** `design/links.toml`, link states, the Versions view, gates
    recording revisions.
-7. **Embedded for real:** `/apps/waffle/`, the workspace storage provider, the `Workspace` locator.
-8. **Git backend,** then connector positions, shared UI package and shared `kicad-pcb`.
-9. **Worker relay.**
+9. **The embedded terminal,** reaching Waffle Iron through its relay.
+10. **Hosted git,** then connector positions, shared UI package and shared `kicad-pcb`.
+11. **Browser stage,** then the **Worker relay.**
 
-### Acceptance test for the data model
+### Who does what, and at what pace
 
-No UI. easy2350's outline goes from KiCad to the DXF, through Composer, through Waffle Iron and back,
-and the geometry hash must be identical at the end. easy2350's rounded corners exercise the arcs that
-Composer cannot read today. If this holds, the model works.
+- **Boardroom agent:** `board-interface`, Composer's side, Boardroom's static serving, shell work and local
+  repository adapters.
+- **Waffle Iron agent:** the `feature-engine` round-trip test, the derive step, the Board shape feature, its
+  `/api` and `start_url` fixes, and the `DocumentStore` change.
+
+**Waffle Iron's kernel 1.0 stays first (owner, as reported by its agent).** Its pieces are built alongside by
+delegated agents, starting with the small app fixes, then the Board shape feature and derive step once the
+record is agreed. Work that needs Waffle Iron sooner is asked for explicitly and goes to the owner.
+
+### Acceptance tests
+
+**Automated, for the data model.** No UI. easy2350's outline goes from KiCad to the DXF, through Composer,
+through Waffle Iron and back, and the geometry hash must be identical at the end. easy2350's rounded
+corners exercise the arcs that Composer cannot read today. Waffle Iron's part is a Rust test in
+`feature-engine`: read the files, derive the `Derived` features, rebuild the board solid through the real
+kernel adapter, read the shape back through the Board shape feature, publish, and compare hashes. It also
+checks that the solid's volume equals area × thickness, which catches a cutout that came in as an added
+region. It covers the Y flip, arc direction under the flip, arcs through a sketch `Arc`, and IDs
+surviving a derive.
+
+**By hand, for the whole experience (owner).** In Boardroom's window, draw a circular or rectangular
+board outline in Waffle Iron and publish it. It appears in Composer, locked, with "Outline controlled by
+Waffle Iron". Change it in Waffle Iron, and Composer reports the update and pulls it. Unlock it in
+Composer, see the warning, change it there, and Waffle Iron then shows it locked.
 
 ## Embedding test (2026-11-03)
 
@@ -424,7 +611,7 @@ that instead of the board.
 Measured on the deployed build: with the default cache the second request returned 1,303 bytes of JSON;
 with `cache: 'no-store'` it returned the 1,294,055-byte board. A regression test against a real local
 server with GitHub's headers failed the same way and passes with `cache: 'no-store'` on that request.
-That fix is on Waffle Iron's `fix/git-raw-cache` branch, not yet on its `main`. Git links on the local
+That fix landed on Waffle Iron's `main` as `592c813f`. Git links on the local
 setup passed only because Playwright's request interception turns the HTTP cache off, so that pass is
 not evidence that local works.
 
@@ -449,16 +636,14 @@ not evidence that local works.
 
 ## Open questions
 
-1. **Sync explicit?** Recommended yes. Automatic sync would feel more seamless, but an edit in one app
-   could then invalidate a routed board without anyone choosing that. (Owner)
-2. **Boardroom as the suite's main window?** Recommended yes, with Waffle Iron fully usable alone.
-   Boardroom's phases and gates would then have to allow mechanical-only projects. (Owner)
-3. **Separate repositories as the default?** Recommended, with one-repo products supported. (Owner)
-4. **DXF R12 and extended data.** R12 is believed to support extended entity data, which needs its
-   application name in the `TABLES` section that Waffle Iron does not write today. To confirm against
-   a real parser and against the CAD tools people will re-save with. (Waffle Iron)
-5. **Arc precision through DXF,** to the nanometre. (Round-trip test)
-6. **Does Waffle Iron need a DXF reader?** Only an exporter was found. (Waffle Iron)
-7. **Which Composer outline wins inside a project** when a person edits `Edge.Cuts` and then Composer
+1. **Boardroom as the suite's main window?** Recommended yes, with Waffle Iron fully usable alone, and
+   Waffle Iron agrees. Boardroom's phases and gates would then have to allow mechanical-only projects.
+   (Owner)
+2. **Separate repositories as the default?** Recommended, with one-repo products through a `Relative`
+   locator, and Waffle Iron agrees. (Owner)
+3. **DXF R12 and extended data.** Do real readers keep it, with its name in an `APPID` table? To settle
+   with `ezdxf` reading it back and a re-save through KiCad and LibreCAD. KiCad is expected to drop it,
+   which is what the manifest covers. (`board-interface`)
+4. **Arcs through Composer's booleans.** Which arcs survive add and subtract, and how? (Composer)
+5. **Which Composer outline wins inside a project** when a person edits `Edge.Cuts` and then Composer
    regenerates? (Composer)
-8. **Mechanical-placement hash:** exactly which fields does Waffle Iron depend on? (Waffle Iron)
