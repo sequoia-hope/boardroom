@@ -24,6 +24,10 @@ workflow, and neither app is the permanent owner of the board's shape.
 It runs as one local power app: Boardroom's native window, with Waffle Iron and Composer inside it,
 project files and git on disk, and an embedded terminal that can reach all of them.
 
+**Boardroom is home (the owner's decision):** the program you open first, holding the project list, links,
+notices and terminals, with its phases and gates relaxed for mechanical-only projects. Waffle Iron stays
+the bigger program, opens from it in its own full window if wanted, and stays fully usable alone.
+
 ## The owner's direction
 
 1. **A continuous lifecycle, not a handoff.** Board and CAD designs are always being updated.
@@ -636,14 +640,11 @@ not evidence that local works.
 
 ## Open questions
 
-1. **Boardroom as the suite's main window?** Recommended yes, with Waffle Iron fully usable alone, and
-   Waffle Iron agrees. Boardroom's phases and gates would then have to allow mechanical-only projects.
-   (Owner)
-2. **Separate repositories as the default?** Recommended, with one-repo products through a `Relative`
+1. **Separate repositories as the default?** Recommended, with one-repo products through a `Relative`
    locator, and Waffle Iron agrees. (Owner)
-3. **DXF R12 and extended data.** Do real readers keep it, with its name in an `APPID` table? To settle
+2. **DXF R12 and extended data.** Do real readers keep it, with its name in an `APPID` table? To settle
    with `ezdxf` reading it back and a re-save through KiCad and LibreCAD. KiCad is expected to drop it,
    which is what the manifest covers. (`board-interface`)
-4. **Arcs through Composer's booleans.** Which arcs survive add and subtract, and how? (Composer)
-5. **Which Composer outline wins inside a project** when a person edits `Edge.Cuts` and then Composer
+3. **Arcs through Composer's booleans.** Which arcs survive add and subtract, and how? (Composer)
+4. **Which Composer outline wins inside a project** when a person edits `Edge.Cuts` and then Composer
    regenerates? (Composer)
