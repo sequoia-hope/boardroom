@@ -288,6 +288,8 @@ seen. The revision chain settles it:
   Its own file stays in its history and is not rewritten.
 - **A take over counts only if its parent is the driver's latest revision.** Taking over from an older
   one would silently drop a change the person never saw, so it is reported like the next case.
+- `last_handover.from_revision` records that revision. The new driver may publish again before the old one
+  next checks, and then the newest manifest's parent no longer names the old driver's revision.
 - Two revisions with the same parent mean competing take overs: both people changed it before either
   saw the other. The suite reports this, changes nothing, and a person picks one, as it does for edits
   outside the suite. So apps cannot silently overwrite each other, though they can still collide.
@@ -314,7 +316,10 @@ KiCad's frame (Y down), the frame the hash uses:
   whole-nanometre radius cannot hold.
 - Loops of elements, each with its ID string. Holes with `plated` and `clearance`. Keepouts with `side`
   and height limit.
-- The manifest as its own struct: `driver`, `parent`, `last_handover`, thickness, `approximate`.
+- The manifest as its own struct: `driver`, `parent`, `last_handover` (who, when, and the revision taken over
+  from), thickness, `approximate`.
+- An arc's direction flag is `angle_increasing`: true when the sweep from start to end increases
+  `atan2(y - cy, x - cx)` in KiCad's Y-down frame, which looks clockwise on screen.
 
 **Functions:** `read(dxf, manifest)` returning a typed error for each kind of malformed input, `write`,
 `hash`, `compare(base, theirs)` giving per-ID changes and the take-over classification, and `within(a, b,
@@ -449,10 +454,10 @@ Things stage 1 must handle:
 
   | Need | State |
   |---|---|
-  | One persistent website-data directory shared by all windows, or documents could vanish on restart | No session is configured, so it uses WebKit's default. To set explicitly and test across a restart |
-  | Handle the `download` signal, or exports do nothing | **Missing** |
-  | WebGL and hardware acceleration | Done |
-  | No shell shortcuts taking Ctrl+Z, Ctrl+S, Delete or Escape from the page | None registered today. Keep it so |
+  | One persistent website-data directory shared by all windows | Done, at the location WebKit already used, and survives a restart |
+  | Handle the `download` signal | Done: saves to Downloads, numbered on a clash, with a notice bar |
+  | WebGL and hardware acceleration | Done. WebKitGTK reports a fake "Apple GPU", so read the process's mapped libraries to check |
+  | No shell shortcuts taking Ctrl+Z, Ctrl+S, Delete or Escape from the page | None registered. Synthetic events reach the page; a real keyboard is still to be checked by hand |
 - Sign-in and the relay's WebSocket under COOP and COEP, not yet tested. Waffle Iron does not need
   those headers itself and `require-corp` should not block its CORS traffic.
 
@@ -478,6 +483,13 @@ terminal session given that relay can therefore work on the document on screen, 
 **One shell.** Waffle Iron does not build a second window. Alone, it opens in the same binary, for example
 `boardroom-gtk --app waffle`, with no project chrome. More speed comes later from `waffle-host` running the
 engine (a 44-feature model loaded in 168 s natively against 274 s in WASM), with the window as its viewer.
+
+### Tried for real, 2026-11-03
+
+Waffle Iron's static build at `/apps/waffle/` in `boardroom-gtk` on WebKitGTK 2.52: the engine boots in about
+1 s with no console errors, on hardware WebGL2 (NVIDIA). A solid modelled through `window.__waffle`, exported as
+an STL through the real download path, saved to Waffle Iron's IndexedDB, and reopened after a full restart.
+Not tested: a real keyboard, picking precision, camera feel, sign-in and write-back, and the relay's WebSocket.
 
 ### Stage 2: hosted git
 
@@ -565,6 +577,9 @@ record is agreed. Work that needs Waffle Iron sooner is asked for explicitly and
 
 ### Acceptance tests
 
+`board-interface` 0.1.0 passes its side of the first test below: easy2350's golden matches KiCad's own DXF
+export in area, perimeter and bounding box, and a reader fuzz of 400,000 mutated files found no panics.
+
 **Automated, for the data model.** No UI. easy2350's outline goes from KiCad to the DXF, through Composer,
 through Waffle Iron and back, and the geometry hash must be identical at the end. easy2350's rounded
 corners exercise the arcs that Composer cannot read today. Waffle Iron's part is a Rust test in
@@ -642,9 +657,9 @@ not evidence that local works.
 
 1. **Separate repositories as the default?** Recommended, with one-repo products through a `Relative`
    locator, and Waffle Iron agrees. (Owner)
-2. **DXF R12 and extended data.** Do real readers keep it, with its name in an `APPID` table? To settle
-   with `ezdxf` reading it back and a re-save through KiCad and LibreCAD. KiCad is expected to drop it,
-   which is what the manifest covers. (`board-interface`)
+2. **DXF extended data in other CAD programs.** `ezdxf` keeps it through a read and re-save, with an identical
+   record and hash, and files without it are read and matched by geometry. `kicad-cli` cannot re-save a DXF.
+   LibreCAD and KiCad's and others' interactive import are untested. (`board-interface`)
 3. **Arcs through Composer's booleans.** Which arcs survive add and subtract, and how? (Composer)
 4. **Which Composer outline wins inside a project** when a person edits `Edge.Cuts` and then Composer
    regenerates? (Composer)
