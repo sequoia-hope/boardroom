@@ -87,7 +87,7 @@ class Sheet(Schematic):
 
 def build() -> Sheet:
     s = Sheet("easy2350", title="easy2350", rev="A", date="2026-10-23",
-              company="github.com/sequoia-hope/easy_pcb", paper="A3",
+              company="github.com/sequoia-hope/boardroom", paper="A3",
               comments=["RP2350A dev board, 21 x 51 mm", "CERN-OHL-P-2.0", "Author: Sequoia Alexander",
                         "Drawn by scripts/schematic.py"],
               libs=SymbolLib([HW / "lib/easy2350.kicad_sym"]))

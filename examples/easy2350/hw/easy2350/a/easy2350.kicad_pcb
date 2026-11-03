@@ -11,7 +11,7 @@
 		(title "easy2350")
 		(date "2026-10-23")
 		(rev "A")
-		(company "github.com/sequoia-hope/easy_pcb")
+		(company "github.com/sequoia-hope/boardroom")
 	)
 	(layers
 		(0 "F.Cu" signal)

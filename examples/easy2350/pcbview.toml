@@ -3,10 +3,10 @@
 #     scripts/view.sh build examples/easy2350/pcbview.toml
 
 title = "easy2350"
-subtitle = "easy_pcb worked example"
+subtitle = "Boardroom worked example"
 out = "viewer"
 back = { href = "../index.html", label = "Project page" }
-repo = "https://github.com/sequoia-hope/easy_pcb"
+repo = "https://github.com/sequoia-hope/boardroom"
 
 [[boards]]
 id = "easy2350-a"

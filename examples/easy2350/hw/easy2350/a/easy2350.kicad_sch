@@ -8,7 +8,7 @@
 		(title "easy2350")
 		(date "2026-10-23")
 		(rev "A")
-		(company "github.com/sequoia-hope/easy_pcb")
+		(company "github.com/sequoia-hope/boardroom")
 		(comment 1 "RP2350A dev board, 21 x 51 mm")
 		(comment 2 "CERN-OHL-P-2.0")
 		(comment 3 "Author: Sequoia Alexander")
