@@ -417,13 +417,16 @@ Both setups, unless noted:
 **Linking a `.kicad_pcb` over 1 MiB from GitHub fails**, standalone and embedded, with `syntax error
 at line 1, column 1: expected '('`. For such files `fetchBlob` in Waffle Iron's
 `app/src/lib/storage/git/hosts.js` gets a JSON reply with no content, then requests the same URL again
-with the raw media type. GitHub's reply carries no `Vary` header that the browser honours here, so the
-browser's HTTP cache returns the JSON again, and the parser receives that instead of the board.
+with the raw media type. GitHub sends `Vary: Accept` but gives both replies the same ETag. The browser
+can revalidate its cached JSON with that ETag, get a 304, and return the JSON, so the parser receives
+that instead of the board.
 
 Measured on the deployed build: with the default cache the second request returned 1,303 bytes of JSON;
-with `cache: 'no-store'` it returned the 1,294,055-byte board. The likely fix is passing `cache:
-'no-store'` on that request. Git links on the local setup passed only because Playwright's request
-interception turns the HTTP cache off, so that pass is not evidence that local works.
+with `cache: 'no-store'` it returned the 1,294,055-byte board. A regression test against a real local
+server with GitHub's headers failed the same way and passes with `cache: 'no-store'` on that request.
+That fix is on Waffle Iron's `fix/git-raw-cache` branch, not yet on its `main`. Git links on the local
+setup passed only because Playwright's request interception turns the HTTP cache off, so that pass is
+not evidence that local works.
 
 ### Other observations
 
