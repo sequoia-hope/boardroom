@@ -230,7 +230,7 @@ are put to the person.
 {
   "schema": 1,
   "board": "easy2350",
-  "revision": "<geometry hash>",
+  "revision": "rev:sha256:<derived, see below>",
   "parent": "<revision this was based on, or null>",
   "author": {"app": "waffle", "source": "<commit or workspace revision>", "at": "2026-11-03T12:00:00Z"},
   "driver": "waffle",
@@ -240,6 +240,19 @@ are put to the person.
   "approximate": false
 }
 ```
+
+`revision` is not the geometry hash. The crate derives it, `revision(manifest)`, by hashing
+`geometry_hash`, `driver`, `parent` and `last_handover` together, and both apps must use that
+function (or its documented encoding), never their own. Because the parent is part of it, a revision
+always differs from its parent: a take over with no edits still gets a new revision, and a publish
+that restores an earlier shape does not repeat an old one. Each revision commits to its whole
+ancestry, as a git commit does. `geometry_hash` stays geometry only, so "did the shape change" is
+still a comparison of geometry hashes. `author` is provenance and is not hashed into either.
+
+Before board-interface 0.2.0 the revision was the geometry hash, so a take over with no edits had
+`revision == parent`, and what followed it was misclassified (an edit after it looked like competing
+take overs). Files written that way still read and compare, since `compare` treats revisions as
+opaque strings.
 
 ### The geometry hash
 
@@ -282,7 +295,8 @@ In separate repositories there is no shared lock, so "refused" can only be enfor
 seen. The revision chain settles it:
 
 - Each publish names its `parent`. A take over is a publish whose `driver` differs from its parent's,
-  with `last_handover` recording who and when.
+  with `last_handover` recording who and when. It may change no geometry at all, and it is still a
+  publish with its own revision.
 - The current shape is the newest revision reachable through parents, whichever repository holds it.
   The old driver sees the new revision through its link, shows the outline locked, and stops publishing.
   Its own file stays in its history and is not rewritten.
@@ -322,12 +336,13 @@ KiCad's frame (Y down), the frame the hash uses:
   `atan2(y - cy, x - cx)` in KiCad's Y-down frame, which looks clockwise on screen.
 
 **Functions:** `read(dxf, manifest)` returning a typed error for each kind of malformed input, `write`,
-`hash`, `compare(base, theirs)` giving per-ID changes and the take-over classification, and `within(a, b,
+`hash`, `revision(manifest)` and `seal(record)` (geometry hash, then revision, called last before
+`write`), `compare(base, theirs)` giving per-ID changes and the take-over classification, and `within(a, b,
 1 nm)` for the publish-nothing rule.
 
 **Rules:** no I/O and no clock, so callers pass bytes and times; no `HashMap` iteration in any output; a
 version tag to pin; and golden files both projects run in CI: a round board, a rectangle with arc corners,
-easy2350, and one file per typed error.
+easy2350, a take over with no edits (`handover`), and one file per typed error.
 
 
 A small Rust crate in its own repository, in the pattern of `board-draw`: no dependencies on any
@@ -579,6 +594,8 @@ record is agreed. Work that needs Waffle Iron sooner is asked for explicitly and
 
 `board-interface` 0.1.0 passes its side of the first test below: easy2350's golden matches KiCad's own DXF
 export in area, perimeter and bounding box, and a reader fuzz of 400,000 mutated files found no panics.
+0.2.0 derives `revision` in the crate (see `board-shape.json`), fixing a false conflict after a take over
+with no edits ([board-interface#1](https://github.com/sequoia-hope/board-interface/issues/1)).
 
 **Automated, for the data model.** No UI. easy2350's outline goes from KiCad to the DXF, through Composer,
 through Waffle Iron and back, and the geometry hash must be identical at the end. easy2350's rounded
