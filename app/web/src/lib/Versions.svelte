@@ -76,6 +76,16 @@
 
   const short = (sha) => (sha ? String(sha).slice(0, 7) : '—');
   const mm = (nm) => (Math.abs(nm) / 1_000_000).toFixed(2);
+  const release = $derived(project?.release ?? null);
+  const releaseLinks = $derived(release?.links ?? []);
+  const linkById = $derived(Object.fromEntries(links.map((l) => [l.id, l])));
+
+  function shortRev(rev) {
+    if (!rev) return '—';
+    if (rev.startsWith('rev:sha256:') && rev.length > 18) return `rev:${rev.slice(11, 18)}`;
+    if (rev.startsWith('sha256:') && rev.length > 14) return rev.slice(0, 14);
+    return rev.length > 20 ? `${rev.slice(0, 18)}…` : rev;
+  }
 
   function driverName(driver) {
     if (driver === 'waffle') return 'Waffle Iron';
@@ -263,6 +273,44 @@
 </script>
 
 <div class="versions">
+  {#if release}
+    <section class="built-section" aria-label="Built against">
+      <div class="sec-head">
+        <h3 class="label">Built against (gate 10)</h3>
+        {#if release.judged_at}
+          <span class="muted release-date">{release.judged_at.replace('T', ' ').replace(/Z$/, ' UTC')}</span>
+        {/if}
+      </div>
+      {#if releaseLinks.length}
+        <div class="card built-card">
+          <ul class="built-list">
+            {#each releaseLinks as rl (rl.id)}
+              {@const live = linkById[rl.id]}
+              {@const resolvedNow = live?.resolved?.commit ?? rl.resolved_commit ?? null}
+              <li class="built-row" data-release-link={rl.id}>
+                <span class="built-id">{rl.id}</span>
+                <span class="mono" title={rl.commit}>commit {short(rl.commit)}</span>
+                {#if rl.revision}
+                  <span class="muted mono" title={rl.revision}>· {shortRev(rl.revision)}</span>
+                {/if}
+                {#if live?.state === 'PinnedBehind'}
+                  <span class="built-flag info">pinned behind latest ({short(live.latest?.commit)})</span>
+                {/if}
+                {#if resolvedNow === null}
+                  <span class="built-flag warn">removed from links.toml</span>
+                {:else if resolvedNow !== rl.commit}
+                  <span class="built-flag warn">links.toml is now at {short(resolvedNow)}</span>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {:else}
+        <p class="muted empty-links">Built against local project files (no linked projects at gate 10).</p>
+      {/if}
+    </section>
+  {/if}
+
   {#if !api.STATIC || links.length}
     <section class="links-section">
       <div class="sec-head">
@@ -482,10 +530,64 @@
     gap: 20px;
   }
 
+  .built-section,
   .links-section {
     display: flex;
     flex-direction: column;
     gap: 10px;
+  }
+
+  .release-date {
+    font-size: 12px;
+  }
+
+  .built-card {
+    padding: 10px 14px;
+  }
+
+  .built-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .built-row {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    font-size: 13px;
+    overflow-wrap: anywhere;
+  }
+
+  .built-row + .built-row {
+    padding-top: 6px;
+    border-top: 1px solid var(--line);
+  }
+
+  .built-id {
+    font-weight: 600;
+  }
+
+  .built-flag {
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 1px 8px;
+    border-radius: 10px;
+  }
+
+  .built-flag.info {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  .built-flag.warn {
+    background: var(--warn-soft);
+    border: 1px solid var(--stale);
+    color: var(--warn);
   }
 
   .sec-head {

@@ -4,8 +4,9 @@
 
   // A project's markdown: a list on the left, the chosen file rendered.
   // `filter` picks which files this tab shows; `selected` can be set from
-  // outside (a click on a gate cell or a link).
-  let { project, filter = () => true, selected = $bindable(null), titles = {} } = $props();
+  // outside (a click on a gate cell or a link). `gates` passes gate status
+  // on the Gates tab so stale gates and their reasons appear.
+  let { project, filter = () => true, selected = $bindable(null), titles = {}, gates = [] } = $props();
 
   let files = $state([]);
   let html = $state('');
@@ -59,27 +60,120 @@
   }
 
   const label = (f) => titles[f] ?? f.split('/').pop().replace(/\.md$/, '');
+  const gateByFile = $derived(Object.fromEntries(gates.filter((g) => g.file).map((g) => [g.file, g])));
+  const staleGates = $derived(gates.filter((g) => g.state === 'stale'));
+  const selectedGate = $derived(selected ? gateByFile[selected] : null);
+  const staleWords = (why) => {
+    if (!why) return 'stale';
+    return /^gate \d+ is stale$/.test(why) ? `because ${why}` : why;
+  };
 </script>
 
-<div class="docs">
-  <nav class="card">
-    {#each files as f (f)}
-      <button class:on={f === selected} onclick={() => (selected = f)}>{label(f)}</button>
-    {:else}
-      <p class="muted pad">No documents yet.</p>
-    {/each}
-  </nav>
-  <article class="card md">
-    {#if error}
-      <p class="err">{error}</p>
-    {:else if html}
-      <div class="path mono muted">{selected}</div>
-      {@html html}
-    {/if}
-  </article>
+<div class="docs-wrap">
+  {#if staleGates.length}
+    <section class="card gate-stale-list" aria-label="Stale gates">
+      <h3 class="label">Stale gates</h3>
+      <ul>
+        {#each staleGates as g (g.phase)}
+          <li>
+            {#if g.file && files.includes(g.file)}
+              <button class="gate-jump" class:on={selected === g.file} onclick={() => (selected = g.file)}>
+                {g.phase} · {g.name}
+              </button>
+            {:else}
+              <span class="gate-jump-label">{g.phase} · {g.name}</span>
+            {/if}
+            <span class="gate-why">{staleWords(g.stale_because)}</span>
+          </li>
+        {/each}
+      </ul>
+    </section>
+  {/if}
+
+  <div class="docs">
+    <nav class="card">
+      {#each files as f (f)}
+        {@const g = gateByFile[f]}
+        <button class:on={f === selected} class:is-stale={g?.state === 'stale'} onclick={() => (selected = f)}>
+          <span>{label(f)}</span>
+          {#if g?.state === 'stale'}<span class="gate-chip">stale</span>{/if}
+        </button>
+      {:else}
+        <p class="muted pad">No documents yet.</p>
+      {/each}
+    </nav>
+    <article class="card md">
+      {#if selectedGate?.state === 'stale'}
+        <div class="gate-banner">
+          <span class="gate-chip">stale</span>
+          <span>{staleWords(selectedGate.stale_because)}</span>
+        </div>
+      {/if}
+      {#if error}
+        <p class="err">{error}</p>
+      {:else if html}
+        <div class="path mono muted">{selected}</div>
+        {@html html}
+      {/if}
+    </article>
+  </div>
 </div>
 
 <style>
+  .docs-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .gate-stale-list {
+    padding: 10px 14px;
+    border-color: var(--stale);
+  }
+
+  .gate-stale-list h3 {
+    margin-bottom: 6px;
+  }
+
+  .gate-stale-list ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .gate-stale-list li {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    font-size: 13px;
+  }
+
+  .gate-jump {
+    border: none;
+    background: none;
+    padding: 0;
+    font-weight: 600;
+    color: var(--accent);
+    text-align: left;
+  }
+
+  .gate-jump:hover {
+    text-decoration: underline;
+  }
+
+  .gate-jump-label {
+    font-weight: 600;
+  }
+
+  .gate-why {
+    color: var(--muted);
+    overflow-wrap: anywhere;
+  }
+
   .docs {
     display: grid;
     grid-template-columns: 210px minmax(0, 1fr);
@@ -98,6 +192,10 @@
   }
 
   nav button {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
     text-align: left;
     border: none;
     background: none;
@@ -113,6 +211,31 @@
     background: var(--accent-soft);
     color: var(--accent);
     font-weight: 600;
+  }
+
+  .gate-chip {
+    flex-shrink: 0;
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 0 6px;
+    border-radius: 8px;
+    background: var(--warn-soft);
+    border: 1px solid var(--stale);
+    color: var(--warn);
+  }
+
+  .gate-banner {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 6px 8px;
+    margin-bottom: 10px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    background: var(--warn-soft);
+    border: 1px solid var(--stale);
+    font-size: 13px;
+    overflow-wrap: anywhere;
   }
 
   .pad {

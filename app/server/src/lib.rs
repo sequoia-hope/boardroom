@@ -2,6 +2,7 @@ pub mod apps;
 pub mod config;
 pub mod examples;
 pub mod files;
+pub mod gates;
 pub mod links;
 pub mod problem;
 pub mod project;

@@ -467,7 +467,7 @@
           {#if tab === 'overview'}
             <Overview project={sel} ongate={gotoGate} onlink={followLink} />
           {:else if tab === 'gates'}
-            <Docs project={sel} filter={(f) => f.startsWith('design/gates/') && !f.endsWith('README.md')} bind:selected={gateDoc} titles={gateTitles} />
+            <Docs project={sel} filter={(f) => f.startsWith('design/gates/') && !f.endsWith('README.md')} bind:selected={gateDoc} titles={gateTitles} gates={sel.gates} />
           {:else if tab === 'documents'}
             <Docs project={sel} filter={(f) => !f.startsWith('design/gates/')} bind:selected={doc} titles={docTitles} />
           {:else if tab === 'board'}

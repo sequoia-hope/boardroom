@@ -211,6 +211,21 @@ async fn projects(
 ) -> impl IntoResponse {
     let may_write = peer.ip().is_loopback();
     let entries = app.list.lock().unwrap().projects.clone();
+    // Evaluate links first when `design/links.toml` exists so `.boardroom/links/` is
+    // materialized and quiet `NewRevisionNoInterfaceChange` commit advances land before
+    // `project::summarize` checks gate input records and Gate 10's release commits.
+    let mut preloaded: HashMap<PathBuf, Vec<LinkStatus>> = HashMap::new();
+    for e in &entries {
+        if e.path.is_dir()
+            && e.path.join("design/links.toml").is_file()
+            && let Ok(statuses) =
+                links::list_links(&e.path, &app.links_cache, false, may_write).await
+        {
+            note_link_states(&app, &config::project_id(&e.path), &statuses, false);
+            preloaded.insert(e.path.clone(), statuses);
+        }
+    }
+
     let mut summaries = tokio::task::spawn_blocking(move || {
         let mut out: Vec<_> = entries
             .iter()
@@ -227,13 +242,8 @@ async fn projects(
     .unwrap_or_default();
 
     for s in &mut summaries {
-        if s.exists
-            && s.path.join("design/links.toml").is_file()
-            && let Ok(statuses) =
-                links::list_links(&s.path, &app.links_cache, false, may_write).await
-        {
-            note_link_states(&app, &s.id, &statuses, false);
-            for need in links::needs_from_statuses(&statuses) {
+        if let Some(statuses) = preloaded.get(&s.path) {
+            for need in links::needs_from_statuses(statuses) {
                 if !s.needs_user.iter().any(|n| n.id == need.id) {
                     s.needs_user.push(need);
                 }
@@ -312,7 +322,9 @@ async fn remove_project(
             .map_err(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     }
     if let Some(w) = app.watcher.lock().unwrap().as_mut() {
-        let _ = w.unwatch(&path.join("design"));
+        for sub in ["design", "hw", "interface"] {
+            let _ = w.unwatch(&path.join(sub));
+        }
     }
     let _ = app
         .bus
@@ -856,11 +868,13 @@ fn start_watcher(app: &Shared) {
 
 fn watch(app: &App, root: &Path) {
     if let Some(w) = app.watcher.lock().unwrap().as_mut() {
-        let design = root.join("design");
-        if design.is_dir()
-            && let Err(e) = w.watch(&design, RecursiveMode::Recursive)
-        {
-            eprintln!("boardroom: can't watch {}: {e}", design.display());
+        for sub in ["design", "hw", "interface"] {
+            let dir = root.join(sub);
+            if dir.is_dir()
+                && let Err(e) = w.watch(&dir, RecursiveMode::Recursive)
+            {
+                eprintln!("boardroom: can't watch {}: {e}", dir.display());
+            }
         }
     }
 }

@@ -19,6 +19,8 @@ python3 $S/autoroute.py hw/main/a --planes In1.Cu,In2.Cu    # phase 7: ultrarout
 python3 $S/stitch.py hw/main/a --net GND --pads 'C*' --pads U3:6 --tag padvias --lock   # phase 7, before routing
 python3 $S/stitch.py hw/main/a --net GND --net +3V3 --grid 1.6 --fix   # phase 7: stitching vias
 python3 $S/render.py hw/main/a design/renders    # every visual gate: top/bottom/layers/3D/assembly/schematic
+python3 $S/gate_inputs.py record N               # every passed gate: write design/gates/phaseN.inputs.json
+python3 $S/gate_inputs.py check                  # check whether any recorded gate input changed
 .venv/bin/python $S/gerber_render.py hw/main/a/fab/gerbers design/renders/gerbers   # phase 10 (pip install gerbonara)
 ```
 
@@ -35,6 +37,7 @@ python3 $S/render.py hw/main/a design/renders    # every visual gate: top/bottom
 | — | `stitch.py` | **done** | 7 | ground vias at decoupler and regulator pads (before routing, locked); stitching vias: a grid in the pours that keeps off silk text, one in every pour fragment, and vias for plane-net pads/tracks the router left without one; every via clear of silk text. `--pads REF:N` means N vias round REF, not pin N; pad vias ignore the regenerated "stitch" group, and with `--wired` count only a via a track joins to the pad (a net with no outer pour), so give any power pin the router may strand (a flash VCC) a pad via before routing |
 | — | `render.py` | **done** | 2, 6, 7, 9, 10 | the gate renders in one command: top and bottom with the silk painted over the copper (a single KiCad plot hides silk under copper), each copper layer, 3D both sides, assembly drawing, schematic PDF |
 | — | `gerber_render.py` | **done** | 10 | the gerber review outside KiCad: parses the fab gerbers and drills with gerbonara, prints objects per layer, renders each layer (headless Chrome; ImageMagick's SVG renderer blanks the silk) |
+| — | `gate_inputs.py` | **done** | 0–10 | records `design/gates/phaseN.inputs.json` when gate `N` passes (`record N`) and recomputes file, board-aspect (outline, placement, copper), link, and own-interface hashes to report stale gates (`check [N]`) |
 | — | `via_nudge.py` | **done** | 7 | moves unlocked router vias out from under silk text (labels that can't be reserved without blocking the router), dragging their track ends, keeping the change only if DRC gets no worse |
 | 6 | `current_check.py` | spec | 7 | narrowest copper neck and via count per power net vs `nets.csv` |
 | 7 | `plane_check.py` | spec | 7 | GND plane splits/slots, high-speed traces crossing them |

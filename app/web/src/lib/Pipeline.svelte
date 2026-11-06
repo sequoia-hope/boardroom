@@ -9,6 +9,7 @@
     stale: 'stale',
     not_started: 'not started',
   };
+  const staleTip = (why) => (/^gate \d+ is stale$/.test(why) ? `because ${why}` : why);
 </script>
 
 <ol class="pipe">
@@ -17,7 +18,7 @@
       <button
         class="cell {g.state}"
         class:here={g.phase === current}
-        title="{g.phase} {g.name}: {words[g.state] ?? g.state}{g.signoff ? ' · you sign off' : ''}{g.stale_because ? ` · ${g.stale_because}` : ''}"
+        title="{g.phase} {g.name}: {words[g.state] ?? g.state}{g.signoff ? ' · you sign off' : ''}{g.stale_because ? ` · ${staleTip(g.stale_because)}` : ''}"
         onclick={() => onpick(g)}
         disabled={!g.file}
       >

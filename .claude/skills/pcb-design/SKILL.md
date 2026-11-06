@@ -31,6 +31,7 @@ The work runs in phases. Each phase ends at a **gate**: a file in `design/gates/
     sim/                phase 8: one folder per simulation
     decisions.md        running log: decision, reasoning, alternatives, date
     gates/phaseN.md     gate checklists with evidence and review findings
+    gates/phaseN.inputs.json  hashes of inputs judged when gate N passed
     status.json         what the project page shows: phase, activity, what you need from the user
     pcbview-requests.md change requests for the viewer
   hw/<board>/<variant>/ the tool project for each board variant
@@ -78,12 +79,33 @@ Detail for each phase lives in `references/`. Read the reference file for a phas
 2. Export renders (schematic PDF, per-layer copper, top/bottom with silk, 3D) for anything visual: `scripts/render.py <hw dir> design/renders`. Look at them yourself before the reviewer does.
 3. Spawn an independent reviewer (see "Model routing" below) with only the artifacts and the checklist.
 4. Fix findings, or dispute them in `decisions.md` with reasoning. Re-review if anything significant changed.
-5. Update `design/status.json` and regenerate the viewer (`scripts/view.sh build pcbview.toml`) so the user can see the new state from their phone.
-6. If the phase needs user sign-off, stop and say exactly what you need them to decide.
+5. When the gate passes (after user sign-off on sign-off gates), record the inputs it judged: `python3 .claude/skills/pcb-design/scripts/gate_inputs.py record N`. This writes `design/gates/phaseN.inputs.json` beside `phaseN.md` so Boardroom and `gate_inputs.py check` automatically detect when any input changes later.
+6. Update `design/status.json` and regenerate the viewer (`scripts/view.sh build pcbview.toml`) so the user can see the new state from their phone.
+7. If the phase needs user sign-off, stop and say exactly what you need them to decide.
+
+### Gate inputs
+
+`scripts/gate_inputs.py` hashes these inputs per gate (board paths come from active `[[boards]]` entries in `pcbview.toml`, falling back to `hw/<board>/<variant>/`; links come from `design/links.toml` and `.boardroom/links/<id>/board-shape.json`; own interfaces come from `interface/<board>/board-shape.json`):
+
+| Gate | Judged inputs |
+|------|---------------|
+| 0 | `design/intent.md` |
+| 1 | `design/intent.md`, `design/architecture.md` (if present), `design/datasheets/sources.csv` (if present), `design/parts/*` |
+| 2 | `design/parts/*`, board `.kicad_sch` files |
+| 3 | board `.kicad_sch` files, `design/nets.csv` |
+| 4 | `design/brief.md` (if present), board `.kicad_pcb` outline (`Edge.Cuts` items only), `links`, `own_interface` |
+| 5 | `design/stackup.md` (if present), `design/nets.csv` (if present), board `.kicad_pro` and `.kicad_dru` |
+| 6 | `design/brief.md` (if present), board `.kicad_sch` files, board `.kicad_pcb` placement (each footprint's library id, reference, position and side), `links`, `own_interface` |
+| 7 | `design/nets.csv` (if present), board `.kicad_sch` files, board `.kicad_pro` and `.kicad_dru`, board `.kicad_pcb` copper (placement plus tracks, arcs, vias, zones without their fill, and copper graphics) |
+| 8 | `design/stackup.md` (if present), `design/nets.csv` (if present), `design/sim/**`, board `.kicad_pcb` copper |
+| 9 | `design/brief.md` (if present), board `.kicad_pro`, board `.kicad_pcb` (whole file) |
+| 10 | `design/intent.md`, `design/nets.csv`, `design/stackup.md`, `design/bringup.md` (each if present), board `.kicad_sch`, `.kicad_pro`, `.kicad_dru`, `.kicad_pcb` (whole file), `hw/<board>/<variant>/fab/**`, `links`, `own_interface` |
+
+Later phases edit the same `.kicad_pcb`, so each gate hashes only the part of the board it judged: routing doesn't stale placement, and silkscreen doesn't stale routing. `design/checks.toml` isn't an input, because later phases add their own sections to it.
 
 ## Iterating
 
-Going backward is normal. When an upstream artifact changes (a part swap, a new net, a moved connector), list which downstream gates it invalidates, mark them stale in their gate files, and re-run them. Never patch downstream to hide an upstream change.
+Going backward is normal. When an upstream artifact changes (a part swap, a new net, a moved connector), Boardroom and `python3 .claude/skills/pcb-design/scripts/gate_inputs.py check` mark the affected gate and every later passed gate stale automatically; re-run those gates and re-record their inputs with `gate_inputs.py record N` once they pass again. Never patch downstream to hide an upstream change.
 
 Experiments get their own **variant**: a new folder under `hw/<board>/`, a `[[boards]]` entry in `pcbview.toml` naming its parent and what changed, and its own gates from the point it diverged. Never overwrite a variant the user has looked at.
 

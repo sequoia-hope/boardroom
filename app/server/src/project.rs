@@ -5,6 +5,7 @@
 //! `gates_passed` a list) and version 1 from `docs/shell-spec.md`. Both are
 //! read into the same `Summary`.
 
+use crate::gates;
 use serde::Serialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -49,6 +50,8 @@ pub struct Summary {
     pub viewer: Option<String>,
     pub boards: Vec<Board>,
     pub git: Option<Git>,
+    /// Gate 10's recorded release inputs ("built against"), when `phase10.inputs.json` exists.
+    pub release: Option<gates::ReleaseRecord>,
     /// The name of the example (examples.toml) this project is a copy of.
     pub example: Option<String>,
     pub error: Option<String>,
@@ -146,6 +149,7 @@ pub fn summarize(id: &str, path: &Path, pinned: bool) -> Summary {
         viewer: None,
         boards: vec![],
         git: None,
+        release: None,
         example: None,
         error: None,
     };
@@ -179,7 +183,9 @@ pub fn summarize(id: &str, path: &Path, pinned: bool) -> Summary {
     s.needs_user.extend(studio_failures(&status));
     s.checks = read_checks(&status);
     s.links = read_links(&status);
-    s.gates = read_gates(&status, path, s.phase);
+    let cur_links = gates::current_links(path);
+    s.gates = read_gates(&status, path, s.phase, &cur_links);
+    s.release = gates::read_release(path, &cur_links);
     s.thumbnail = ["design/renders/top.png", "design/renders/3d-top.png"]
         .into_iter()
         .find(|p| path.join(p).is_file())
@@ -326,7 +332,12 @@ fn read_links(status: &Value) -> Vec<Link> {
         .unwrap_or_default()
 }
 
-fn read_gates(status: &Value, root: &Path, phase: Option<u32>) -> Vec<Gate> {
+fn read_gates(
+    status: &Value,
+    root: &Path,
+    phase: Option<u32>,
+    cur_links: &std::collections::HashMap<String, gates::CurrentLink>,
+) -> Vec<Gate> {
     let passed: Vec<u32> = status
         .get("gates_passed")
         .and_then(Value::as_array)
@@ -337,18 +348,20 @@ fn read_gates(status: &Value, root: &Path, phase: Option<u32>) -> Vec<Gate> {
         })
         .unwrap_or_default();
     let v1 = status.get("gates").and_then(Value::as_object);
+    let canon_root = std::fs::canonicalize(root).ok();
+    let mut first_stale: Option<u32> = None;
+
     (0..PHASES.len() as u32)
         .map(|n| {
             let file = format!("design/gates/phase{n}.md");
             let file = root.join(&file).is_file().then_some(file);
             let entry = v1.and_then(|g| g.get(&n.to_string()));
-            let stale_because = entry.and_then(|e| str_field(e, "stale_because"));
-            // A reason to be stale wins over whatever state is written beside it.
-            let state = if stale_because.is_some() {
-                "stale".into()
-            } else if let Some(state) = entry.and_then(|e| str_field(e, "state")) {
+            let hand_stale = entry.and_then(|e| str_field(e, "stale_because"));
+            let inputs_rec = gates::read_record(root, n);
+
+            let base_state = if let Some(state) = entry.and_then(|e| str_field(e, "state")) {
                 state
-            } else if passed.contains(&n) {
+            } else if passed.contains(&n) || inputs_rec.is_some() {
                 "passed".into()
             } else if phase == Some(n) {
                 "current".into()
@@ -357,6 +370,31 @@ fn read_gates(status: &Value, root: &Path, phase: Option<u32>) -> Vec<Gate> {
             } else {
                 "not_started".into()
             };
+
+            // A hand-written reason in status.json always wins; otherwise a passed gate
+            // goes stale when an earlier gate is stale or when its own recorded inputs
+            // changed since it passed. A gate without a record is never auto-stale on its own.
+            let (state, stale_because) = if let Some(why) = hand_stale {
+                ("stale".into(), Some(why))
+            } else if base_state == "passed" {
+                if let Some(k) = first_stale {
+                    ("stale".into(), Some(format!("gate {k} is stale")))
+                } else if let Some(rec) = &inputs_rec
+                    && let Some(why) =
+                        gates::stale_reason(root, canon_root.as_deref(), rec, cur_links)
+                {
+                    ("stale".into(), Some(why))
+                } else {
+                    ("passed".into(), None)
+                }
+            } else {
+                (base_state, None)
+            };
+
+            if state == "stale" && first_stale.is_none() {
+                first_stale = Some(n);
+            }
+
             Gate {
                 phase: n,
                 name: PHASES[n as usize],
