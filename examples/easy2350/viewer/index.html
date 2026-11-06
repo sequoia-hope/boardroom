@@ -3,12 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="generator" content="pcbview 0.1 (26ba32b)">
 <title>easy2350 &mdash; easy2350, variant A</title>
 <link rel="stylesheet" href="assets/viewer.css">
 <link rel="stylesheet" href="assets/pcbview.css">
 <script src="assets/app.js" defer></script>
 <script src="assets/parts.js" defer></script>
 <script src="assets/gesture.js" defer></script>
+<script src="assets/scale.js" defer></script>
 <script src="assets/viewer.js" defer></script>
 <script src="assets/copper.js" defer></script>
 <script src="assets/sch.js" defer></script>
@@ -102,12 +104,13 @@
           <button data-act="out" title="zoom out">&minus;</button>
           <button data-act="fit" title="fit the board">fit</button>
           <button data-act="in" title="zoom in">+</button>
+          <button data-act="real" title="life size: a millimetre on the board is a millimetre on this screen (click again to set the screen up)">1:1</button>
           <span class="sub" id="cu-zoom">1.0&times;</span>
         </div>
         <p class="cu-note" id="cu-note"></p>
         <p class="cu-read" id="cu-read"></p>
         <p class="cu-hint">Keys: <b>1</b>&ndash;<b>9</b> pick a layer, <b>s</b> solo,
-        <b>a</b> all, <b>m</b> mirror, <b>0</b> fit. Click a part for its pane;
+        <b>a</b> all, <b>m</b> mirror, <b>0</b> fit, <b>l</b> life size. Click a part for its pane;
         coordinates are pcbnew&rsquo;s, in millimetres.</p>
         <p class="cu-hint" id="cu-stats"></p>
       </div>
@@ -162,7 +165,7 @@
       <h1>easy2350, variant A</h1>
       <p class="pv-lede">First layout: 4-layer, parts on top, RP2350 power block copied from Raspberry Pi's minimal board.</p>
       <dl class="pv-facts"><dt>Source</dt><dd><code>hw/easy2350/a/easy2350.kicad_pcb</code><br><code>hw/easy2350/a/easy2350.kicad_sch</code></dd><dt>Board</dt><dd>21 &times; 51 mm<small>4 copper layers, 1.6 mm thick</small></dd><dt>Parts</dt><dd>58 footprints<small>55 on the front, 3 on the back</small></dd><dt>Copper</dt><dd>72 nets, 581 track segments, 141 vias<small>874 mm of routed track</small></dd><dt>Schematic</dt><dd>1 sheet<small>A3</small></dd><dt>3D</dt><dd>51 of 58 parts drawn from a model<small>3 through an older KiCad&rsquo;s library variable (<code>${KICAD6_3DMODEL_DIR}</code> and so on), read as KiCad 9&rsquo;s library</small><small>1 name no model (TP3)</small></dd><dt>Drawn as boxes</dt><dd><span class="warn">D3&ndash;D6</span><small><code>${KICAD9_3DMODEL_DIR}/LED_SMD.3dshapes/LED_WS2812B-2020_PLCC4_2.0x2.0mm.step</code>: no such file</small><span class="warn">J1</span><small><code>${KICAD9_3DMODEL_DIR}/Connector_USB.3dshapes/USB_C_Receptacle_HRO_TYPE-C-31-M-12.step</code>: no such file</small><span class="warn">L1</span><small><code>${KICAD7_3DMODEL_DIR}/Inductor_SMD.3dshapes/AOTA-B201610SR47MT.STEP</code>: no such file</small><small>a box the size of the courtyard stands in for each; a <code>[models]</code> entry in the project file can name a stand-in model</small></dd></dl>
-      <p class="cu-hint">Built 2026-11-02 23:42 by pcbview from the KiCad files above:
+      <p class="cu-hint">Built 2026-11-06 00:36 by pcbview from the KiCad files above:
       <code>python3 -m pcbview build pcbview.toml</code>. Nothing here is drawn by hand &mdash; the layer plots, the model and the
       sheets are KiCad&rsquo;s own exports.</p>
     </div>

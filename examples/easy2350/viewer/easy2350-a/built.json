@@ -21,7 +21,7 @@
  },
  "layers": {
   "board": "easy2350.kicad_pcb",
-  "generated": "2026-11-02",
+  "generated": "2026-11-06",
   "view_mm": [
    98.98,
    98.98,
@@ -150,9 +150,9 @@
  },
  "3d": {
   "board": "easy2350.kicad_pcb",
-  "generated": "2026-11-02",
+  "generated": "2026-11-06",
   "glb": "board.glb",
-  "bytes": 2696816,
+  "bytes": 2696744,
   "kicad_bytes": 12964268,
   "parts": 58,
   "modelled": 51,
@@ -229,7 +229,7 @@
   "triangles": 231725,
   "primitives": 139
  },
- "when": "2026-11-02 23:42",
+ "when": "2026-11-06 00:36",
  "source": {
   "kind": "file",
   "pcb": "hw/easy2350/a/easy2350.kicad_pcb",

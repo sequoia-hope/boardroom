@@ -6,7 +6,8 @@
  * outline. The board is fitted into the canvas and panned and zoomed as one;
  * the cursor reads out the x and y pcbnew would show. A click (not a drag)
  * picks the part under the cursor from <board>/3d/parts.json and opens the
- * part pane, the same one the 3D tab has.
+ * part pane, the same one the 3D tab has. "1:1" draws the board life size,
+ * at the CSS px per mm scale.js knows for this screen (or asks for).
  */
 (() => {
   const root = document.getElementById('copper');
@@ -35,7 +36,7 @@
     const copper = meta.layers.filter(l => l.kind === 'copper');
     const over = meta.layers.filter(l => l.kind !== 'copper');
     const rows = copper.concat(over);               // panel order, and key order
-    const state = { sel: copper[0].slug, vis: {}, dim: 0.16, mirror: false, s: 1, tx: 0, ty: 0, grid: false };
+    const state = { sel: copper[0].slug, vis: {}, dim: 0.16, mirror: false, s: 1, tx: 0, ty: 0, grid: false, real: false };
     rows.forEach(l => state.vis[l.slug] = l.kind === 'copper' || l.kind === 'outline');
 
     const plate = $('#cu-plate'), pan = $('#cu-pan'), flip = $('#cu-flip');
@@ -79,8 +80,12 @@
       row.querySelector('input[type=checkbox]').onchange = e => { state.vis[l.slug] = e.target.checked; draw(); };
     });
     const [bw0, bh0] = meta.size_mm;
+    const dimX = el('div', 'cu-dim cu-dim-x', `<span>${meta.round ? 'Ø' + meta.round.dia : bw0} mm</span>`);
+    const dimY = el('div', 'cu-dim cu-dim-y', `<span>${meta.round ? meta.round.dia : bh0} mm</span>`);
+    plate.append(dimX, dimY);
     $('#cu-stats').textContent =
-      (meta.round ? `Ø${meta.round.dia} mm` : `${bw0} × ${bh0} mm`) + ` · ${copper.length} copper layers · ` +
+      (meta.round ? `Ø${meta.round.dia} mm` : `${bw0} × ${bh0} mm`) +
+      (meta.thickness ? ` × ${meta.thickness} mm` : '') + ` · ${copper.length} copper layers · ` +
       `${meta.tracks.toLocaleString('en')} track segments, ${Math.round(meta.length_mm).toLocaleString('en')} mm · ` +
       `${meta.vias.toLocaleString('en')} vias · plotted ${meta.generated}`;
 
@@ -98,25 +103,48 @@
       else if (act === 'solo') rows.forEach(l => state.vis[l.slug] = l.slug === state.sel || l.kind === 'outline');
       else if (act === 'in') zoom(state.s * 1.5, plate.clientWidth / 2, plate.clientHeight / 2);
       else if (act === 'out') zoom(state.s / 1.5, plate.clientWidth / 2, plate.clientHeight / 2);
-      else if (act === 'fit') { state.s = 1; state.tx = state.ty = 0; }
+      else if (act === 'fit') { state.real = false; state.s = 1; state.tx = state.ty = 0; }
+      else if (act === 'real') { life(); return; }
       else if (act === 'grid') { state.grid = !state.grid; grid(); }
       draw();
     });
 
     // ---- the board in the canvas: fitted, then panned and zoomed ----------------
+    const PAD = 30;                                   // room round the board for its dimension lines
     let fit = 1, bl = 0, bt = 0, bw = 0, bh = 0;
     function layout() {
       const W = plate.clientWidth, H = plate.clientHeight;
       if (!W || !H) return;
-      fit = Math.min(W / vw, H / vh);             // px per mm at 1x
+      fit = Math.min(Math.max(W - 2 * PAD, 40) / vw, Math.max(H - 2 * PAD, 40) / vh);   // px per mm at 1x
       bw = vw * fit; bh = vh * fit; bl = (W - bw) / 2; bt = (H - bh) / 2;
       Object.assign(flip.style, { left: bl + 'px', top: bt + 'px', width: bw + 'px', height: bh + 'px' });
-      place();
+      if (state.real) real(); else place();
     }
     const maxZoom = () => Math.max(16, 400 / fit);   // at most 400 px to the millimetre
+    // no smaller than fitted -- unless life size is smaller, on a big screen
+    const minZoom = () => { const k = PV.scale.get(); return k ? Math.min(1, k.pxmm / fit) : 1; };
+
+    // life size: the zoom at which a mm is this screen's mm, about the middle.
+    // It stays so as the plate or the browser's zoom changes, until zoomed.
+    function real() {
+      const k = PV.scale.get();
+      if (!k) { state.real = false; return; }
+      const W = plate.clientWidth, H = plate.clientHeight, s0 = state.s;
+      const cx = (W / 2 - state.tx) / s0, cy = (H / 2 - state.ty) / s0;    // the board point in the middle
+      state.s = k.pxmm / fit;
+      state.tx = W / 2 - cx * state.s;
+      state.ty = H / 2 - cy * state.s;
+      state.real = true;
+      place();
+    }
+    function life() {
+      if (PV.scale.get() && !state.real) { real(); return; }
+      PV.scale.setup().then(k => { if (k) real(); });       // asked again: set the screen up
+    }
 
     function zoom(next, ax, ay) {
-      const s2 = clamp(next, 1, maxZoom());
+      state.real = false;
+      const s2 = clamp(next, minZoom(), maxZoom());
       state.tx = ax - (ax - state.tx) * s2 / state.s;
       state.ty = ay - (ay - state.ty) * s2 / state.s;
       state.s = s2;
@@ -128,10 +156,15 @@
       const W = plate.clientWidth, H = plate.clientHeight, s = state.s;
       state.tx = clamp(state.tx, Math.min(0, W / 2 - s * (bl + bw)), Math.max(0, W / 2 - s * bl));
       state.ty = clamp(state.ty, Math.min(0, H / 2 - s * (bt + bh)), Math.max(0, H / 2 - s * bt));
-      if (s === 1 && !drag) { state.tx = state.ty = 0; }
+      if (s === 1 && !drag && !state.real) { state.tx = state.ty = 0; }
       pan.style.transform = `translate(${state.tx}px, ${state.ty}px) scale(${s})`;
       flip.style.transform = state.mirror ? 'scaleX(-1)' : '';
-      $('#cu-zoom').textContent = s.toFixed(1) + '×';
+      const x0 = state.tx + s * (bl + (vw - bw0) / 2 * fit), sw = s * bw0 * fit;
+      const y0 = state.ty + s * (bt + (vh - bh0) / 2 * fit), sh = s * bh0 * fit;
+      Object.assign(dimX.style, { left: x0 + 'px', top: (y0 - 22) + 'px', width: sw + 'px' });
+      Object.assign(dimY.style, { left: (x0 - 22) + 'px', top: y0 + 'px', height: sh + 'px' });
+      $('#cu-zoom').textContent = state.real ? 'life size' : s.toFixed(1) + '×';
+      $('[data-act=real]').classList.toggle('on', state.real);
       const mmpx = 1 / (fit * s);                   // the scale bar
       const nice = [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100].reduce((a, b) =>
         Math.abs(b - 90 * mmpx) < Math.abs(a - 90 * mmpx) ? b : a);
@@ -166,7 +199,7 @@
       zoom: (f, cx, cy) => zoom(state.s * f, cx, cy),
       click: pick,
       dblclick: (x, y) => {
-        if (state.s > 1.01) { state.s = 1; state.tx = state.ty = 0; place(); }
+        if (state.s > 1.01 || state.real) { state.real = false; state.s = 1; state.tx = state.ty = 0; place(); }
         else zoom(4, x, y);
       },
       move: readout,
@@ -193,7 +226,8 @@
       } else if (e.key === 'm') { state.mirror = mir.checked = !state.mirror; }
       else if (e.key === 's') { rows.forEach(l => state.vis[l.slug] = l.slug === state.sel || l.kind === 'outline'); }
       else if (e.key === 'a') { rows.forEach(l => state.vis[l.slug] = true); }
-      else if (e.key === '0') { state.s = 1; state.tx = state.ty = 0; }
+      else if (e.key === '0') { state.real = false; state.s = 1; state.tx = state.ty = 0; }
+      else if (e.key === 'l') { life(); return; }
       else if (e.key === 'Escape') { choose(null); return; }
       else if (e.key === '+' || e.key === '=') zoom(state.s * 1.5, plate.clientWidth / 2, plate.clientHeight / 2);
       else if (e.key === '-') zoom(state.s / 1.5, plate.clientWidth / 2, plate.clientHeight / 2);
@@ -294,6 +328,7 @@
     draw();
     layout();
     addEventListener('resize', layout);
+    if (window.visualViewport) visualViewport.addEventListener('resize', () => { if (state.real) real(); });
     new ResizeObserver(layout).observe(plate);
   }
 
