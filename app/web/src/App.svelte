@@ -4,6 +4,7 @@
   import Docs from './lib/Docs.svelte';
   import Renders from './lib/Renders.svelte';
   import Versions from './lib/Versions.svelte';
+  import Terminal from './lib/Terminal.svelte';
   import BoardView from './lib/board/BoardView.svelte';
   import Stale from './lib/Stale.svelte';
   import { boardChange, kicadFiles } from './lib/stale.js';
@@ -24,13 +25,16 @@
 
   let projects = $state([]);
   let examples = $state([]);
+  let terms = $state([]);
   let loadError = $state('');
   // ?project=<id>&tab=<name> opens straight to a project (windows, links).
   const params = new URLSearchParams(location.search);
   let selId = $state(params.get('project') ?? remember('project', null));
   let view = $state(params.get('view') === 'inbox' ? 'inbox' : 'project'); // project | inbox
   const initialTab = params.get('tab') ?? 'overview';
-  let tab = $state(initialTab === 'history' ? 'versions' : initialTab); // overview | board | gates | documents | renders | versions | viewer | composer | studio
+  let tab = $state(
+    initialTab === 'history' ? 'versions' : api.STATIC && initialTab === 'terminal' ? 'overview' : initialTab,
+  ); // overview | board | gates | documents | renders | versions | terminal | viewer | composer | studio
   let gateDoc = $state(null);
   let doc = $state(null);
   // A phone-sized screen: the project list folds into a bar, and an app's tab takes the screen.
@@ -86,6 +90,7 @@
     [...projects].sort((a, b) => (b.pinned - a.pinned) || (b.updated ?? '').localeCompare(a.updated ?? '')),
   );
   const inbox = $derived(projects.flatMap((p) => p.needs_user.map((n) => ({ ...n, project: p }))));
+  const liveTermProjects = $derived(new Set(terms.filter((t) => t.alive).map((t) => t.project)));
 
   $effect(() => {
     if (sel) keep('project', sel.id);
@@ -108,7 +113,11 @@
 
   async function refresh() {
     try {
-      [projects, examples] = await Promise.all([api.projects(), api.examples()]);
+      [projects, examples, terms] = await Promise.all([
+        api.projects(),
+        api.examples(),
+        api.terms().catch(() => []),
+      ]);
       loadError = '';
     } catch (e) {
       loadError = e.message;
@@ -288,9 +297,10 @@
     ['documents', 'Documents'],
     ['renders', 'Renders'],
     ...(mode === 'single' && sel?.viewer ? [['viewer', 'Viewer']] : []),
+    ...(!api.STATIC ? [['terminal', 'Terminal']] : []),
   ]);
   // A tab that is one app filling the page: on a phone it gets the screen below the tabs.
-  const appTab = $derived(FRAMES.includes(tab) || tab === 'board');
+  const appTab = $derived(FRAMES.includes(tab) || tab === 'board' || tab === 'terminal');
 
   const gateTitles = $derived(
     Object.fromEntries((sel?.gates ?? []).filter((g) => g.file).map((g) => [g.file, `${g.phase} · ${g.name}`])),
@@ -325,7 +335,7 @@
       {#each sorted as p (p.id)}
         <li>
           <button class="proj" class:on={view === 'project' && sel?.id === p.id} onclick={() => choose(p)}>
-            <span class="pname">{p.board ?? p.name}{#if p.example}<span class="extag">example</span>{/if}</span>
+            <span class="pname">{#if liveTermProjects.has(p.id)}<span class="term-dot" title="Terminal running" aria-label="Terminal running"></span>{/if}{p.board ?? p.name}{#if p.example}<span class="extag">example</span>{/if}</span>
             <span class="pmeta">
               {#if !p.exists}missing{:else if p.phase != null}{p.phase} · {p.gates[p.phase]?.name}{:else if !p.is_project}folder{:else}not started{/if}
             </span>
@@ -452,7 +462,7 @@
         {/each}
       </nav>
 
-      <div class="body" class:flush={FRAMES.includes(tab) || tab === 'board'}>
+      <div class="body" class:flush={FRAMES.includes(tab) || tab === 'board' || tab === 'terminal'}>
         {#if !sel.exists}
           <p class="err">This folder is missing: <span class="mono">{sel.path}</span></p>
         {:else if sel.error}
@@ -476,6 +486,10 @@
             <Renders project={sel} />
           {:else if tab === 'versions'}
             <Versions project={sel} {store} onchanged={refresh} />
+          {:else if tab === 'terminal' && !api.STATIC}
+            {#key sel.id}
+              <Terminal project={sel} {theme} onchanged={refresh} />
+            {/key}
           {/if}
           {#if loaded.includes('composer')}
             <iframe class="viewer" hidden={tab !== 'composer'} bind:this={composerFrame} src={composerUrl(true)} title="Circuit Composer" allow="cross-origin-isolated"></iframe>
@@ -566,6 +580,16 @@
     font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .term-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    margin-right: 6px;
+    vertical-align: middle;
   }
 
   .extag {

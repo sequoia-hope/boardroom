@@ -126,6 +126,27 @@ export function removeLink(id, linkId) {
   });
 }
 
+export function terms() {
+  return STATIC ? Promise.resolve([]) : json('/api/term');
+}
+
+export function startTerm(project, kind = 'project', extra = {}) {
+  return json('/api/term', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ project, kind, ...extra }),
+  });
+}
+
+export function endTerm(id) {
+  return json(`/api/term/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export function termWsUrl(id) {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  return `${proto}://${location.host}/api/term/${encodeURIComponent(id)}`;
+}
+
 /** Calls onMessage for every bus message and returns {send, close}; reconnects if the server restarts. */
 export function bus(onMessage) {
   if (STATIC) return { send() {}, close() {} };

@@ -5,6 +5,7 @@
 //!     boardroom add <folder>                        add a project to the list
 //!     boardroom remove <folder>                     take one off the list
 //!     boardroom list                                the list, with each project's phase
+//!     boardroom selection [--port N] [--project ID|DIR]  the current bus selection as JSON
 //!     boardroom link add <project-path> --id <id> --board <board> --remote <remote> --path <json> [--branch main|--tag T|--commit C]
 //!     boardroom link list <project-path> [--refresh] [--json]
 //!     boardroom link update <project-path> <id>
@@ -32,6 +33,7 @@ fn main() {
         "add" => edit_list(rest, true),
         "remove" => edit_list(rest, false),
         "list" => list(),
+        "selection" => selection_cmd(rest),
         "link" => link_cmd(rest),
         "snapshot" => snapshot::write(rest),
         "help" | "-h" | "--help" => {
@@ -227,6 +229,104 @@ fn list() -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+fn selection_cmd(args: &[String]) -> Result<(), String> {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, Uri};
+    use http_body_util::BodyExt;
+    use hyper_util::{client::legacy::Client, rt::TokioExecutor};
+
+    let pos = positionals(args, &["port", "project"], &[])?;
+    let port = port(args)?;
+    let target = flag(args, "project").or_else(|| pos.first().map(|s| (*s).to_string()));
+    let project_id = match target {
+        Some(t) => {
+            let p = PathBuf::from(&t);
+            if p.is_dir() {
+                let canon =
+                    std::fs::canonicalize(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+                config::project_id(&canon)
+            } else {
+                t
+            }
+        }
+        None => resolve_cwd_project_id()?,
+    };
+
+    let encoded_id: String = project_id
+        .bytes()
+        .flat_map(|b| {
+            if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+                vec![b as char]
+            } else {
+                format!("%{b:02X}").chars().collect()
+            }
+        })
+        .collect();
+
+    let uri: Uri = format!("http://127.0.0.1:{port}/api/selection?project={encoded_id}")
+        .parse()
+        .map_err(|e| format!("invalid selection URI: {e}"))?;
+
+    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    let (status, bytes) = rt.block_on(async move {
+        let client: Client<_, Body> = Client::builder(TokioExecutor::new()).build_http();
+        let req = Request::builder()
+            .method("GET")
+            .uri(uri)
+            .body(Body::empty())
+            .map_err(|e| e.to_string())?;
+        let resp = client
+            .request(req)
+            .await
+            .map_err(|e| format!("can't reach Boardroom on 127.0.0.1:{port}: {e}"))?;
+        let status = resp.status();
+        let bytes = resp
+            .into_body()
+            .collect()
+            .await
+            .map_err(|e| e.to_string())?
+            .to_bytes()
+            .to_vec();
+        Ok::<_, String>((status, bytes))
+    })?;
+
+    if status != StatusCode::OK {
+        let msg = String::from_utf8_lossy(&bytes).trim().to_string();
+        return Err(if msg.is_empty() {
+            format!("server returned {status}")
+        } else {
+            msg
+        });
+    }
+    let val: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("invalid JSON from server: {e}"))?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&val).map_err(|e| e.to_string())?
+    );
+    Ok(())
+}
+
+fn resolve_cwd_project_id() -> Result<String, String> {
+    let cwd = std::env::current_dir().map_err(|e| format!("current_dir: {e}"))?;
+    let canon = std::fs::canonicalize(&cwd).unwrap_or(cwd);
+    if let Ok(list) = config::ProjectList::load()
+        && let Some(entry) = list
+            .projects
+            .iter()
+            .filter(|e| canon.starts_with(&e.path))
+            .max_by_key(|e| e.path.as_os_str().len())
+    {
+        return Ok(config::project_id(&entry.path));
+    }
+    for anc in canon.ancestors() {
+        if anc.join("design/status.json").is_file() {
+            return Ok(config::project_id(anc));
+        }
+    }
+    Ok(config::project_id(&canon))
 }
 
 fn link_cmd(args: &[String]) -> Result<(), String> {

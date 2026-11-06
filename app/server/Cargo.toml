@@ -28,6 +28,9 @@ hyper = "1"
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 http-body-util = "0.1"
 httpdate = "1"
+portable-pty = "0.9"
 
 [dev-dependencies]
+futures-util = "0.3"
+tokio-tungstenite = "0.29"
 tower = { version = "0.5", features = ["util"] }

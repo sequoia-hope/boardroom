@@ -8,6 +8,7 @@ pub mod problem;
 pub mod project;
 pub mod server;
 pub mod snapshot;
+pub mod terminals;
 
 use std::path::PathBuf;
 

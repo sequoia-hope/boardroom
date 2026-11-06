@@ -251,7 +251,16 @@ app/server/target/release/boardroom open      # or a Chrome app window
 
 The project list is `~/.config/boardroom/projects.toml`, and machine paths, such as a Waffle Iron
 build, are in `~/.config/boardroom/config.toml`. Any folder with `design/status.json` opens as a
-project. The read-only copy on [GitHub Pages](https://sequoia-hope.github.io/boardroom/) is built
+project. A passed gate records what it judged (`design/gates/phaseN.inputs.json`, written by
+`gate_inputs.py record N`), and the app marks it stale with the reason when one of those inputs
+changes. The Versions tab shows linked projects and what a release was built against.
+
+The Terminal tab runs a real `claude` session in the project folder. The server owns it, so it
+survives closing the page. It accepts only this machine, and only Boardroom's own page. With
+`waffle_relay = "uv run --project <waffle-iron>/relay waffle-mcp-relay"` in `config.toml`, the
+session gets Waffle Iron's tools. The relay's port is `proj port boardroom-waffle-relay`.
+
+The read-only copy on [GitHub Pages](https://sequoia-hope.github.io/boardroom/) is built
 by `.github/workflows/pages.yml` from snapshots of the projects in `examples.toml`.
 
 ## Specs

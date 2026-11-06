@@ -10,12 +10,13 @@ use crate::files::{self, Expect, WriteError};
 use crate::links::{self, AddLinkRequest, LinkOpError, LinkState, LinkStatus, LinksCache};
 use crate::problem;
 use crate::project;
+use crate::terminals::{StartTermRequest, TermError, TermSummary, Terminals, TerminalsOptions};
 use axum::{
     Json, Router,
     body::Bytes,
     extract::{
         ConnectInfo, DefaultBodyLimit, Path as UrlPath, Query, Request, State,
-        ws::{Message, WebSocket, WebSocketUpgrade},
+        ws::{Message, WebSocket, WebSocketUpgrade, rejection::WebSocketUpgradeRejection},
     },
     http::HeaderMap,
     http::Method,
@@ -28,6 +29,7 @@ use notify::{RecursiveMode, Watcher};
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -46,6 +48,37 @@ pub struct App {
     watcher: Mutex<Option<notify::RecommendedWatcher>>,
     pub(crate) links_cache: LinksCache,
     link_states: Mutex<HashMap<String, Vec<LinkFingerprint>>>,
+    port: AtomicU16,
+    pub(crate) terminals: Terminals,
+    selections: Mutex<HashMap<String, serde_json::Value>>,
+}
+
+impl App {
+    pub fn set_port(&self, port: u16) {
+        self.port.store(port, Ordering::Release);
+    }
+
+    pub fn port(&self) -> u16 {
+        self.port.load(Ordering::Acquire)
+    }
+
+    pub fn shutdown_terminals(&self) {
+        self.terminals.shutdown();
+    }
+
+    fn effective_port(&self, headers: &HeaderMap) -> Option<u16> {
+        let bound = self.port();
+        if bound != 0 {
+            return Some(bound);
+        }
+        let host = headers.get(header::HOST)?.to_str().ok()?.trim();
+        let (h, p) = host.rsplit_once(':')?;
+        if matches!(h, "127.0.0.1" | "localhost") {
+            p.parse().ok().filter(|&n| n != 0)
+        } else {
+            None
+        }
+    }
 }
 
 pub type Shared = Arc<App>;
@@ -63,6 +96,14 @@ fn bad_link_op(err: LinkOpError) -> (StatusCode, String) {
     }
 }
 
+fn bad_term_op(err: TermError) -> (StatusCode, String) {
+    match err {
+        TermError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
+        TermError::NotFound(m) => (StatusCode::NOT_FOUND, m),
+        TermError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m),
+    }
+}
+
 pub fn router(config_dir: PathBuf, list: ProjectList, web: PathBuf) -> (Router, Shared) {
     router_with_cache(config_dir, list, web, LinksCache::new())
 }
@@ -73,6 +114,22 @@ pub fn router_with_cache(
     web: PathBuf,
     links_cache: LinksCache,
 ) -> (Router, Shared) {
+    router_with_options(
+        config_dir,
+        list,
+        web,
+        links_cache,
+        TerminalsOptions::default(),
+    )
+}
+
+pub fn router_with_options(
+    config_dir: PathBuf,
+    list: ProjectList,
+    web: PathBuf,
+    links_cache: LinksCache,
+    term_options: TerminalsOptions,
+) -> (Router, Shared) {
     let (bus, _) = broadcast::channel(256);
     let app = Arc::new(App {
         config_dir,
@@ -81,6 +138,9 @@ pub fn router_with_cache(
         watcher: Mutex::new(None),
         links_cache,
         link_states: Mutex::new(HashMap::new()),
+        port: AtomicU16::new(0),
+        terminals: Terminals::new(term_options),
+        selections: Mutex::new(HashMap::new()),
     });
     let index = ServeFile::new(web.join("index.html"));
     let router = Router::new()
@@ -118,6 +178,9 @@ pub fn router_with_cache(
         )
         .route("/api/projects/{id}/open/{what}", post(open))
         .route("/api/pick-folder", post(pick_folder))
+        .route("/api/term", get(list_terms).post(start_term))
+        .route("/api/term/{id}", get(term_socket).delete(delete_term))
+        .route("/api/selection", get(get_selection))
         .route("/api/bus", get(bus_socket))
         // An unknown API path is a 404, not the web app's page with a 200.
         .route(
@@ -166,7 +229,10 @@ pub async fn run(host: &str, port: u16, web: PathBuf) -> Result<(), String> {
     let listener = tokio::net::TcpListener::bind((host, port))
         .await
         .map_err(|e| format!("{host}:{port}: {e}"))?;
-    println!("Boardroom: http://localhost:{port}/");
+    let actual_port = listener.local_addr().map(|a| a.port()).unwrap_or(port);
+    app.set_port(actual_port);
+    println!("Boardroom: http://localhost:{actual_port}/");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
     axum::serve(
         listener,
         router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
@@ -783,11 +849,162 @@ async fn pick_folder() -> ApiResult<Json<serde_json::Value>> {
     ))
 }
 
-async fn bus_socket(State(app): State<Shared>, ws: WebSocketUpgrade) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| bus_client(socket, app))
+/// Security gate for `/api/term` and `/api/selection`: loopback peers only, and
+/// any `Origin` header present must be this server's own origin
+/// (`http://127.0.0.1:<port>` or `http://localhost:<port>`).
+fn check_term_access(app: &App, peer: std::net::SocketAddr, headers: &HeaderMap) -> ApiResult<()> {
+    if !peer.ip().is_loopback() {
+        return Err(bad(
+            StatusCode::FORBIDDEN,
+            "terminals are available only from loopback",
+        ));
+    }
+    let origins: Vec<_> = headers.get_all(header::ORIGIN).iter().collect();
+    if origins.is_empty() {
+        return Ok(());
+    }
+    if origins.len() > 1 {
+        return Err(bad(StatusCode::FORBIDDEN, "multiple Origin headers"));
+    }
+    let raw = origins[0]
+        .to_str()
+        .map_err(|_| bad(StatusCode::FORBIDDEN, "invalid Origin header"))?;
+    let Some(port) = app.effective_port(headers) else {
+        return Err(bad(StatusCode::FORBIDDEN, "unknown bound server port"));
+    };
+    let ok = raw == format!("http://127.0.0.1:{port}") || raw == format!("http://localhost:{port}");
+    if !ok {
+        return Err(bad(
+            StatusCode::FORBIDDEN,
+            format!("Origin '{raw}' is not this Boardroom server"),
+        ));
+    }
+    Ok(())
 }
 
-async fn bus_client(mut socket: WebSocket, app: Shared) {
+async fn list_terms(
+    State(app): State<Shared>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+) -> ApiResult<Json<Vec<TermSummary>>> {
+    check_term_access(&app, peer, &headers)?;
+    Ok(Json(app.terminals.list()))
+}
+
+async fn start_term(
+    State(app): State<Shared>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<StartTermRequest>,
+) -> ApiResult<Json<TermSummary>> {
+    check_term_access(&app, peer, &headers)?;
+    let root = project_path(&app, &body.project)?;
+    let port = app.effective_port(&headers).unwrap_or(0);
+    let summary = app
+        .terminals
+        .start_or_get(&app.config_dir, &root, body, port, &app.bus)
+        .await
+        .map_err(bad_term_op)?;
+    Ok(Json(summary))
+}
+
+async fn delete_term(
+    State(app): State<Shared>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    UrlPath(id): UrlPath<String>,
+    headers: HeaderMap,
+) -> ApiResult<StatusCode> {
+    check_term_access(&app, peer, &headers)?;
+    app.terminals.delete(&id, &app.bus).map_err(bad_term_op)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn term_socket(
+    State(app): State<Shared>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    UrlPath(id): UrlPath<String>,
+    headers: HeaderMap,
+    ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
+) -> Response {
+    if let Err(err) = check_term_access(&app, peer, &headers) {
+        return err.into_response();
+    }
+    if !app.terminals.exists(&id) {
+        return bad(StatusCode::NOT_FOUND, "no such terminal").into_response();
+    }
+    let ws = match ws {
+        Ok(u) => u,
+        Err(rej) => return rej.into_response(),
+    };
+    ws.on_upgrade(move |socket| async move {
+        app.terminals.attach(&id, socket).await;
+    })
+}
+
+#[derive(Deserialize)]
+struct SelectionQuery {
+    project: String,
+}
+
+async fn get_selection(
+    State(app): State<Shared>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    Query(q): Query<SelectionQuery>,
+) -> ApiResult<Json<serde_json::Value>> {
+    check_term_access(&app, peer, &headers)?;
+    let _ = project_path(&app, &q.project)?;
+    let val = app
+        .selections
+        .lock()
+        .unwrap()
+        .get(&q.project)
+        .cloned()
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "type": "select",
+                "project": q.project,
+                "board": serde_json::Value::Null,
+                "refs": [],
+                "nets": [],
+            })
+        });
+    Ok(Json(val))
+}
+
+fn note_bus_selection(app: &App, text: &str) {
+    let Ok(mut val) = serde_json::from_str::<serde_json::Value>(text) else {
+        return;
+    };
+    if val.get("type").and_then(|t| t.as_str()) != Some("select") {
+        return;
+    }
+    let Some(project_id) = val
+        .get("project")
+        .and_then(|p| p.as_str())
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+    else {
+        return;
+    };
+    if let Some(obj) = val.as_object_mut() {
+        obj.entry("board").or_insert(serde_json::Value::Null);
+        obj.entry("refs").or_insert_with(|| serde_json::json!([]));
+        obj.entry("nets").or_insert_with(|| serde_json::json!([]));
+    }
+    app.selections.lock().unwrap().insert(project_id, val);
+}
+
+async fn bus_socket(
+    State(app): State<Shared>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    let is_local = peer.ip().is_loopback();
+    ws.on_upgrade(move |socket| bus_client(socket, app, is_local))
+}
+
+async fn bus_client(mut socket: WebSocket, app: Shared, is_local: bool) {
     let mut rx = app.bus.subscribe();
     loop {
         tokio::select! {
@@ -798,7 +1015,12 @@ async fn bus_client(mut socket: WebSocket, app: Shared) {
             },
             incoming = socket.recv() => match incoming {
                 // Clients may publish to the bus (selection, focus): relay it.
-                Some(Ok(Message::Text(text))) => { let _ = app.bus.send(text.to_string()); }
+                Some(Ok(Message::Text(text))) => {
+                    if is_local {
+                        note_bus_selection(&app, &text);
+                    }
+                    let _ = app.bus.send(text.to_string());
+                }
                 Some(Ok(_)) => {}
                 _ => break,
             },
