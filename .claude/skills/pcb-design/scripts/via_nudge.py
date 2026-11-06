@@ -157,7 +157,8 @@ def main() -> int:
             # no via hole in or at an SMD pad, its own net's included (stitch.py
             # does the same): the board's dru may ask it, and KiCad has no slack
             if it.Type() == pcbnew.PCB_PAD_T and it.GetAttribute() == pcbnew.PAD_ATTRIB_SMD \
-                    and it.GetEffectiveShape(it.GetLayer()).Collide(pcbnew.SHAPE_CIRCLE(pos, drill // 2), hole_gap):
+                    and it.GetEffectiveShape(pcbnew.B_Cu if it.IsOnLayer(pcbnew.B_Cu) else pcbnew.F_Cu).Collide(
+                        pcbnew.SHAPE_CIRCLE(pos, drill // 2), hole_gap):
                 return False
             if it.GetNetCode() == net.GetNetCode():
                 continue

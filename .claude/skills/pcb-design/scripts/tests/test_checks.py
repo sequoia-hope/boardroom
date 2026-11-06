@@ -440,5 +440,97 @@ class Silk(Case):
         self.assert_fails(self.run_check("silk_check.py"), "pin1")
 
 
+class PadJoints(unittest.TestCase):
+    """pad_joints.py: flipped back-side SMD pads and corner-straddling track ends."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="pad-joints-"))
+        self.hw = self.tmp / "hw" / "t" / "a"
+        self.hw.mkdir(parents=True)
+        (self.tmp / "design").mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def build_board(self, tracks, *, flipped=False, min_track_mm=0.09):
+        (self.tmp / "design" / "checks.toml").write_text(f"[fab]\nmin_track_mm = {min_track_mm}\n")
+        spec = json.dumps({"pcb": str(self.hw / "t.kicad_pcb"), "flipped": flipped, "tracks": tracks})
+        prog = (
+            "import json, pcbnew, sys\n"
+            "cfg = json.loads(sys.argv[1])\n"
+            "b = pcbnew.NewBoard(cfg['pcb'])\n"
+            "ni = pcbnew.NETINFO_ITEM(b, 'SIG'); b.Add(ni)\n"
+            "fp = pcbnew.FOOTPRINT(b); fp.SetReference('U1'); fp.SetPosition(pcbnew.VECTOR2I_MM(10, 10))\n"
+            "p = pcbnew.PAD(fp); p.SetNumber('1'); p.SetAttribute(pcbnew.PAD_ATTRIB_SMD)\n"
+            "p.SetShape(pcbnew.PAD_SHAPE_RECT); p.SetSize(pcbnew.VECTOR2I_MM(1.0, 1.0))\n"
+            "p.SetPosition(pcbnew.VECTOR2I_MM(10, 10))\n"
+            "ls = pcbnew.LSET(); ls.AddLayer(pcbnew.F_Cu); ls.AddLayer(pcbnew.F_Mask); ls.AddLayer(pcbnew.F_Paste)\n"
+            "p.SetLayerSet(ls); p.SetNet(ni); fp.Add(p); b.Add(fp)\n"
+            "if cfg['flipped']:\n"
+            "    fp.Flip(fp.GetPosition(), pcbnew.FLIP_DIRECTION_TOP_BOTTOM)\n"
+            "for layer, x0, y0, x1, y1, w in cfg['tracks']:\n"
+            "    t = pcbnew.PCB_TRACK(b)\n"
+            "    t.SetLayer(pcbnew.B_Cu if layer == 'B.Cu' else pcbnew.F_Cu)\n"
+            "    t.SetStart(pcbnew.VECTOR2I(round(x0 * 1e6), round(y0 * 1e6)))\n"
+            "    t.SetEnd(pcbnew.VECTOR2I(round(x1 * 1e6), round(y1 * 1e6)))\n"
+            "    t.SetWidth(round(w * 1e6)); t.SetNet(ni); b.Add(t)\n"
+            "pcbnew.SaveBoard(cfg['pcb'], b)\n"
+        )
+        r = subprocess.run([sys.executable, "-c", prog, spec], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def run_pad_joints(self):
+        out = self.tmp / "out.json"
+        r = subprocess.run([sys.executable, str(SCRIPTS / "pad_joints.py"), str(self.hw), "--json", str(out)],
+                           capture_output=True, text=True)
+        self.assertTrue(out.exists(), r.stdout + r.stderr)
+        return r.returncode, json.loads(out.read_text()), r.stdout
+
+    def test_flipped_back_pad_sound_and_necked(self):
+        # Sound B.Cu joint must pass even if a thin F.Cu track sits over the same XY.
+        self.build_board([("B.Cu", 8.0, 10.0, 10.0, 10.0, 0.15),
+                          ("F.Cu", 8.0, 10.0, 9.46, 10.0, 0.10)], flipped=True)
+        rc, bad, out = self.run_pad_joints()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(bad, [])
+
+        # Necked B.Cu joint (0.060 mm lens) must fail even if a wide F.Cu track sits over XY.
+        self.build_board([("B.Cu", 8.0, 10.0, 9.46, 10.0, 0.10),
+                          ("F.Cu", 8.0, 10.0, 10.0, 10.0, 0.25)], flipped=True)
+        rc, bad, out = self.run_pad_joints()
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(len(bad), 1)
+        self.assertEqual(bad[0]["pad"], "U1.1")
+        self.assertAlmostEqual(bad[0]["neck_mm"], 0.060, places=3)
+
+    def test_front_pad_corner_end_inside(self):
+        # Track ends 0.005 mm inside (9.5, 9.5) corner: chord 0.077 mm < 0.09 mm must fail
+        # even when an interior stub lies strictly inside the pad.
+        self.build_board([("F.Cu", 8.5, 8.5, 9.505, 9.505, 0.10),
+                          ("F.Cu", 9.8, 9.8, 10.0, 10.0, 0.10)])
+        rc, bad, out = self.run_pad_joints()
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(len(bad), 1)
+        self.assertAlmostEqual(bad[0]["neck_mm"], 0.077, places=3)
+
+        # Reaching 0.05 mm inside the corner gives the full 0.10 mm width and passes.
+        self.build_board([("F.Cu", 8.5, 8.5, 9.55, 9.55, 0.10)])
+        rc, bad, out = self.run_pad_joints()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(bad, [])
+
+    def test_separates_009_neck_from_010_minimum(self):
+        # 0.12 mm track ending 0.003757 mm inside the corner has a 0.090 mm chord (< 0.10 mm).
+        self.build_board([("F.Cu", 8.5, 8.5, 9.503757, 9.503757, 0.12)], min_track_mm=0.10)
+        rc, bad, out = self.run_pad_joints()
+        self.assertEqual(rc, 1, out)
+        self.assertAlmostEqual(bad[0]["neck_mm"], 0.090, places=3)
+
+        # Advancing to 0.0125 mm inside the corner raises the chord to 0.100 mm (>= 0.10 mm).
+        self.build_board([("F.Cu", 8.5, 8.5, 9.5125, 9.5125, 0.12)], min_track_mm=0.10)
+        rc, bad, out = self.run_pad_joints()
+        self.assertEqual(rc, 0, out)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

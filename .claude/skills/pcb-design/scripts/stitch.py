@@ -211,7 +211,7 @@ def main() -> int:
             # dru may ask that (easy2350 "no via hole in an SMD pad"), and an open
             # hole by a pad wicks its solder; KiCad checks it with no slack
             if item.Type() == pcbnew.PCB_PAD_T and item.GetAttribute() == pcbnew.PAD_ATTRIB_SMD:
-                l = item.GetLayer()
+                l = pcbnew.B_Cu if item.IsOnLayer(pcbnew.B_Cu) else pcbnew.F_Cu
                 if item.GetEffectiveShape(l).Collide(pcbnew.SHAPE_CIRCLE(pos, drill // 2), hole_gap):
                     return False
             if item.GetNetCode() == net.GetNetCode():
