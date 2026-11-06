@@ -256,6 +256,12 @@ messages) go to the pcbview project as requests, as the skill already says.
 
 ## Making projects
 
+Built 2026-11-06: the board skeleton moved into `template/`, and `scripts/new-board.sh`
+creates a fresh board repo from `template/`, copies `.claude/skills/pcb-design/` and
+`scripts/{doctor,view,route}.sh`, pins the `vendor/pcbview` and `vendor/ultraroute`
+submodules, makes the initial commit, and appends the folder to
+`~/.config/boardroom/projects.toml` when present.
+
 - **New project** copies the template into a folder you choose, `git init`s it, writes
   `status.json` at phase 0, adds it to the project list, and opens the Claude tab with the
   phase-0 prompt ("describe the board").

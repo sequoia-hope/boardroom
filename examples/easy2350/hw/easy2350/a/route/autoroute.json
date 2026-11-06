@@ -1,0 +1,72 @@
+{
+  "options": [
+    "--strip",
+    "--negotiate",
+    "--rip-up",
+    "--tighten",
+    "--prefanout",
+    "--prefanout-order",
+    "round",
+    "--diff-pairs",
+    "--shove-plough",
+    "region",
+    "--shove-reach",
+    "0.5",
+    "--shove-repair",
+    "20",
+    "--shove-ties",
+    "--shove-passes",
+    "60",
+    "--shove-patience",
+    "8",
+    "--threads",
+    "1",
+    "--timeout",
+    "240",
+    "--planes",
+    "In1.Cu,In2.Cu",
+    "--cell",
+    "0.035",
+    "--plane-via-reach",
+    "1.0"
+  ],
+  "best": 2,
+  "runs": [
+    {
+      "seed": 0,
+      "open": 1,
+      "plane_open": 0,
+      "new_errors": 0,
+      "vias": 137,
+      "router": "memory: peak 526 MB",
+      "open_items": [
+        "PTH pad 10 [/GPIO7] of J2 / Pad 10 [/GPIO7] of U1 on F.Cu"
+      ],
+      "error_items": []
+    },
+    {
+      "seed": 1,
+      "open": 3,
+      "plane_open": 0,
+      "new_errors": 0,
+      "vias": 121,
+      "router": "memory: peak 924 MB",
+      "open_items": [
+        "Pad 32 [/GPIO20] of U1 on F.Cu / PTH pad 6 [/GPIO20] of J3",
+        "Pad 5 [/QSPI_SD0] of U5 on F.Cu / Pad 57 [/QSPI_SD0] of U1 on F.Cu",
+        "Pad 2 [Net-(R7-Pad2)] of R7 on F.Cu / Pad 2 [Net-(R7-Pad2)] of SW1 on F.Cu"
+      ],
+      "error_items": []
+    },
+    {
+      "seed": 2,
+      "open": 0,
+      "plane_open": 0,
+      "new_errors": 0,
+      "vias": 128,
+      "router": "memory: peak 722 MB",
+      "open_items": [],
+      "error_items": []
+    }
+  ]
+}

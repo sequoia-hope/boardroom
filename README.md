@@ -11,14 +11,14 @@ read-only copy of the app, open on the worked example, easy2350.
 **For an agent pointed here:** this README is the map. It says what each project in the suite is,
 where its repo and live page are, what a board repo looks like, and how to make one that works
 with the viewer, the router and the other apps. Follow the links for detail. The specs under
-[`docs/`](docs/) are the full design, and [`CLAUDE.md`](CLAUDE.md) holds the rules for working
-in a board repo.
+[`docs/`](docs/) are the full design; [`CLAUDE.md`](CLAUDE.md) holds the rules for this repo, and
+[`template/CLAUDE.md`](template/CLAUDE.md) holds the rules for a board repo.
 
 ## The suite
 
 | Project | What it does | Repo | Live page | How a board repo uses it |
 |---|---|---|---|---|
-| **Boardroom** | Design skill, project template and phase gates. The app is the suite's main window: project list, status, the other apps in tabs | [sequoia-hope/boardroom](https://github.com/sequoia-hope/boardroom) | [app demo](https://sequoia-hope.github.io/boardroom/) | **A board repo starts as a copy of it** (GitHub template) |
+| **Boardroom** | Design skill, project template and phase gates. The app is the suite's main window: project list, status, the other apps in tabs | [sequoia-hope/boardroom](https://github.com/sequoia-hope/boardroom) | [app demo](https://sequoia-hope.github.io/boardroom/) | **`scripts/new-board.sh` makes a board repo** from `template/`, the skill and the pinned submodules |
 | **pcbview** | Schematic, PCB and 3D viewer for KiCad boards, laid out after Altium 365's. Output is a static site that runs on GitHub Pages | [sequoia-hope/pcbview](https://github.com/sequoia-hope/pcbview) | in use: [robot-link](https://sequoia-hope.github.io/robot-link/), [round-pendant](https://sequoia-hope.github.io/round-pendant/) | **Git submodule** at `vendor/pcbview`, built by `scripts/view.sh` |
 | **UltraRoute** | KiCad autorouter (`ultraroute route`, Rust, MIT), judged by KiCad's own DRC. **UltraRoute Studio** is its live, interactive view | [sequoia-hope/ultraroute](https://github.com/sequoia-hope/ultraroute) | [Studio](https://sequoia-hope.github.io/ultraroute/) (routes in the browser, WASM) | **Git submodule** at `vendor/ultraroute`, built by `scripts/route.sh` on first use |
 | **Circuit Composer** | The stage between schematic and routing: verified chip packages, cited intent files, floorplanning, locked critical blocks, rules and cost grids for the router | [sequoia-hope/circuit-composer](https://github.com/sequoia-hope/circuit-composer) | [app](https://sequoia-hope.github.io/circuit-composer/) | **A tool you install** (`ccomp` CLI and its app). It reads `design/nets.csv` and writes under `compose/` |
@@ -54,8 +54,9 @@ requirements ─▶ Boardroom skill: phases 0–3 ─▶ hw/<board>/<variant>/*.
 
 ## A board repo
 
-Every board in the suite lives in a repo with this layout. The template in this repo already has
-it, so make one from the template rather than by hand:
+Every board in the suite lives in a repo with this layout. `scripts/new-board.sh` assembles it
+from `template/` plus the copied skill (`.claude/skills/pcb-design/`), shared scripts
+(`scripts/{doctor,view,route}.sh`), and pinned submodules (`vendor/{pcbview,ultraroute}`):
 
 ```
 CLAUDE.md                    tells Claude to use the skill and follow its gates
@@ -69,7 +70,7 @@ design/
   links.toml                 links to Waffle Iron projects (suite spec; planned)
 hw/<board>/<variant>/        KiCad projects, one per board variant, e.g. hw/main/a/
 compose/<board>/             Circuit Composer's files (written by Composer only)
-route/<board>/               UltraRoute Studio's jobs and route recipe (planned; scratch and gitignored today)
+route/<board>/               UltraRoute Studio's jobs and route recipe
 interface/<board>/           board-shape.dxf + board-shape.json, the shared outline (written only by board-interface)
 pcbview.toml                 which boards the viewer builds, and which one index.html embeds
 index.html                   the project page: status from design/status.json, plus the embedded viewer
@@ -99,21 +100,19 @@ Repos made this way: [easy2350](examples/easy2350/) (in this repo, the worked ex
 
 ## Start a board
 
-1. **Make your repo.** Click *Use this template* on
-   [sequoia-hope/boardroom](https://github.com/sequoia-hope/boardroom), then clone it with its
-   submodules:
+1. **Make your repo.** Clone Boardroom with its submodules, then run `scripts/new-board.sh`:
    ```sh
-   git clone --recurse-submodules https://github.com/<you>/<your-board> my-board
-   cd my-board
+   git clone --recurse-submodules https://github.com/sequoia-hope/boardroom
+   cd boardroom
+   scripts/new-board.sh ~/pcb/my-board --name "My board"
+   cd ~/pcb/my-board
    ```
-   If you cloned without `--recurse-submodules`, run `git submodule update --init`.
-   An agent without the GitHub button can do the same with
-   `gh repo create <you>/<your-board> --template sequoia-hope/boardroom --clone`, then the
-   submodule command.
-
-   The template still carries the Boardroom app (`app/`) and its specs (`docs/`). A board repo
-   doesn't need them and can delete both. A `template/` directory holding only the board part is
-   planned ([`docs/shell-spec.md`](docs/shell-spec.md#making-projects)).
+   Pass `--github <you>/<my-board>` (and `--private` if private) to create the GitHub repo and
+   push in the same step:
+   ```sh
+   scripts/new-board.sh ~/pcb/my-board --name "My board" --github <you>/<my-board>
+   ```
+   If `~/.config/boardroom/projects.toml` exists, `new-board.sh` adds the new folder to it.
 
 2. **Check your tools.**
    ```sh
@@ -122,11 +121,11 @@ Repos made this way: [easy2350](examples/easy2350/) (in this repo, the worked ex
    You need KiCad 9+ (`kicad-cli`), Python 3.11+ and numpy. KiCad's Python module and ngspice
    are recommended. Routing needs Rust (`cargo`).
 
-3. **Serve the project page** in a second terminal, on a free port:
+3. **Serve the project page** in a second terminal:
    ```sh
-   ./serve.sh --port 8000
+   ./serve.sh --port N
    ```
-   and open `http://localhost:8000/`. To check from your phone, use the machine's address on your
+   and open `http://localhost:N/`. To check from your phone, use the machine's address on your
    network instead of `localhost`.
 
 4. **Start Claude Code** in the repo and describe the board:
@@ -284,5 +283,5 @@ If a lesson applies to every board, send it upstream to this repo.
 
 ## License
 
-MIT, see `LICENSE`. The license covers this template. The boards you make from it are yours to
-license as you like.
+MIT, see `LICENSE`. The license covers Boardroom and its template. The boards you make from it are
+yours to license as you like.

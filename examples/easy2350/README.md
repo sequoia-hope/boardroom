@@ -2,7 +2,7 @@
 
 An RP2350A development board (USB-C, 16 MB flash, all 30 GPIO on breadboard
 headers, 21 × 51 mm; Pico-sized but **not** Pico pin-compatible: a Pico
-carrier would put 5 V on GPIO29), designed with this template's `pcb-design` skill from
+carrier would put 5 V on GPIO29), designed with Boardroom's `pcb-design` skill from
 phase 0 to fab outputs. Read it gate by gate:
 
 | Phase | Gate file | State |
@@ -26,5 +26,6 @@ STEP). Bring-up: [`design/bringup.md`](design/bringup.md). Board scripts:
 
 Everything a phase produced lives in [`design/`](design/): the intent, part
 audits, decisions with their reasons, and each gate's evidence and review.
-The project page is [`index.html`](index.html); from the repo root, run
-`./serve.sh --port N` and open `/examples/easy2350/`.
+The project page is [`index.html`](index.html) (viewer rebuilt from the repo root
+with `scripts/view.sh build examples/easy2350/pcbview.toml`); to browse it in
+Boardroom, run `app/serve.sh --port N` from the repo root and open `easy2350`.

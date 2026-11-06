@@ -1,0 +1,540 @@
+{
+  "router": {
+    "version": "0.1.0",
+    "commit": "d25ef9132ed8"
+  },
+  "input": {
+    "path": "/home/sequoia/Software/easy_pcb/examples/easy2350/hw/easy2350/a/easy2350.kicad_pcb",
+    "sha256": "ed4c92e1021bb32236b3b294e3ddfb4d13710f97958c70d079ba72ecfc385c4f",
+    "bytes": 1291459
+  },
+  "summary": {
+    "connections": 83,
+    "opens": 1,
+    "routed": 82,
+    "failed": 1,
+    "vias": 159,
+    "seconds": 2.7848355099999997
+  },
+  "findings": [
+    {
+      "severity": "error",
+      "kind": "open",
+      "message": "open /VREG_LX: L1-2 to U1-48",
+      "refs": [
+        "L1",
+        "U1"
+      ],
+      "nets": [
+        "/VREG_LX"
+      ],
+      "ends": [
+        "L1-2",
+        "U1-48"
+      ]
+    }
+  ],
+  "deadline": {
+    "limited": [],
+    "hard_passed_in": null,
+    "overran_seconds": null,
+    "cancelled": false
+  },
+  "stages": [
+    {
+      "name": "set-up",
+      "started": 0.0,
+      "seconds": 0.014754251,
+      "cut": false,
+      "open_before": 83,
+      "open_after": 83,
+      "laid": 0,
+      "ripped": 0,
+      "vias": 158,
+      "work": {
+        "astar": 0,
+        "astar_expanded": 0,
+        "fields": 0,
+        "field_settled": 0,
+        "maps": 0,
+        "checks": 0,
+        "connectivity": 1
+      },
+      "detail": {
+        "connections": 83,
+        "length_limited_nets": 0
+      }
+    },
+    {
+      "name": "prefanout",
+      "started": 0.015820916,
+      "seconds": 1.185037415,
+      "cut": false,
+      "open_before": 83,
+      "open_after": 80,
+      "laid": 47,
+      "ripped": 0,
+      "vias": 159,
+      "work": {
+        "astar": 13,
+        "astar_expanded": 74304,
+        "fields": 0,
+        "field_settled": 0,
+        "maps": 7,
+        "checks": 242,
+        "connectivity": 83
+      },
+      "detail": {
+        "candidates": 2,
+        "escaped": 1,
+        "failed": 1,
+        "inward": 2,
+        "parts": 2,
+        "vias": 1
+      }
+    },
+    {
+      "name": "pairs",
+      "started": 1.203126272,
+      "seconds": 0.009275315,
+      "cut": false,
+      "open_before": 80,
+      "open_after": 80,
+      "laid": 0,
+      "ripped": 0,
+      "vias": 159,
+      "work": {
+        "astar": 0,
+        "astar_expanded": 0,
+        "fields": 0,
+        "field_settled": 0,
+        "maps": 0,
+        "checks": 0,
+        "connectivity": 4
+      },
+      "detail": {
+        "coupled": 0,
+        "coupled_mm": 0.0,
+        "pairs": 3,
+        "runs": 0
+      }
+    },
+    {
+      "name": "pair-escapes",
+      "started": 1.214683865,
+      "seconds": 0.003054672,
+      "cut": false,
+      "open_before": 80,
+      "open_after": 80,
+      "laid": 0,
+      "ripped": 0,
+      "vias": 159,
+      "work": {
+        "astar": 0,
+        "astar_expanded": 0,
+        "fields": 0,
+        "field_settled": 0,
+        "maps": 0,
+        "checks": 0,
+        "connectivity": 1
+      },
+      "detail": {
+        "nets": 0
+      }
+    },
+    {
+      "name": "routing",
+      "started": 1.219839967,
+      "seconds": 8e-8,
+      "cut": false,
+      "open_before": 80,
+      "open_after": 80,
+      "laid": 0,
+      "ripped": 0,
+      "vias": 159,
+      "work": {
+        "astar": 0,
+        "astar_expanded": 0,
+        "fields": 0,
+        "field_settled": 0,
+        "maps": 0,
+        "checks": 0,
+        "connectivity": 0
+      },
+      "detail": null
+    },
+    {
+      "name": "negotiation",
+      "started": 1.221861287,
+      "seconds": 0.589466309,
+      "cut": false,
+      "open_before": 80,
+      "open_after": 1,
+      "laid": 378,
+      "ripped": 0,
+      "vias": 160,
+      "work": {
+        "astar": 105,
+        "astar_expanded": 433980,
+        "fields": 0,
+        "field_settled": 0,
+        "maps": 2,
+        "checks": 22079,
+        "connectivity": 4
+      },
+      "detail": {
+        "committed": 79,
+        "conflicted": 0,
+        "connections": 80,
+        "rounds": 1,
+        "unroutable": 1,
+        "vias": 1
+      }
+    },
+    {
+      "name": "finishing",
+      "started": 1.812859842,
+      "seconds": 0.029509834,
+      "cut": false,
+      "open_before": 1,
+      "open_after": 1,
+      "laid": 0,
+      "ripped": 0,
+      "vias": 160,
+      "work": {
+        "astar": 0,
+        "astar_expanded": 0,
+        "fields": 0,
+        "field_settled": 0,
+        "maps": 1,
+        "checks": 112,
+        "connectivity": 2
+      },
+      "detail": {
+        "failed": 1,
+        "no_path": 0,
+        "no_terminal": 1,
+        "refused": 0,
+        "routed": 0,
+        "vias": 0
+      }
+    },
+    {
+      "name": "prune-escapes",
+      "started": 1.84405611,
+      "seconds": 0.002734083,
+      "cut": false,
+      "open_before": 1,
+      "open_after": 1,
+      "laid": 0,
+      "ripped": 38,
+      "vias": 160,
+      "work": {
+        "astar": 0,
+        "astar_expanded": 0,
+        "fields": 0,
+        "field_settled": 0,
+        "maps": 0,
+        "checks": 0,
+        "connectivity": 1
+      },
+      "detail": {
+        "pruned": 38
+      }
+    },
+    {
+      "name": "rip-up",
+      "started": 1.8484089,
+      "seconds": 0.038194105,
+      "cut": false,
+      "open_before": 1,
+      "open_after": 1,
+      "laid": 0,
+      "ripped": 0,
+      "vias": 160,
+      "work": {
+        "astar": 0,
+        "astar_expanded": 0,
+        "fields": 0,
+        "field_settled": 0,
+        "maps": 2,
+        "checks": 112,
+        "connectivity": 2
+      },
+      "detail": {
+        "hard_conflict": 0,
+        "kept": 0,
+        "no_better": 0,
+        "no_path": 0,
+        "ripped": 0,
+        "tries": 1
+      }
+    },
+    {
+      "name": "merge-escapes",
+      "started": 1.8893518249999999,
+      "seconds": 3.256e-6,
+      "cut": false,
+      "open_before": 1,
+      "open_after": 1,
+      "laid": 0,
+      "ripped": 0,
+      "vias": 160,
+      "work": {
+        "astar": 0,
+        "astar_expanded": 0,
+        "fields": 0,
+        "field_settled": 0,
+        "maps": 0,
+        "checks": 0,
+        "connectivity": 0
+      },
+      "detail": {
+        "escapes": 9
+      }
+    },
+    {
+      "name": "shove",
+      "started": 1.891162271,
+      "seconds": 0.271829102,
+      "cut": false,
+      "open_before": 1,
+      "open_after": 1,
+      "laid": 0,
+      "ripped": 115,
+      "vias": 160,
+      "work": {
+        "astar": 8,
+        "astar_expanded": 0,
+        "fields": 0,
+        "field_settled": 0,
+        "maps": 8,
+        "checks": 640,
+        "connectivity": 72
+      },
+      "detail": {
+        "pair_pieces_unlocked": 0,
+        "passes": 8
+      }
+    },
+    {
+      "name": "tightening",
+      "started": 2.164373538,
+      "seconds": 0.003697755,
+      "cut": false,
+      "open_before": 1,
+      "open_after": 1,
+      "laid": 79,
+      "ripped": 199,
+      "vias": 160,
+      "work": {
+        "astar": 0,
+        "astar_expanded": 0,
+        "fields": 0,
+        "field_settled": 0,
+        "maps": 0,
+        "checks": 105,
+        "connectivity": 0
+      },
+      "detail": {
+        "chains": 134,
+        "mm_after": 194.58772136478342,
+        "mm_before": 198.74900530769935,
+        "segments_after": 145,
+        "segments_before": 270
+      }
+    },
+    {
+      "name": "vias",
+      "started": 2.169591706,
+      "seconds": 0.143608304,
+      "cut": false,
+      "open_before": 1,
+      "open_after": 1,
+      "laid": 4,
+      "ripped": 10,
+      "vias": 159,
+      "work": {
+        "astar": 15,
+        "astar_expanded": 456869,
+        "fields": 0,
+        "field_settled": 0,
+        "maps": 7,
+        "checks": 9836,
+        "connectivity": 26
+      },
+      "detail": {
+        "after": 1,
+        "before": 2,
+        "dropped": 1,
+        "kept": 1,
+        "tried": 6
+      }
+    },
+    {
+      "name": "cleaning",
+      "started": 2.314737295,
+      "seconds": 0.002160019,
+      "cut": false,
+      "open_before": 1,
+      "open_after": 1,
+      "laid": 0,
+      "ripped": 0,
+      "vias": 159,
+      "work": {
+        "astar": 0,
+        "astar_expanded": 0,
+        "fields": 0,
+        "field_settled": 0,
+        "maps": 0,
+        "checks": 0,
+        "connectivity": 1
+      },
+      "detail": {
+        "doubled": 0,
+        "pruned": 0
+      }
+    },
+    {
+      "name": "length matching",
+      "started": 2.318328992,
+      "seconds": 0.002660735,
+      "cut": false,
+      "open_before": 1,
+      "open_after": 1,
+      "laid": 0,
+      "ripped": 0,
+      "vias": 159,
+      "work": {
+        "astar": 0,
+        "astar_expanded": 0,
+        "fields": 0,
+        "field_settled": 0,
+        "maps": 0,
+        "checks": 0,
+        "connectivity": 1
+      },
+      "detail": {
+        "bumps": 0,
+        "pairs": 3,
+        "skews": [
+          {
+            "after_mm": 0.605117,
+            "before_mm": 0.605117,
+            "pair": "/USB_DP//USB_DM"
+          },
+          {
+            "after_mm": 0.909887,
+            "before_mm": 0.909887,
+            "pair": "/USB_DP_C//USB_DM_C"
+          },
+          {
+            "after_mm": 0.28388399999999997,
+            "before_mm": 0.28388399999999997,
+            "pair": "/USB_DP_MCU//USB_DM_MCU"
+          }
+        ]
+      }
+    },
+    {
+      "name": "result",
+      "started": 2.322192166,
+      "seconds": 0.000922685,
+      "cut": false,
+      "open_before": 1,
+      "open_after": 1,
+      "laid": 0,
+      "ripped": 0,
+      "vias": 159,
+      "work": {
+        "astar": 0,
+        "astar_expanded": 0,
+        "fields": 0,
+        "field_settled": 0,
+        "maps": 0,
+        "checks": 0,
+        "connectivity": 1
+      },
+      "detail": {
+        "failed": 1,
+        "open": 1,
+        "routed": 0
+      }
+    },
+    {
+      "name": "write",
+      "started": 2.324181536,
+      "seconds": 0.026691985,
+      "cut": false,
+      "open_before": 1,
+      "open_after": 1,
+      "laid": 0,
+      "ripped": 0,
+      "vias": 159,
+      "work": {
+        "astar": 0,
+        "astar_expanded": 0,
+        "fields": 0,
+        "field_settled": 0,
+        "maps": 0,
+        "checks": 1,
+        "connectivity": 0
+      },
+      "detail": {
+        "moved_parts": 0,
+        "split": 0,
+        "stale_fills": 45,
+        "tracks": 145,
+        "vias": 1
+      }
+    }
+  ],
+  "failures": [
+    {
+      "stage": "finishing",
+      "net": "/VREG_LX",
+      "from": "L1-2",
+      "to": "U1-48",
+      "reason": "no terminal at the end"
+    }
+  ],
+  "settings": {
+    "flags": [
+      "route",
+      "--negotiate",
+      "--rip-up",
+      "--tighten",
+      "--prefanout",
+      "--diff-pairs",
+      "--shove-plough",
+      "region",
+      "--shove-reach",
+      "0.5",
+      "--shove-repair",
+      "20",
+      "--shove-ties",
+      "--shove-passes",
+      "60",
+      "--shove-patience",
+      "8",
+      "/home/sequoia/Software/easy_pcb/examples/easy2350/hw/easy2350/a/easy2350.kicad_pcb",
+      "-o",
+      "/home/sequoia/Software/ultraroute/studio/runs/projects/easy2350-36061dda/easy2350-a/1793378031072.kicad_pcb",
+      "--report",
+      "/home/sequoia/Software/ultraroute/studio/runs/projects/easy2350-36061dda/easy2350-a/1793378031072.report.json",
+      "--live",
+      "-"
+    ],
+    "seed": 0,
+    "uuid_seed": null,
+    "threads": 12,
+    "cell_mm": 0.05,
+    "timeout": null,
+    "nodes": 1713600
+  },
+  "memory": {
+    "estimate_mb": 335,
+    "peak_mb": 288
+  },
+  "stats_seconds": 0.027793365999999996
+}

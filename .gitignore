@@ -13,13 +13,15 @@ _autosave-*
 *.lck
 \#auto_saved_files\#
 
-# Freerouting / autorouter scratch
+# Freerouting / autorouter scratch (route/<board>/ and autoroute.json are kept)
 *.dsn
 *.ses
 *.rules
-route/
+**/hw/*/*/route/*
+!**/hw/*/*/route/autoroute.json
 
 __pycache__/
+.pytest_cache/
 .DS_Store
 
 # per-machine launcher

@@ -64,7 +64,7 @@ def repo_root(start: Path) -> Path:
     for p in [start, *start.parents]:
         if (p / "scripts" / "route.sh").exists():
             return p
-    sys.exit("autoroute.py: scripts/route.sh not found above the project (is this an easy_pcb repo?)")
+    sys.exit("autoroute.py: scripts/route.sh not found above the project (is this a Boardroom board repo?)")
 
 
 def ultraroute(root: Path) -> Path:
