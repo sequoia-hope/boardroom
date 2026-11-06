@@ -515,7 +515,35 @@ Not tested: a real keyboard, picking precision, camera feel, sign-in and write-b
 
 ### Stage 2: hosted git
 
-Waffle Iron's existing hosted adapters cover everything that is pushed.
+Waffle Iron's existing hosted adapters cover everything that is pushed. Boardroom's links already read
+any remote git can clone, so its part is making hosted remotes dependable and making "pushed or not"
+visible, since in this stage only what is pushed exists for another machine or for Waffle Iron alone.
+
+- **Mirrors that scale.** A network remote (`https://`, `ssh://`, `git@host:`) is mirrored without blobs
+  (`clone --mirror --filter=blob:none`), and the two interface files are fetched when read. Measured on
+  waffle-iron, 2026-11-06: a full mirror is 796 MB and 28 s, past the 15 s git timeout, while a blob-less one
+  is 6.5 MB and 2 s, with a blob read in 0.3 s. Clone and fetch get their own, longer timeout. Local paths
+  keep full mirrors. One mirror per repository, keyed by `normalize_remote`, so the https, ssh and `.git`
+  spellings share it.
+- **Sign-in is named.** An authentication failure leaves the link Unavailable with a hint naming the host
+  and the fix (`gh auth login`, or an SSH key), rather than git's raw message. The accepted copy keeps working.
+- **Links that travel (Recommended).** `design/links.toml` is committed, so a remote that is a filesystem path
+  works on one machine only. Such links show "this machine only", and when that checkout's `origin` is
+  hosted, a **Use hosted remote** action rewrites the remote to it, refused until the accepted commit has
+  been pushed there.
+- **Unpushed changes are a hint, never a version (Recommended).** A hosted link is judged against the host.
+  If a project registered on this machine has the same `origin` and holds commits to the linked interface
+  that are not pushed, the link says so ("enclosure has an unpushed outline change here: push it to
+  accept it"). Accepting an unpushed commit is refused, because `links.toml` would then name a commit other
+  machines cannot fetch.
+- **Your own outline's reach.** For each `interface/<board>/` in a project, the Versions tab shows whether its
+  latest change is uncommitted, committed but not pushed, or pushed, and what other machines see meanwhile.
+  A **Push** action runs a plain `git push` of the current branch to its upstream, from loopback only,
+  never forced, and reports git's refusal as it is.
+- Requests from other devices stay read-only, as in stage 1.
+
+Not in this stage: Waffle Iron's `BoardInterface` source over its hosted adapters (Waffle Iron's side),
+webhooks and live notices (stage 4), and Pages (stage 3).
 
 ### Stage 3: browser
 

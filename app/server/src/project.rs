@@ -115,11 +115,36 @@ pub struct Git {
 
 /// A remote URL in one comparable form: https, no `.git`, no trailing slash.
 pub fn normalize_remote(url: &str) -> String {
-    let url = url.trim().trim_end_matches('/').trim_end_matches(".git");
-    if let Some(rest) = url.strip_prefix("git@")
-        && let Some((host, path)) = rest.split_once(':')
+    let url = url
+        .trim()
+        .trim_end_matches('/')
+        .trim_end_matches(".git")
+        .trim_end_matches('/');
+    if !url.contains("://")
+        && !url.starts_with('/')
+        && let Some((before_colon, path)) = url.split_once(':')
+        && !before_colon.contains('/')
+        && !before_colon.contains('\\')
+        && let Some((user, host)) = before_colon.split_once('@')
+        && !user.is_empty()
+        && !host.is_empty()
+        && !path.is_empty()
     {
+        let path = path.trim_start_matches('/');
         return format!("https://{host}/{path}");
+    }
+    for prefix in ["ssh://", "git+ssh://"] {
+        if let Some(rest) = url.strip_prefix(prefix)
+            && let Some((authority, path)) = rest.split_once('/')
+        {
+            let host = authority
+                .rsplit_once('@')
+                .map(|(_, h)| h)
+                .unwrap_or(authority);
+            if !host.is_empty() && !host.contains(':') {
+                return format!("https://{host}/{path}");
+            }
+        }
     }
     url.replacen("http://", "https://", 1)
 }

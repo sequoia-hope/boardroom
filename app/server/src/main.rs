@@ -11,7 +11,9 @@
 //!     boardroom link update <project-path> <id>
 //!     boardroom link pin <project-path> <id> [--reason <why>]
 //!     boardroom link follow <project-path> <id> [--branch <name>]
+//!     boardroom link rehost <project-path> <id>
 //!     boardroom link remove <project-path> <id>
+//!     boardroom push <project-path>                 push the current branch to its upstream
 //!     boardroom snapshot [--ccomp P] <out> <dir>... a static copy for the web-only build
 //!
 //! The port comes from --port, then $PORT, then `proj port`; with none the
@@ -35,6 +37,7 @@ fn main() {
         "list" => list(),
         "selection" => selection_cmd(rest),
         "link" => link_cmd(rest),
+        "push" => push_cmd(rest),
         "snapshot" => snapshot::write(rest),
         "help" | "-h" | "--help" => {
             // The usage is the module comment's command list.
@@ -330,9 +333,9 @@ fn resolve_cwd_project_id() -> Result<String, String> {
 }
 
 fn link_cmd(args: &[String]) -> Result<(), String> {
-    let (sub, rest) = args
-        .split_first()
-        .ok_or("usage: boardroom link <add|list|update|pin|follow|remove> <project-path> ...")?;
+    let (sub, rest) = args.split_first().ok_or(
+        "usage: boardroom link <add|list|update|pin|follow|rehost|remove> <project-path> ...",
+    )?;
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     let cache = LinksCache::new();
 
@@ -405,7 +408,10 @@ fn link_cmd(args: &[String]) -> Result<(), String> {
                 return Err(format!("{} is not a folder", root.display()));
             }
             let refresh = has_switch(rest, "refresh");
-            let statuses = rt.block_on(links::list_links(&root, &cache, refresh, true))?;
+            let cands: Vec<PathBuf> = config::ProjectList::load()
+                .map(|l| l.projects.into_iter().map(|p| p.path).collect())
+                .unwrap_or_default();
+            let statuses = rt.block_on(links::list_links(&root, &cache, refresh, true, &cands))?;
             if has_switch(rest, "json") {
                 println!(
                     "{}",
@@ -483,6 +489,24 @@ fn link_cmd(args: &[String]) -> Result<(), String> {
             print_link_status(&status);
             Ok(())
         }
+        "rehost" => {
+            let pos = positionals(rest, &["id"], &[])?;
+            let project_dir = pos
+                .first()
+                .ok_or("usage: boardroom link rehost <project-path> <id>")?;
+            let id = flag(rest, "id")
+                .or_else(|| pos.get(1).map(|s| (*s).to_string()))
+                .ok_or("usage: boardroom link rehost <project-path> <id>")?;
+            let status = rt
+                .block_on(links::rehost_link(
+                    std::path::Path::new(project_dir),
+                    &id,
+                    &cache,
+                ))
+                .map_err(|e| e.to_string())?;
+            print_link_status(&status);
+            Ok(())
+        }
         "remove" => {
             let pos = positionals(rest, &["id"], &[])?;
             let project_dir = pos
@@ -497,9 +521,31 @@ fn link_cmd(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         other => Err(format!(
-            "unknown link subcommand '{other}' (expected add, list, update, pin, follow, remove)"
+            "unknown link subcommand '{other}' (expected add, list, update, pin, follow, rehost, remove)"
         )),
     }
+}
+
+fn push_cmd(args: &[String]) -> Result<(), String> {
+    let pos = positionals(args, &[], &[])?;
+    let project_dir = pos.first().ok_or("usage: boardroom push <project-path>")?;
+    let root = PathBuf::from(project_dir);
+    if !root.is_dir() {
+        return Err(format!("{} is not a folder", root.display()));
+    }
+    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    let res = rt
+        .block_on(links::push_upstream(&root))
+        .map_err(|e| e.to_string())?;
+    if res.output.trim().is_empty() {
+        println!("pushed to {}/{}", res.remote, res.branch);
+    } else {
+        print!("{}", res.output);
+        if !res.output.ends_with('\n') {
+            println!();
+        }
+    }
+    Ok(())
 }
 
 fn print_link_status(s: &LinkStatus) {
@@ -508,16 +554,41 @@ fn print_link_status(s: &LinkStatus) {
         .locked_by
         .map(|d| format!("  [locked by {}]", d.as_str()))
         .unwrap_or_default();
+    let scope = if s.local_only {
+        "  [this machine only]"
+    } else {
+        ""
+    };
     println!(
-        "{:<16} {:<12} {:<28} @ {}{}",
+        "{:<16} {:<12} {:<28} @ {}{}{}",
         s.id,
         format!("{}:{}", s.kind, s.board),
         s.state.as_str(),
         short,
-        locked
+        locked,
+        scope
     );
     if let Some(err) = &s.error {
         println!("  error: {err}");
+    }
+    if let Some(hint) = &s.hint {
+        println!("  hint: {hint}");
+    }
+    if s.local_only
+        && let Some(hosted) = &s.hosted_remote
+    {
+        println!("  hosted remote: {hosted}");
+    }
+    if let Some(u) = &s.unpushed {
+        let name = u
+            .project_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| u.project_path.display().to_string());
+        println!(
+            "  unpushed: {name} on {} (commits={}, uncommitted={})",
+            u.branch, u.commits, u.uncommitted
+        );
     }
     if !s.pin_reason.is_empty() {
         println!("  pin reason: {}", s.pin_reason);

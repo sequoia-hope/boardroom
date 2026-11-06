@@ -7,7 +7,10 @@ use crate::apps;
 use crate::config::{self, ProjectList};
 use crate::examples;
 use crate::files::{self, Expect, WriteError};
-use crate::links::{self, AddLinkRequest, LinkOpError, LinkState, LinkStatus, LinksCache};
+use crate::links::{
+    self, AddLinkRequest, LinkOpError, LinkState, LinkStatus, LinksCache, Published, PushError,
+    PushResult,
+};
 use crate::problem;
 use crate::project;
 use crate::terminals::{StartTermRequest, TermError, TermSummary, Terminals, TerminalsOptions};
@@ -96,6 +99,14 @@ fn bad_link_op(err: LinkOpError) -> (StatusCode, String) {
     }
 }
 
+fn bad_push_op(err: PushError) -> (StatusCode, String) {
+    match err {
+        PushError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
+        PushError::Failed(stderr) => (StatusCode::CONFLICT, stderr),
+        PushError::Io(m) => (StatusCode::INTERNAL_SERVER_ERROR, m),
+    }
+}
+
 fn bad_term_op(err: TermError) -> (StatusCode, String) {
     match err {
         TermError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
@@ -176,6 +187,12 @@ pub fn router_with_options(
             "/api/projects/{id}/links/{link}/follow",
             post(follow_project_link),
         )
+        .route(
+            "/api/projects/{id}/links/{link}/rehost",
+            post(rehost_project_link),
+        )
+        .route("/api/projects/{id}/published", get(project_published))
+        .route("/api/projects/{id}/push", post(push_project))
         .route("/api/projects/{id}/open/{what}", post(open))
         .route("/api/pick-folder", post(pick_folder))
         .route("/api/term", get(list_terms).post(start_term))
@@ -271,24 +288,40 @@ fn project_path(app: &App, id: &str) -> ApiResult<PathBuf> {
         .ok_or_else(|| bad(StatusCode::NOT_FOUND, "no such project"))
 }
 
+/// Other registered project paths on this machine (excluding `exclude`).
+fn candidate_paths(app: &App, exclude: &Path) -> Vec<PathBuf> {
+    let list = app.list.lock().unwrap();
+    list.projects
+        .iter()
+        .filter(|p| p.path != exclude)
+        .map(|p| p.path.clone())
+        .collect()
+}
+
 async fn projects(
     State(app): State<Shared>,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
 ) -> impl IntoResponse {
     let may_write = peer.ip().is_loopback();
     let entries = app.list.lock().unwrap().projects.clone();
+    let all_paths: Vec<PathBuf> = entries.iter().map(|e| e.path.clone()).collect();
     // Evaluate links first when `design/links.toml` exists so `.boardroom/links/` is
     // materialized and quiet `NewRevisionNoInterfaceChange` commit advances land before
     // `project::summarize` checks gate input records and Gate 10's release commits.
     let mut preloaded: HashMap<PathBuf, Vec<LinkStatus>> = HashMap::new();
     for e in &entries {
-        if e.path.is_dir()
-            && e.path.join("design/links.toml").is_file()
-            && let Ok(statuses) =
-                links::list_links(&e.path, &app.links_cache, false, may_write).await
-        {
-            note_link_states(&app, &config::project_id(&e.path), &statuses, false);
-            preloaded.insert(e.path.clone(), statuses);
+        if e.path.is_dir() && e.path.join("design/links.toml").is_file() {
+            let cands: Vec<PathBuf> = all_paths
+                .iter()
+                .filter(|p| *p != &e.path)
+                .cloned()
+                .collect();
+            if let Ok(statuses) =
+                links::list_links(&e.path, &app.links_cache, false, may_write, &cands).await
+            {
+                note_link_states(&app, &config::project_id(&e.path), &statuses, false);
+                preloaded.insert(e.path.clone(), statuses);
+            }
         }
     }
 
@@ -618,6 +651,26 @@ fn note_link_states(app: &App, project_id: &str, statuses: &[LinkStatus], force_
     }
 }
 
+async fn refresh_after_link_write(
+    app: &App,
+    project_id: &str,
+    root: &Path,
+    fallback: LinkStatus,
+) -> LinkStatus {
+    let cands = candidate_paths(app, root);
+    if let Ok(all) = links::list_links(root, &app.links_cache, false, true, &cands).await {
+        note_link_states(app, project_id, &all, true);
+        if let Some(found) = all.into_iter().find(|s| s.id == fallback.id) {
+            return found;
+        }
+    } else {
+        let _ = app
+            .bus
+            .send(serde_json::json!({"type": "links", "project": project_id}).to_string());
+    }
+    fallback
+}
+
 async fn project_links(
     State(app): State<Shared>,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
@@ -625,13 +678,20 @@ async fn project_links(
     Query(q): Query<LinksQuery>,
 ) -> ApiResult<Json<Vec<LinkStatus>>> {
     let root = project_path(&app, &id)?;
+    let cands = candidate_paths(&app, &root);
     let force = q
         .refresh
         .as_deref()
         .is_some_and(|v| matches!(v, "1" | "true" | "yes"));
-    let statuses = links::list_links(&root, &app.links_cache, force, peer.ip().is_loopback())
-        .await
-        .map_err(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let statuses = links::list_links(
+        &root,
+        &app.links_cache,
+        force,
+        peer.ip().is_loopback(),
+        &cands,
+    )
+    .await
+    .map_err(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     note_link_states(&app, &id, &statuses, false);
     Ok(Json(statuses))
 }
@@ -645,14 +705,9 @@ async fn add_project_link(
     let status = links::add_link(&root, body, &app.links_cache)
         .await
         .map_err(bad_link_op)?;
-    if let Ok(all) = links::list_links(&root, &app.links_cache, false, true).await {
-        note_link_states(&app, &id, &all, true);
-    } else {
-        let _ = app
-            .bus
-            .send(serde_json::json!({"type": "links", "project": id}).to_string());
-    }
-    Ok(Json(status))
+    Ok(Json(
+        refresh_after_link_write(&app, &id, &root, status).await,
+    ))
 }
 
 async fn update_project_link(
@@ -663,14 +718,9 @@ async fn update_project_link(
     let status = links::update_link(&root, &link, &app.links_cache)
         .await
         .map_err(bad_link_op)?;
-    if let Ok(all) = links::list_links(&root, &app.links_cache, false, true).await {
-        note_link_states(&app, &id, &all, true);
-    } else {
-        let _ = app
-            .bus
-            .send(serde_json::json!({"type": "links", "project": id}).to_string());
-    }
-    Ok(Json(status))
+    Ok(Json(
+        refresh_after_link_write(&app, &id, &root, status).await,
+    ))
 }
 
 async fn pin_project_link(
@@ -688,14 +738,9 @@ async fn pin_project_link(
     let status = links::pin_link(&root, &link, parsed.reason, &app.links_cache)
         .await
         .map_err(bad_link_op)?;
-    if let Ok(all) = links::list_links(&root, &app.links_cache, false, true).await {
-        note_link_states(&app, &id, &all, true);
-    } else {
-        let _ = app
-            .bus
-            .send(serde_json::json!({"type": "links", "project": id}).to_string());
-    }
-    Ok(Json(status))
+    Ok(Json(
+        refresh_after_link_write(&app, &id, &root, status).await,
+    ))
 }
 
 async fn follow_project_link(
@@ -707,14 +752,22 @@ async fn follow_project_link(
     let status = links::follow_link(&root, &link, body.branch, &app.links_cache)
         .await
         .map_err(bad_link_op)?;
-    if let Ok(all) = links::list_links(&root, &app.links_cache, false, true).await {
-        note_link_states(&app, &id, &all, true);
-    } else {
-        let _ = app
-            .bus
-            .send(serde_json::json!({"type": "links", "project": id}).to_string());
-    }
-    Ok(Json(status))
+    Ok(Json(
+        refresh_after_link_write(&app, &id, &root, status).await,
+    ))
+}
+
+async fn rehost_project_link(
+    State(app): State<Shared>,
+    UrlPath((id, link)): UrlPath<(String, String)>,
+) -> ApiResult<Json<LinkStatus>> {
+    let root = project_path(&app, &id)?;
+    let status = links::rehost_link(&root, &link, &app.links_cache)
+        .await
+        .map_err(bad_link_op)?;
+    Ok(Json(
+        refresh_after_link_write(&app, &id, &root, status).await,
+    ))
 }
 
 async fn delete_project_link(
@@ -722,12 +775,13 @@ async fn delete_project_link(
     UrlPath((id, link)): UrlPath<(String, String)>,
 ) -> ApiResult<StatusCode> {
     let root = project_path(&app, &id)?;
+    let cands = candidate_paths(&app, &root);
     let root2 = root.clone();
     tokio::task::spawn_blocking(move || links::remove_link(&root2, &link))
         .await
         .map_err(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(bad_link_op)?;
-    if let Ok(all) = links::list_links(&root, &app.links_cache, false, true).await {
+    if let Ok(all) = links::list_links(&root, &app.links_cache, false, true, &cands).await {
         note_link_states(&app, &id, &all, true);
     } else {
         let _ = app
@@ -735,6 +789,36 @@ async fn delete_project_link(
             .send(serde_json::json!({"type": "links", "project": id}).to_string());
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn project_published(
+    State(app): State<Shared>,
+    UrlPath(id): UrlPath<String>,
+) -> ApiResult<Json<Vec<Published>>> {
+    let root = project_path(&app, &id)?;
+    let items = tokio::task::spawn_blocking(move || links::published_status(&root))
+        .await
+        .map_err(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(items))
+}
+
+async fn push_project(
+    State(app): State<Shared>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    UrlPath(id): UrlPath<String>,
+) -> ApiResult<Json<PushResult>> {
+    if !peer.ip().is_loopback() {
+        return Err(bad(
+            StatusCode::FORBIDDEN,
+            "Boardroom takes changes only from the machine it runs on",
+        ));
+    }
+    let root = project_path(&app, &id)?;
+    let res = links::push_upstream(&root).await.map_err(bad_push_op)?;
+    let _ = app
+        .bus
+        .send(serde_json::json!({"type": "links", "project": id}).to_string());
+    Ok(Json(res))
 }
 
 /// `%XX` escapes undone (the store sends a message so, as headers are ASCII).

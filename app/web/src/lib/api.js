@@ -126,6 +126,21 @@ export function removeLink(id, linkId) {
   });
 }
 
+export function rehostLink(id, linkId) {
+  return json(`/api/projects/${id}/links/${encodeURIComponent(linkId)}/rehost`, {
+    method: 'POST',
+  });
+}
+
+export async function published(project) {
+  if (STATIC) return project.published ?? [];
+  return json(`/api/projects/${project.id}/published`);
+}
+
+export function pushProject(id) {
+  return json(`/api/projects/${id}/push`, { method: 'POST' });
+}
+
 export function terms() {
   return STATIC ? Promise.resolve([]) : json('/api/term');
 }

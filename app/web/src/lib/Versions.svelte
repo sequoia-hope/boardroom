@@ -5,9 +5,13 @@
   let { project, store, onchanged = () => {} } = $props();
 
   let links = $state([]);
+  let published = $state([]);
   let loading = $state(false);
   let busyId = $state('');
   let error = $state('');
+  let rehostErrors = $state({});
+  let pushBusy = $state(false);
+  let pushError = $state('');
 
   // Inline per-link action forms (Pin… and Follow branch)
   let pinFor = $state(null);
@@ -56,7 +60,12 @@
     loading = true;
     error = '';
     try {
-      links = await api.links(project, forceRefresh);
+      const [nextLinks, nextPublished] = await Promise.all([
+        api.links(project, forceRefresh),
+        api.published(project),
+      ]);
+      links = nextLinks;
+      published = nextPublished;
     } catch (e) {
       error = e.message;
     } finally {
@@ -65,11 +74,19 @@
   }
 
   // Reload when the selected project changes or when a bus update refreshes `project`.
+  let lastProjectId = null;
   $effect(() => {
     const p = project;
     if (!p) {
       links = [];
+      published = [];
+      lastProjectId = null;
       return;
+    }
+    if (p.id !== lastProjectId) {
+      lastProjectId = p.id;
+      pushError = '';
+      rehostErrors = {};
     }
     load(false);
   });
@@ -85,6 +102,61 @@
     if (rev.startsWith('rev:sha256:') && rev.length > 18) return `rev:${rev.slice(11, 18)}`;
     if (rev.startsWith('sha256:') && rev.length > 14) return rev.slice(0, 14);
     return rev.length > 20 ? `${rev.slice(0, 18)}…` : rev;
+  }
+
+  function dirName(p) {
+    if (!p) return 'checkout';
+    const trimmed = String(p).replace(/[\\/]+$/, '');
+    const idx = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
+    return idx >= 0 ? trimmed.slice(idx + 1) || trimmed : trimmed;
+  }
+
+  function unpushedWords(u) {
+    if (!u) return '';
+    const name = dirName(u.project_path);
+    const n = u.commits ?? 0;
+    if (n > 0) {
+      const noun = n === 1 ? 'commit' : 'commits';
+      const dirty = u.uncommitted ? ' and uncommitted changes' : '';
+      return `${name} has ${n} unpushed outline ${noun} on ${u.branch} here${dirty}: push it to accept it.`;
+    }
+    if (u.uncommitted) {
+      return `${name} has uncommitted outline changes on ${u.branch} here: push it to accept it.`;
+    }
+    return '';
+  }
+
+  function publishedTone(state) {
+    switch (state) {
+      case 'Pushed':
+        return 'quiet';
+      case 'NotPushed':
+      case 'Uncommitted':
+      case 'NoUpstream':
+      case 'NotInGit':
+        return 'notice';
+      default:
+        return 'info';
+    }
+  }
+
+  function publishedWords(pub) {
+    switch (pub.state) {
+      case 'Pushed':
+        return 'Pushed';
+      case 'NotPushed':
+        return pub.upstream_revision
+          ? `Committed, not pushed: other machines still see ${shortRev(pub.upstream_revision)}`
+          : 'Committed, not pushed: other machines do not see this outline yet';
+      case 'Uncommitted':
+        return 'Uncommitted changes';
+      case 'NoUpstream':
+        return 'No upstream branch';
+      case 'NotInGit':
+        return 'Not tracked in git';
+      default:
+        return pub.state;
+    }
   }
 
   function driverName(driver) {
@@ -202,6 +274,8 @@
   async function runLinkOp(linkId, fn) {
     busyId = linkId;
     error = '';
+    const { [linkId]: _, ...rest } = rehostErrors;
+    rehostErrors = rest;
     try {
       await fn();
       await load(false);
@@ -210,6 +284,36 @@
       error = e.message;
     } finally {
       busyId = '';
+    }
+  }
+
+  async function submitRehost(link) {
+    busyId = link.id;
+    error = '';
+    const { [link.id]: _, ...rest } = rehostErrors;
+    rehostErrors = rest;
+    try {
+      await api.rehostLink(project.id, link.id);
+      await load(false);
+      onchanged();
+    } catch (e) {
+      rehostErrors = { ...rehostErrors, [link.id]: e.message };
+    } finally {
+      busyId = '';
+    }
+  }
+
+  async function submitPush() {
+    pushBusy = true;
+    pushError = '';
+    try {
+      await api.pushProject(project.id);
+      await load(false);
+      onchanged();
+    } catch (e) {
+      pushError = e.message;
+    } finally {
+      pushBusy = false;
     }
   }
 
@@ -311,6 +415,51 @@
     </section>
   {/if}
 
+  {#if published.length}
+    <section class="published-section" aria-label="Your outline">
+      <div class="sec-head">
+        <h3 class="label">Your outline</h3>
+      </div>
+
+      {#if pushError}
+        <pre class="err push-err">{pushError}</pre>
+      {/if}
+
+      <div class="link-list">
+        {#each published as pub (pub.board)}
+          {@const pTone = publishedTone(pub.state)}
+          <article
+            class="card link-card {pTone}"
+            data-published-board={pub.board}
+            data-published-state={pub.state}
+          >
+            <div class="link-top">
+              <div class="link-title">
+                <span class="link-id">{pub.board}</span>
+                <span class="pill mono">{pub.path}</span>
+                {#if pub.revision}
+                  <span class="muted mono ref-meta" title={pub.revision}>{shortRev(pub.revision)}</span>
+                {/if}
+              </div>
+              {#if pub.upstream}
+                <span class="muted ref-meta">upstream {pub.upstream}</span>
+              {/if}
+            </div>
+
+            <div class="pub-state-row">
+              <p class="state-line {pTone}">{publishedWords(pub)}</p>
+              {#if !api.STATIC && pub.state === 'NotPushed'}
+                <button class="btn small primary" disabled={pushBusy} onclick={submitPush}>
+                  Push
+                </button>
+              {/if}
+            </div>
+          </article>
+        {/each}
+      </div>
+    </section>
+  {/if}
+
   {#if !api.STATIC || links.length}
     <section class="links-section">
       <div class="sec-head">
@@ -399,6 +548,7 @@
             {@const lines = changeLines(link)}
             {@const tone = stateTone(link.state)}
             {@const locked = lockedText(link)}
+            {@const unpushed = unpushedWords(link.unpushed)}
             <article class="card link-card {tone}" data-link-id={link.id} data-link-state={link.state}>
               <div class="link-top">
                 <div class="link-title">
@@ -406,6 +556,14 @@
                   <span class="pill">{link.kind} · {link.board}</span>
                   {#if locked}
                     <span class="locked-chip">{locked}</span>
+                  {/if}
+                  {#if link.local_only}
+                    <span
+                      class="local-chip"
+                      title={link.hosted_remote ? `Hosted origin: ${link.hosted_remote}` : 'Remote is a filesystem path'}
+                    >
+                      This machine only
+                    </span>
                   {/if}
                 </div>
                 <span class="muted ref-meta">{refSummary(link.locator?.ref)}</span>
@@ -419,6 +577,18 @@
 
               {#if link.error}
                 <p class="err detail">{link.error}</p>
+              {/if}
+
+              {#if link.state === 'Unavailable' && link.hint}
+                <p class="hint-line">{link.hint}</p>
+              {/if}
+
+              {#if unpushed}
+                <p class="unpushed-note">{unpushed}</p>
+              {/if}
+
+              {#if rehostErrors[link.id]}
+                <p class="err detail" data-rehost-error={link.id}>{rehostErrors[link.id]}</p>
               {/if}
 
               {#if lines.length}
@@ -459,6 +629,16 @@
                   >
                     Follow branch
                   </button>
+                  {#if link.local_only && link.hosted_remote}
+                    <button
+                      class="btn small"
+                      disabled={busyId === link.id}
+                      title="Switch remote to {link.hosted_remote}"
+                      onclick={() => submitRehost(link)}
+                    >
+                      Use hosted remote
+                    </button>
+                  {/if}
                   <button
                     class="btn small ghost-danger"
                     disabled={busyId === link.id}
@@ -531,10 +711,29 @@
   }
 
   .built-section,
+  .published-section,
   .links-section {
     display: flex;
     flex-direction: column;
     gap: 10px;
+  }
+
+  .pub-state-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 12px;
+    flex-wrap: wrap;
+  }
+
+  .push-err {
+    padding: 8px 10px;
+    background: var(--bad-soft);
+    border: 1px solid var(--bad);
+    border-radius: 6px;
+    font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 
   .release-date {
@@ -661,6 +860,38 @@
     border-radius: 10px;
     background: var(--accent-soft);
     color: var(--accent);
+  }
+
+  .local-chip {
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 1px 8px;
+    border-radius: 10px;
+    background: var(--warn-soft);
+    border: 1px solid var(--stale);
+    color: var(--warn);
+  }
+
+  .hint-line {
+    margin: 0;
+    padding: 6px 10px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+
+  .unpushed-note {
+    margin: 0;
+    padding: 6px 10px;
+    background: var(--warn-soft);
+    border: 1px solid var(--stale);
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--warn);
+    overflow-wrap: anywhere;
   }
 
   .ref-meta {
