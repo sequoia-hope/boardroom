@@ -85,6 +85,47 @@ export function pickFolder() {
   return json('/api/pick-folder', { method: 'POST' });
 }
 
+export async function links(project, refresh = false) {
+  if (STATIC) return project.project_links ?? [];
+  return json(`/api/projects/${project.id}/links${refresh ? '?refresh=1' : ''}`);
+}
+
+export function addLink(id, body) {
+  return json(`/api/projects/${id}/links`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateLink(id, linkId) {
+  return json(`/api/projects/${id}/links/${encodeURIComponent(linkId)}/update`, {
+    method: 'POST',
+  });
+}
+
+export function pinLink(id, linkId, reason) {
+  return json(`/api/projects/${id}/links/${encodeURIComponent(linkId)}/pin`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export function followLink(id, linkId, branch) {
+  return json(`/api/projects/${id}/links/${encodeURIComponent(linkId)}/follow`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ branch }),
+  });
+}
+
+export function removeLink(id, linkId) {
+  return json(`/api/projects/${id}/links/${encodeURIComponent(linkId)}`, {
+    method: 'DELETE',
+  });
+}
+
 /** Calls onMessage for every bus message and returns {send, close}; reconnects if the server restarts. */
 export function bus(onMessage) {
   if (STATIC) return { send() {}, close() {} };

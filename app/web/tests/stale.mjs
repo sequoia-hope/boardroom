@@ -5,8 +5,8 @@
 //
 // No bar on the published board; a save to the board's .kicad_pcb in the tab's workspace puts
 // it on the Board tab's Plots, Viewer, Renders and Overview (not the Board tab's own drawing of
-// the file, Gates or History), naming the app; a reload
-// keeps it, its History button opens History, Reset takes it away, and a new tab has none.
+// the file, Gates or Versions), naming the app; a reload
+// keeps it, its History button opens Versions, Reset takes it away, and a new tab has none.
 import { chromium } from 'playwright-core';
 import { readFileSync, existsSync } from 'node:fs';
 import { extname } from 'node:path';
@@ -88,7 +88,7 @@ await check("a save from Route puts the bar up, naming the app and the file", as
 });
 
 const plots = () => page.locator('.bv .seg button', { hasText: 'Plots' }).click();
-for (const [name, shown] of [['Board', false], ['Plots', true], ['Viewer', true], ['Renders', true], ['Overview', true], ['Gates', false], ['History', false]]) {
+for (const [name, shown] of [['Board', false], ['Plots', true], ['Viewer', true], ['Renders', true], ['Overview', true], ['Gates', false], ['Versions', false]]) {
   await check(`${shown ? 'a bar' : 'no bar'} on ${name}`, async () => {
     if (name === 'Plots') {
       await tab('Board');
@@ -99,12 +99,12 @@ for (const [name, shown] of [['Board', false], ['Plots', true], ['Viewer', true]
   });
 }
 
-await check('a reload keeps it, and its History button opens History', async () => {
+await check('a reload keeps it, and its History button opens Versions', async () => {
   await page.reload();
   await tab('Viewer');
   await bars().first().waitFor({ timeout: 3000 });
   await bars().first().locator('button', { hasText: 'History' }).click();
-  assert((await page.locator('.tabs button.on').textContent()) === 'History', 'History is not open');
+  assert((await page.locator('.tabs button.on').textContent()) === 'Versions', 'Versions is not open');
 });
 
 await check('Reset takes it away', async () => {

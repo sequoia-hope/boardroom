@@ -3,7 +3,7 @@
   import Overview from './lib/Overview.svelte';
   import Docs from './lib/Docs.svelte';
   import Renders from './lib/Renders.svelte';
-  import History from './lib/History.svelte';
+  import Versions from './lib/Versions.svelte';
   import BoardView from './lib/board/BoardView.svelte';
   import Stale from './lib/Stale.svelte';
   import { boardChange, kicadFiles } from './lib/stale.js';
@@ -29,7 +29,8 @@
   const params = new URLSearchParams(location.search);
   let selId = $state(params.get('project') ?? remember('project', null));
   let view = $state(params.get('view') === 'inbox' ? 'inbox' : 'project'); // project | inbox
-  let tab = $state(params.get('tab') ?? 'overview'); // overview | board | gates | documents | renders | history | viewer | composer | studio
+  const initialTab = params.get('tab') ?? 'overview';
+  let tab = $state(initialTab === 'history' ? 'versions' : initialTab); // overview | board | gates | documents | renders | versions | viewer | composer | studio
   let gateDoc = $state(null);
   let doc = $state(null);
   // A phone-sized screen: the project list folds into a bar, and an app's tab takes the screen.
@@ -282,7 +283,7 @@
     ...(sel?.viewer || sel?.boards.length ? [['board', 'Board']] : []),
     ...(mode === 'single' ? [['composer', 'Composer']] : []),
     ...(mode === 'single' && api.STUDIO ? [['studio', 'Route']] : []),
-    ['history', 'History'],
+    ['versions', 'Versions'],
     ['gates', 'Gates'],
     ['documents', 'Documents'],
     ['renders', 'Renders'],
@@ -459,9 +460,9 @@
         {/if}
         {#if sel.exists}
           {#if tab === 'viewer'}
-            <Stale project={sel} change={boardChanged} from="viewer/site.json" fix={VIEWER_FIX} onhistory={() => (tab = 'history')} />
+            <Stale project={sel} change={boardChanged} from="viewer/site.json" fix={VIEWER_FIX} onhistory={() => (tab = 'versions')} />
           {:else if (tab === 'renders' || tab === 'overview') && sel.thumbnail}
-            <Stale project={sel} change={boardChanged} from={sel.thumbnail} fix="The skill renders it again at the next gate." onhistory={() => (tab = 'history')} />
+            <Stale project={sel} change={boardChanged} from={sel.thumbnail} fix="The skill renders it again at the next gate." onhistory={() => (tab = 'versions')} />
           {/if}
           {#if tab === 'overview'}
             <Overview project={sel} ongate={gotoGate} onlink={followLink} />
@@ -470,11 +471,11 @@
           {:else if tab === 'documents'}
             <Docs project={sel} filter={(f) => !f.startsWith('design/gates/')} bind:selected={doc} titles={docTitles} />
           {:else if tab === 'board'}
-            <BoardView project={sel} {store} change={boardChanged} onhistory={() => (tab = 'history')} selected={selection?.project === sel.id ? (selection.refs ?? []) : []} onselect={(refs) => select(refs)} />
+            <BoardView project={sel} {store} change={boardChanged} onhistory={() => (tab = 'versions')} selected={selection?.project === sel.id ? (selection.refs ?? []) : []} onselect={(refs) => select(refs)} />
           {:else if tab === 'renders'}
             <Renders project={sel} />
-          {:else if tab === 'history'}
-            <History {store} />
+          {:else if tab === 'versions'}
+            <Versions project={sel} {store} onchanged={refresh} />
           {/if}
           {#if loaded.includes('composer')}
             <iframe class="viewer" hidden={tab !== 'composer'} bind:this={composerFrame} src={composerUrl(true)} title="Circuit Composer" allow="cross-origin-isolated"></iframe>

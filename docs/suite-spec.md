@@ -120,6 +120,13 @@ interface_hash = "<hash>"     # of what was last accepted
 pin_reason = ""               # why, when ref is a Commit
 ```
 
+Boardroom materializes each link's accepted version (`resolved.commit`) byte-for-byte from git at
+`<project>/.boardroom/links/<id>/board-shape.{dxf,json}` (`.boardroom/` is gitignored), rewrites it
+whenever `resolved.commit` changes, and returns `<project>/.boardroom/links/<id>/board-shape.json`
+as `following_path` in `/api/projects/{id}/links`. Circuit Composer reads the accepted shape from
+there: `ccomp shape pull --interface <following_path>` (and `shape.json`'s `sync.following`) points
+to `following_path` rather than reaching into git itself.
+
 In a Waffle Iron document it is a new source kind, `BoardInterface`, in the existing `sources`
 table, rather than an extension of `KicadPcb`, since its content is two files, not one board file.
 No format version bump: an older Waffle Iron keeps an unknown kind or locator verbatim and reports it

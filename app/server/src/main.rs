@@ -5,20 +5,19 @@
 //!     boardroom add <folder>                        add a project to the list
 //!     boardroom remove <folder>                     take one off the list
 //!     boardroom list                                the list, with each project's phase
+//!     boardroom link add <project-path> --id <id> --board <board> --remote <remote> --path <json> [--branch main|--tag T|--commit C]
+//!     boardroom link list <project-path> [--refresh] [--json]
+//!     boardroom link update <project-path> <id>
+//!     boardroom link pin <project-path> <id> [--reason <why>]
+//!     boardroom link follow <project-path> <id> [--branch <name>]
+//!     boardroom link remove <project-path> <id>
 //!     boardroom snapshot [--ccomp P] <out> <dir>... a static copy for the web-only build
 //!
 //! The port comes from --port, then $PORT, then `proj port`; with none the
 //! command fails rather than guessing (see docs/shell-spec.md).
 
-mod apps;
-mod config;
-mod examples;
-mod files;
-mod problem;
-mod project;
-mod server;
-mod snapshot;
-
+use boardroom::links::{self, AddLinkRequest, GitRef, LinkStatus, LinksCache};
+use boardroom::{config, project, repo_dir, server, snapshot};
 use std::path::PathBuf;
 
 fn main() {
@@ -33,6 +32,7 @@ fn main() {
         "add" => edit_list(rest, true),
         "remove" => edit_list(rest, false),
         "list" => list(),
+        "link" => link_cmd(rest),
         "snapshot" => snapshot::write(rest),
         "help" | "-h" | "--help" => {
             // The usage is the module comment's command list.
@@ -65,32 +65,80 @@ fn flag(args: &[String], name: &str) -> Option<String> {
     })
 }
 
-/// The repository this binary was built from: where `proj port` resolves to
-/// Boardroom's registered port, and where the web build lives.
-fn repo_dir() -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    std::fs::canonicalize(&dir).unwrap_or(dir)
+fn has_switch(args: &[String], name: &str) -> bool {
+    let long = format!("--{name}");
+    args.contains(&long)
+}
+
+/// Positional arguments after skipping `--key value` flags in `valued` and `--switch` booleans in
+/// `switches`.
+fn positionals<'a>(
+    args: &'a [String],
+    valued: &[&str],
+    switches: &[&str],
+) -> Result<Vec<&'a str>, String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        if let Some(rest) = arg.strip_prefix("--") {
+            if let Some((k, _)) = rest.split_once('=') {
+                if !valued.contains(&k) {
+                    return Err(format!("unknown option '--{k}'"));
+                }
+                i += 1;
+                continue;
+            }
+            if switches.contains(&rest) {
+                i += 1;
+                continue;
+            }
+            if valued.contains(&rest) {
+                if i + 1 >= args.len() {
+                    return Err(format!("option '--{rest}' requires a value"));
+                }
+                i += 2;
+                continue;
+            }
+            return Err(format!("unknown option '{arg}'"));
+        }
+        out.push(arg);
+        i += 1;
+    }
+    Ok(out)
 }
 
 fn port(args: &[String]) -> Result<u16, String> {
     let from_proj = || {
-        let out = std::process::Command::new("proj").arg("port").current_dir(repo_dir()).output().ok()?;
-        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        let out = std::process::Command::new("proj")
+            .arg("port")
+            .current_dir(repo_dir())
+            .output()
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
     };
     let text = flag(args, "port")
         .or_else(|| std::env::var("PORT").ok().filter(|p| !p.is_empty()))
         .or_else(from_proj)
         .ok_or("no port. Pass --port N or set PORT (or register the project with `proj add`).")?;
-    text.parse().map_err(|_| format!("port '{text}' is not a number"))
+    text.parse()
+        .map_err(|_| format!("port '{text}' is not a number"))
 }
 
 fn serve(args: &[String]) -> Result<(), String> {
     let port = port(args)?;
     // Localhost only unless asked: the server opens files and starts programs.
     let host = flag(args, "host").unwrap_or_else(|| "127.0.0.1".into());
-    let web = flag(args, "web").map(PathBuf::from).unwrap_or_else(|| repo_dir().join("app/web/dist"));
+    let web = flag(args, "web")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| repo_dir().join("app/web/dist"));
     if !web.join("index.html").is_file() {
-        return Err(format!("no web build at {} (run: npm run build in app/web)", web.display()));
+        return Err(format!(
+            "no web build at {} (run: npm run build in app/web)",
+            web.display()
+        ));
     }
     let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     runtime.block_on(server::run(&host, port, web))
@@ -108,7 +156,15 @@ fn open(args: &[String]) -> Result<(), String> {
     let app_arg = format!("--app={url}");
     for browser in ["google-chrome", "chromium", "chromium-browser"] {
         if which(browser) {
-            return spawn(browser, &[&profile_arg, &app_arg, "--no-first-run", "--no-default-browser-check"]);
+            return spawn(
+                browser,
+                &[
+                    &profile_arg,
+                    &app_arg,
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                ],
+            );
         }
     }
     Err("no Chrome or Chromium found; use --browser to open it in the default browser".into())
@@ -137,7 +193,10 @@ fn edit_list(args: &[String], add: bool) -> Result<(), String> {
         let path = list.add(&PathBuf::from(folder))?;
         list.save()?;
         if !path.join("design/status.json").is_file() {
-            println!("added {} (no design/status.json yet, so it shows as a plain folder)", path.display());
+            println!(
+                "added {} (no design/status.json yet, so it shows as a plain folder)",
+                path.display()
+            );
         } else {
             println!("added {}", path.display());
         }
@@ -155,9 +214,252 @@ fn edit_list(args: &[String], add: bool) -> Result<(), String> {
 fn list() -> Result<(), String> {
     for entry in config::ProjectList::load()?.projects {
         let s = project::summarize(&config::project_id(&entry.path), &entry.path, entry.pinned);
-        let phase = s.phase.map(|p| format!("phase {p} {}", project::PHASES[p as usize])).unwrap_or_else(|| "-".into());
+        let phase = s
+            .phase
+            .map(|p| format!("phase {p} {}", project::PHASES[p as usize]))
+            .unwrap_or_else(|| "-".into());
         let flag = if !s.exists { "  (missing)" } else { "" };
-        println!("{:<24} {:<28} {}{flag}", s.board.unwrap_or(s.name), phase, entry.path.display());
+        println!(
+            "{:<24} {:<28} {}{flag}",
+            s.board.unwrap_or(s.name),
+            phase,
+            entry.path.display()
+        );
     }
     Ok(())
+}
+
+fn link_cmd(args: &[String]) -> Result<(), String> {
+    let (sub, rest) = args
+        .split_first()
+        .ok_or("usage: boardroom link <add|list|update|pin|follow|remove> <project-path> ...")?;
+    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    let cache = LinksCache::new();
+
+    match sub.as_str() {
+        "add" => {
+            let pos = positionals(
+                rest,
+                &[
+                    "id", "kind", "board", "remote", "path", "branch", "tag", "commit",
+                ],
+                &[],
+            )?;
+            let project_dir = pos
+                .first()
+                .ok_or("usage: boardroom link add <project-path> --id <id> --board <board> --remote <remote> --path <interface json path> [--branch main|--tag T|--commit C]")?;
+            let root = PathBuf::from(project_dir);
+            if !root.is_dir() {
+                return Err(format!("{} is not a folder", root.display()));
+            }
+            let id = flag(rest, "id").ok_or("missing --id <id>")?;
+            let board = flag(rest, "board").ok_or("missing --board <board>")?;
+            let remote = flag(rest, "remote").ok_or("missing --remote <remote>")?;
+            let path = flag(rest, "path").ok_or("missing --path <interface json path>")?;
+            let kind = flag(rest, "kind").unwrap_or_else(|| "waffle".into());
+
+            let branch = flag(rest, "branch");
+            let tag = flag(rest, "tag");
+            let commit = flag(rest, "commit");
+            let ref_count = usize::from(branch.is_some())
+                + usize::from(tag.is_some())
+                + usize::from(commit.is_some());
+            if ref_count > 1 {
+                return Err("pass at most one of --branch, --tag, or --commit".into());
+            }
+            let git_ref = if let Some(name) = branch {
+                GitRef::Branch { name }
+            } else if let Some(name) = tag {
+                GitRef::Tag { name }
+            } else if let Some(c) = commit {
+                GitRef::Commit { commit: c }
+            } else {
+                GitRef::Branch {
+                    name: "main".into(),
+                }
+            };
+
+            let req = AddLinkRequest {
+                id,
+                kind,
+                board,
+                remote: Some(remote),
+                path: Some(path),
+                git_ref: Some(git_ref),
+                locator: None,
+                pin_reason: String::new(),
+            };
+            let status = rt
+                .block_on(links::add_link(&root, req, &cache))
+                .map_err(|e| e.to_string())?;
+            print_link_status(&status);
+            Ok(())
+        }
+        "list" => {
+            let pos = positionals(rest, &[], &["refresh", "json"])?;
+            let project_dir = pos
+                .first()
+                .ok_or("usage: boardroom link list <project-path> [--refresh] [--json]")?;
+            let root = PathBuf::from(project_dir);
+            if !root.is_dir() {
+                return Err(format!("{} is not a folder", root.display()));
+            }
+            let refresh = has_switch(rest, "refresh");
+            let statuses = rt.block_on(links::list_links(&root, &cache, refresh, true))?;
+            if has_switch(rest, "json") {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&statuses).map_err(|e| e.to_string())?
+                );
+            } else if statuses.is_empty() {
+                println!("no links in {}/design/links.toml", root.display());
+            } else {
+                for s in &statuses {
+                    print_link_status(s);
+                }
+            }
+            Ok(())
+        }
+        "update" => {
+            let pos = positionals(rest, &["id"], &[])?;
+            let project_dir = pos
+                .first()
+                .ok_or("usage: boardroom link update <project-path> <id>")?;
+            let id = flag(rest, "id")
+                .or_else(|| pos.get(1).map(|s| (*s).to_string()))
+                .ok_or("usage: boardroom link update <project-path> <id>")?;
+            let status = rt
+                .block_on(links::update_link(
+                    std::path::Path::new(project_dir),
+                    &id,
+                    &cache,
+                ))
+                .map_err(|e| e.to_string())?;
+            print_link_status(&status);
+            Ok(())
+        }
+        "pin" => {
+            let pos = positionals(rest, &["id", "reason"], &[])?;
+            let project_dir = pos
+                .first()
+                .ok_or("usage: boardroom link pin <project-path> <id> [--reason <why>]")?;
+            let id = flag(rest, "id")
+                .or_else(|| pos.get(1).map(|s| (*s).to_string()))
+                .ok_or("usage: boardroom link pin <project-path> <id> [--reason <why>]")?;
+            let reason = flag(rest, "reason").unwrap_or_default();
+            let status = rt
+                .block_on(links::pin_link(
+                    std::path::Path::new(project_dir),
+                    &id,
+                    reason,
+                    &cache,
+                ))
+                .map_err(|e| e.to_string())?;
+            print_link_status(&status);
+            Ok(())
+        }
+        "follow" => {
+            let pos = positionals(rest, &["id", "branch"], &[])?;
+            let project_dir = pos
+                .first()
+                .ok_or("usage: boardroom link follow <project-path> <id> [--branch <name>]")?;
+            let id_from_flag = flag(rest, "id");
+            let id = id_from_flag
+                .clone()
+                .or_else(|| pos.get(1).map(|s| (*s).to_string()))
+                .ok_or("usage: boardroom link follow <project-path> <id> [--branch <name>]")?;
+            let positional_branch_idx = if id_from_flag.is_some() { 1 } else { 2 };
+            let branch = flag(rest, "branch")
+                .or_else(|| pos.get(positional_branch_idx).map(|s| (*s).to_string()))
+                .unwrap_or_else(|| "main".into());
+            let status = rt
+                .block_on(links::follow_link(
+                    std::path::Path::new(project_dir),
+                    &id,
+                    branch,
+                    &cache,
+                ))
+                .map_err(|e| e.to_string())?;
+            print_link_status(&status);
+            Ok(())
+        }
+        "remove" => {
+            let pos = positionals(rest, &["id"], &[])?;
+            let project_dir = pos
+                .first()
+                .ok_or("usage: boardroom link remove <project-path> <id>")?;
+            let id = flag(rest, "id")
+                .or_else(|| pos.get(1).map(|s| (*s).to_string()))
+                .ok_or("usage: boardroom link remove <project-path> <id>")?;
+            links::remove_link(std::path::Path::new(project_dir), &id)
+                .map_err(|e| e.to_string())?;
+            println!("removed link {id}");
+            Ok(())
+        }
+        other => Err(format!(
+            "unknown link subcommand '{other}' (expected add, list, update, pin, follow, remove)"
+        )),
+    }
+}
+
+fn print_link_status(s: &LinkStatus) {
+    let short = &s.resolved.commit[..s.resolved.commit.len().min(7)];
+    let locked = s
+        .locked_by
+        .map(|d| format!("  [locked by {}]", d.as_str()))
+        .unwrap_or_default();
+    println!(
+        "{:<16} {:<12} {:<28} @ {}{}",
+        s.id,
+        format!("{}:{}", s.kind, s.board),
+        s.state.as_str(),
+        short,
+        locked
+    );
+    if let Some(err) = &s.error {
+        println!("  error: {err}");
+    }
+    if !s.pin_reason.is_empty() {
+        println!("  pin reason: {}", s.pin_reason);
+    }
+    if let Some((old_t, new_t)) = s.thickness_changed {
+        println!(
+            "  thickness changed from {:.2} mm to {:.2} mm",
+            old_t as f64 / 1_000_000.0,
+            new_t as f64 / 1_000_000.0
+        );
+    }
+    for c in &s.changes {
+        println!("  {}", format_change_line(c));
+    }
+}
+
+fn format_change_line(c: &board_interface::Change) -> String {
+    let role = match c.role {
+        board_interface::Role::Outline => "outline",
+        board_interface::Role::Cutout => "cutout",
+        board_interface::Role::Hole => "hole",
+        board_interface::Role::Keepout => "keepout",
+    };
+    let label = match &c.id {
+        Some(id) => format!("{role} {id}"),
+        None => role.to_string(),
+    };
+    match c.kind {
+        board_interface::ChangeKind::Added => format!("{label} added"),
+        board_interface::ChangeKind::Removed => format!("{label} removed"),
+        board_interface::ChangeKind::Changed => format!("{label} changed"),
+        board_interface::ChangeKind::Moved { dx_nm, dy_nm } => {
+            let mut parts = Vec::new();
+            if dx_nm != 0 {
+                let dir = if dx_nm > 0 { "right" } else { "left" };
+                parts.push(format!("{:.2} mm {dir}", dx_nm.abs() as f64 / 1_000_000.0));
+            }
+            if dy_nm != 0 {
+                let dir = if dy_nm > 0 { "down" } else { "up" };
+                parts.push(format!("{:.2} mm {dir}", dy_nm.abs() as f64 / 1_000_000.0));
+            }
+            format!("{label} moved {}", parts.join(", "))
+        }
+    }
 }

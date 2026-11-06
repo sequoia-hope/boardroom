@@ -100,6 +100,135 @@ if (withViewer) {
   }
 }
 
+await check('Versions tab renders a link from a fixture project (desktop and phone)', async () => {
+  const fixtureProject = {
+    id: 'fixture-link-proj',
+    name: 'easy2350',
+    board: 'easy2350',
+    path: '/tmp/fixture-easy2350',
+    boards: [{ board: 'easy2350', variant: 'revA', kicad_pro: null }],
+    exists: true,
+    is_project: true,
+    error: null,
+    phase: 4,
+    gates: [],
+    checks: [],
+    needs_user: [],
+    docs: [],
+    links: [],
+    apps: {},
+    pinned: false,
+    updated: '2026-11-06',
+    thumbnail: null,
+    viewer: null,
+    git: { branch: 'main', ahead: 0, behind: 0, dirty: 0, remote: null, last_commit: 'Initial', last_date: '2026-11-06' },
+  };
+  let fixtureLink = {
+    id: 'enclosure',
+    kind: 'waffle',
+    board: 'easy2350',
+    locator: {
+      type: 'Git',
+      remote: '/tmp/fixture-waffle-enclosure',
+      path: 'interface/easy2350/board-shape.json',
+      ref: { type: 'Branch', name: 'main' },
+    },
+    resolved: { commit: '1111111deadbeef', at: '2026-11-06T01:00:00Z' },
+    pin_reason: '',
+    state: 'UpdateAvailable',
+    locked_by: 'waffle',
+    classification: 'updated_by_driver',
+    changes: [
+      {
+        id: 'waffle:s1/h3',
+        role: 'hole',
+        kind: { type: 'moved', dx_nm: 1200000, dy_nm: 0 },
+      },
+    ],
+    thickness_changed: null,
+    rematched: [],
+    uncertain: [],
+    latest: {
+      commit: '2222222cafebabe',
+      at: '2026-11-06T02:00:00Z',
+      revision: 'rev-2',
+      driver: 'waffle',
+    },
+    following_path: '/tmp/fixture-easy2350/.boardroom/links/enclosure/board-shape.json',
+    error: null,
+  };
+
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await ctx.route('**/api/**', async (route) => {
+    const u = new URL(route.request().url());
+    const method = route.request().method();
+    if (u.pathname === '/api/projects' && method === 'GET') {
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify([fixtureProject]) });
+    }
+    if (u.pathname === '/api/examples' && method === 'GET') {
+      return route.fulfill({ contentType: 'application/json', body: '[]' });
+    }
+    if (u.pathname === '/api/projects/fixture-link-proj/links' && method === 'GET') {
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify([fixtureLink]) });
+    }
+    if (u.pathname === '/api/projects/fixture-link-proj/links/enclosure/pin' && method === 'POST') {
+      const body = JSON.parse(route.request().postData() || '{}');
+      fixtureLink = {
+        ...fixtureLink,
+        locator: { ...fixtureLink.locator, ref: { type: 'Commit', commit: fixtureLink.resolved.commit } },
+        pin_reason: body.reason ?? '',
+        state: 'PinnedBehind',
+      };
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify(fixtureLink) });
+    }
+    if (u.pathname === '/api/projects/fixture-link-proj/history' && method === 'GET') {
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify([
+          { rev: 'abcdef123456', time: '2026-11-06T01:00:00Z', app: 'git', message: 'Initial board layout', path: 'hw/easy2350/revA/easy2350.kicad_pcb', paths: ['hw/easy2350/revA/easy2350.kicad_pcb'] },
+        ]),
+      });
+    }
+    return route.continue();
+  });
+
+  const vpage = await ctx.newPage();
+  vpage.on('pageerror', (e) => errors.push(e.message));
+  await vpage.goto(new URL('?project=fixture-link-proj&tab=versions', base).href);
+
+  const card = vpage.locator('[data-link-id="enclosure"]');
+  await card.waitFor({ timeout: 5000 });
+  const text = (await card.textContent()).replace(/\s+/g, ' ');
+  for (const expected of [
+    'waffle · easy2350',
+    'Outline controlled by Waffle Iron',
+    'Update available · 1111111 → 2222222',
+    'hole waffle:s1/h3 moved 1.20 mm right',
+  ]) {
+    if (!text.includes(expected)) throw new Error(`missing "${expected}" in: ${text}`);
+  }
+  // History is folded inside Versions.
+  await vpage.locator('.history-section .log', { hasText: 'Initial board layout' }).waitFor({ timeout: 3000 });
+
+  // Pin… asks for a reason and renders PinnedBehind as calm information.
+  await card.getByRole('button', { name: 'Pin…' }).click();
+  await card.getByLabel('Reason for pinning').fill('Hold outline for gate 4');
+  await card.getByRole('button', { name: 'Pin', exact: true }).click();
+  await vpage.locator('[data-link-state="PinnedBehind"]').waitFor({ timeout: 3000 });
+  const pinnedText = (await card.textContent()).replace(/\s+/g, ' ');
+  if (!pinnedText.includes('Pinned at 1111111, latest is 2222222')) {
+    throw new Error(`unexpected pinned state text: ${pinnedText}`);
+  }
+
+  // Phone-width viewport check (375x812): link card and buttons remain visible without horizontal overflow.
+  await vpage.setViewportSize({ width: 375, height: 812 });
+  await card.waitFor({ state: 'visible' });
+  const overflow = await vpage.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  if (overflow > 2) throw new Error(`horizontal overflow on phone viewport: ${overflow}px`);
+
+  await ctx.close();
+});
+
 await check('no errors in the page', async () => {
   if (errors.length) throw new Error(errors.slice(0, 3).join(' | '));
 });

@@ -7,46 +7,81 @@ use crate::apps;
 use crate::config::{self, ProjectList};
 use crate::examples;
 use crate::files::{self, Expect, WriteError};
+use crate::links::{self, AddLinkRequest, LinkOpError, LinkState, LinkStatus, LinksCache};
 use crate::problem;
 use crate::project;
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{ConnectInfo, DefaultBodyLimit, Path as UrlPath, Query, Request, State, ws::{Message, WebSocket, WebSocketUpgrade}},
+    extract::{
+        ConnectInfo, DefaultBodyLimit, Path as UrlPath, Query, Request, State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
+    },
     http::HeaderMap,
     http::Method,
-    middleware::{self, Next},
     http::{HeaderValue, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{any, delete, get, post},
 };
 use notify::{RecursiveMode, Watcher};
 use serde::Deserialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
-use tower_http::{services::{ServeDir, ServeFile}, set_header::SetResponseHeaderLayer};
+use tower_http::{
+    services::{ServeDir, ServeFile},
+    set_header::SetResponseHeaderLayer,
+};
 
-pub(crate) struct App {
+type LinkFingerprint = (String, LinkState, String, Option<board_interface::Driver>);
+
+pub struct App {
     pub(crate) config_dir: PathBuf,
     list: Mutex<ProjectList>,
     /// Bus messages, already JSON.
     bus: broadcast::Sender<String>,
     watcher: Mutex<Option<notify::RecommendedWatcher>>,
+    pub(crate) links_cache: LinksCache,
+    link_states: Mutex<HashMap<String, Vec<LinkFingerprint>>>,
 }
 
-pub(crate) type Shared = Arc<App>;
+pub type Shared = Arc<App>;
 type ApiResult<T> = Result<T, (StatusCode, String)>;
 
 fn bad(status: StatusCode, msg: impl Into<String>) -> (StatusCode, String) {
     (status, msg.into())
 }
 
+fn bad_link_op(err: LinkOpError) -> (StatusCode, String) {
+    match err {
+        LinkOpError::NotFound(m) => (StatusCode::NOT_FOUND, m),
+        LinkOpError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
+        LinkOpError::Io(m) => (StatusCode::INTERNAL_SERVER_ERROR, m),
+    }
+}
+
 pub fn router(config_dir: PathBuf, list: ProjectList, web: PathBuf) -> (Router, Shared) {
+    router_with_cache(config_dir, list, web, LinksCache::new())
+}
+
+pub fn router_with_cache(
+    config_dir: PathBuf,
+    list: ProjectList,
+    web: PathBuf,
+    links_cache: LinksCache,
+) -> (Router, Shared) {
     let (bus, _) = broadcast::channel(256);
-    let app = Arc::new(App { config_dir, list: Mutex::new(list), bus, watcher: Mutex::new(None) });
+    let app = Arc::new(App {
+        config_dir,
+        list: Mutex::new(list),
+        bus,
+        watcher: Mutex::new(None),
+        links_cache,
+        link_states: Mutex::new(HashMap::new()),
+    });
     let index = ServeFile::new(web.join("index.html"));
     let router = Router::new()
         .route("/api/projects", get(projects).post(add_project))
@@ -54,15 +89,48 @@ pub fn router(config_dir: PathBuf, list: ProjectList, web: PathBuf) -> (Router, 
         .route("/api/examples", get(list_examples))
         .route("/api/projects/{id}/docs", get(docs))
         // A board file is a few megabytes; the default 2 MB limit is too small for some.
-        .route("/api/projects/{id}/files/{*path}", get(file).put(put_file).layer(DefaultBodyLimit::max(64 << 20)))
+        .route(
+            "/api/projects/{id}/files/{*path}",
+            get(file)
+                .put(put_file)
+                .layer(DefaultBodyLimit::max(64 << 20)),
+        )
         .route("/api/projects/{id}/history", get(history))
+        .route(
+            "/api/projects/{id}/links",
+            get(project_links).post(add_project_link),
+        )
+        .route(
+            "/api/projects/{id}/links/{link}",
+            delete(delete_project_link),
+        )
+        .route(
+            "/api/projects/{id}/links/{link}/update",
+            post(update_project_link),
+        )
+        .route(
+            "/api/projects/{id}/links/{link}/pin",
+            post(pin_project_link),
+        )
+        .route(
+            "/api/projects/{id}/links/{link}/follow",
+            post(follow_project_link),
+        )
         .route("/api/projects/{id}/open/{what}", post(open))
         .route("/api/pick-folder", post(pick_folder))
         .route("/api/bus", get(bus_socket))
         // An unknown API path is a 404, not the web app's page with a 200.
-        .route("/api/{*rest}", any(|| async { (StatusCode::NOT_FOUND, "no such API") }))
+        .route(
+            "/api/{*rest}",
+            any(|| async { (StatusCode::NOT_FOUND, "no such API") }),
+        )
         .route("/apps/{name}", get(apps::slash))
-        .route("/apps/{name}/", any(|state, peer, UrlPath(name): UrlPath<String>, req| apps::serve(state, peer, UrlPath((name, String::new())), req)))
+        .route(
+            "/apps/{name}/",
+            any(|state, peer, UrlPath(name): UrlPath<String>, req| {
+                apps::serve(state, peer, UrlPath((name, String::new())), req)
+            }),
+        )
         .route("/apps/{name}/{*rest}", any(apps::serve))
         .fallback_service(ServeDir::new(&web).fallback(index))
         .layer(SetResponseHeaderLayer::overriding(
@@ -77,7 +145,10 @@ pub fn router(config_dir: PathBuf, list: ProjectList, web: PathBuf) -> (Router, 
             header::HeaderName::from_static("cross-origin-resource-policy"),
             HeaderValue::from_static("same-origin"),
         ))
-        .layer(SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, HeaderValue::from_static("no-cache")))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-cache"),
+        ))
         .layer(middleware::from_fn(local_changes_only))
         .with_state(app.clone());
     (router, app)
@@ -85,24 +156,41 @@ pub fn router(config_dir: PathBuf, list: ProjectList, web: PathBuf) -> (Router, 
 
 pub async fn run(host: &str, port: u16, web: PathBuf) -> Result<(), String> {
     let config_dir = config::config_dir();
-    let (router, app) = router(config_dir.clone(), ProjectList::load_from(&config_dir)?, web);
+    let (router, app) = router(
+        config_dir.clone(),
+        ProjectList::load_from(&config_dir)?,
+        web,
+    );
     start_watcher(&app);
 
-    let listener = tokio::net::TcpListener::bind((host, port)).await.map_err(|e| format!("{host}:{port}: {e}"))?;
-    println!("Boardroom: http://localhost:{port}/");
-    axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>())
+    let listener = tokio::net::TcpListener::bind((host, port))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| format!("{host}:{port}: {e}"))?;
+    println!("Boardroom: http://localhost:{port}/");
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// Other devices may look but not act: anything but a read (adding projects,
 /// opening KiCad or a folder, the folder dialog) must come from this machine.
 /// Reads stay inside the listed projects, so a reachable port shows what
 /// Boardroom shows and nothing more.
-async fn local_changes_only(ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>, req: Request, next: Next) -> Response {
+async fn local_changes_only(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Response {
     let reading = matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
     if !reading && !peer.ip().is_loopback() {
-        return (StatusCode::FORBIDDEN, "Boardroom takes changes only from the machine it runs on").into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            "Boardroom takes changes only from the machine it runs on",
+        )
+            .into_response();
     }
     next.run(req).await
 }
@@ -117,18 +205,42 @@ fn project_path(app: &App, id: &str) -> ApiResult<PathBuf> {
         .ok_or_else(|| bad(StatusCode::NOT_FOUND, "no such project"))
 }
 
-async fn projects(State(app): State<Shared>) -> impl IntoResponse {
+async fn projects(
+    State(app): State<Shared>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+) -> impl IntoResponse {
+    let may_write = peer.ip().is_loopback();
     let entries = app.list.lock().unwrap().projects.clone();
-    let summaries = tokio::task::spawn_blocking(move || {
+    let mut summaries = tokio::task::spawn_blocking(move || {
         let mut out: Vec<_> = entries
             .iter()
             .map(|e| project::summarize(&config::project_id(&e.path), &e.path, e.pinned))
             .collect();
-        examples::tag(&mut out, &examples::load(&crate::repo_dir()), &crate::repo_dir());
+        examples::tag(
+            &mut out,
+            &examples::load(&crate::repo_dir()),
+            &crate::repo_dir(),
+        );
         out
     })
     .await
     .unwrap_or_default();
+
+    for s in &mut summaries {
+        if s.exists
+            && s.path.join("design/links.toml").is_file()
+            && let Ok(statuses) =
+                links::list_links(&s.path, &app.links_cache, false, may_write).await
+        {
+            note_link_states(&app, &s.id, &statuses, false);
+            for need in links::needs_from_statuses(&statuses) {
+                if !s.needs_user.iter().any(|n| n.id == need.id) {
+                    s.needs_user.push(need);
+                }
+            }
+        }
+    }
+
     Json(summaries)
 }
 
@@ -163,7 +275,10 @@ struct AddBody {
     path: String,
 }
 
-async fn add_project(State(app): State<Shared>, Json(body): Json<AddBody>) -> ApiResult<Json<serde_json::Value>> {
+async fn add_project(
+    State(app): State<Shared>,
+    Json(body): Json<AddBody>,
+) -> ApiResult<Json<serde_json::Value>> {
     let raw = body.path.trim();
     let expanded = match raw.strip_prefix("~/") {
         Some(rest) => config::home().join(rest),
@@ -171,41 +286,57 @@ async fn add_project(State(app): State<Shared>, Json(body): Json<AddBody>) -> Ap
     };
     let path = {
         let mut list = app.list.lock().unwrap();
-        let path = list.add(&expanded).map_err(|e| bad(StatusCode::BAD_REQUEST, e))?;
-        list.save_to(&app.config_dir).map_err(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        let path = list
+            .add(&expanded)
+            .map_err(|e| bad(StatusCode::BAD_REQUEST, e))?;
+        list.save_to(&app.config_dir)
+            .map_err(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, e))?;
         path
     };
     watch(&app, &path);
-    let _ = app.bus.send(serde_json::json!({"type": "projects"}).to_string());
+    let _ = app
+        .bus
+        .send(serde_json::json!({"type": "projects"}).to_string());
     Ok(Json(serde_json::json!({"id": config::project_id(&path)})))
 }
 
-async fn remove_project(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<StatusCode> {
+async fn remove_project(
+    State(app): State<Shared>,
+    UrlPath(id): UrlPath<String>,
+) -> ApiResult<StatusCode> {
     let path = project_path(&app, &id)?;
     {
         let mut list = app.list.lock().unwrap();
         list.remove(&path);
-        list.save_to(&app.config_dir).map_err(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        list.save_to(&app.config_dir)
+            .map_err(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     }
     if let Some(w) = app.watcher.lock().unwrap().as_mut() {
         let _ = w.unwatch(&path.join("design"));
     }
-    let _ = app.bus.send(serde_json::json!({"type": "projects"}).to_string());
+    let _ = app
+        .bus
+        .send(serde_json::json!({"type": "projects"}).to_string());
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// The project's markdown documents: design/*.md and design/gates/*.md.
-async fn docs(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Vec<String>>> {
+async fn docs(
+    State(app): State<Shared>,
+    UrlPath(id): UrlPath<String>,
+) -> ApiResult<Json<Vec<String>>> {
     let root = project_path(&app, &id)?;
     let mut out = vec![];
     for dir in ["design", "design/gates"] {
-        let Ok(entries) = std::fs::read_dir(root.join(dir)) else { continue };
+        let Ok(entries) = std::fs::read_dir(root.join(dir)) else {
+            continue;
+        };
         let mut names: Vec<String> = entries
             .flatten()
             .filter(|e| e.path().extension().is_some_and(|x| x == "md"))
             .map(|e| format!("{dir}/{}", e.file_name().to_string_lossy()))
             .collect();
-        names.sort_by(|a, b| natural(a).cmp(&natural(b)));
+        names.sort_by_key(|a| natural(a));
         out.extend(names);
     }
     Ok(Json(out))
@@ -215,12 +346,21 @@ async fn docs(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiRes
 fn natural(s: &str) -> (String, u64, String) {
     let digits_at = s.find(|c: char| c.is_ascii_digit()).unwrap_or(s.len());
     let (head, tail) = s.split_at(digits_at);
-    let end = tail.find(|c: char| !c.is_ascii_digit()).unwrap_or(tail.len());
-    (head.to_string(), tail[..end].parse().unwrap_or(0), tail[end..].to_string())
+    let end = tail
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(tail.len());
+    (
+        head.to_string(),
+        tail[..end].parse().unwrap_or(0),
+        tail[end..].to_string(),
+    )
 }
 
 /// A file inside a project folder, or a directory listing as JSON.
-async fn file(State(app): State<Shared>, UrlPath((id, rel)): UrlPath<(String, String)>) -> ApiResult<Response> {
+async fn file(
+    State(app): State<Shared>,
+    UrlPath((id, rel)): UrlPath<(String, String)>,
+) -> ApiResult<Response> {
     let root = project_path(&app, &id)?;
     // Composer's placement problem, when the project has none of its own: made from the board.
     if let Some(board) = problem::board_of(&rel).map(str::to_string)
@@ -238,11 +378,24 @@ async fn file(State(app): State<Shared>, UrlPath((id, rel)): UrlPath<(String, St
         names.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
         return Ok(Json(names).into_response());
     }
-    let bytes = tokio::fs::read(&path).await.map_err(|e| bad(StatusCode::NOT_FOUND, e.to_string()))?;
+    let bytes = tokio::fs::read(&path)
+        .await
+        .map_err(|e| bad(StatusCode::NOT_FOUND, e.to_string()))?;
     let etag = format!("\"{}\"", files::rev_of(&bytes));
     // When the file last changed: Boardroom's drawn tabs compare the board's against when they were drawn.
-    let modified = std::fs::metadata(&path).and_then(|m| m.modified()).map(httpdate::fmt_http_date).unwrap_or_default();
-    Ok(([(header::CONTENT_TYPE, mime(&path).to_string()), (header::ETAG, etag), (header::LAST_MODIFIED, modified)], bytes).into_response())
+    let modified = std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .map(httpdate::fmt_http_date)
+        .unwrap_or_default();
+    Ok((
+        [
+            (header::CONTENT_TYPE, mime(&path).to_string()),
+            (header::ETAG, etag),
+            (header::LAST_MODIFIED, modified),
+        ],
+        bytes,
+    )
+        .into_response())
 }
 
 /// A board's placement problem made by ccomp (problem.rs), served as if it were the file.
@@ -255,18 +408,40 @@ async fn made_problem(root: PathBuf, board: String) -> ApiResult<Response> {
         .map_err(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(|e| bad(StatusCode::NOT_FOUND, e))?;
     let etag = format!("\"{}\"", files::rev_of(&bytes));
-    Ok(([(header::CONTENT_TYPE, "application/json".to_string()), (header::ETAG, etag)], bytes).into_response())
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/json".to_string()),
+            (header::ETAG, etag),
+        ],
+        bytes,
+    )
+        .into_response())
 }
 
 /// Writes a project file for an app (the store's server backend). `If-Match` names the revision
 /// the app started from and `If-None-Match: *` asks that there be none; a file that moved on is
 /// 412, with its revision now as the ETag. The bus then says which file changed and which app
 /// changed it (`x-boardroom-app`, `x-boardroom-message`).
-async fn put_file(State(app): State<Shared>, UrlPath((id, rel)): UrlPath<(String, String)>, headers: HeaderMap, body: Bytes) -> ApiResult<Response> {
+async fn put_file(
+    State(app): State<Shared>,
+    UrlPath((id, rel)): UrlPath<(String, String)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult<Response> {
     let root = project_path(&app, &id)?;
-    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let header = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    };
     let expect = match (header("if-match"), header("if-none-match")) {
-        (Some(rev), _) => Expect::Rev(rev.trim().trim_start_matches("W/").trim_matches('"').to_string()),
+        (Some(rev), _) => Expect::Rev(
+            rev.trim()
+                .trim_start_matches("W/")
+                .trim_matches('"')
+                .to_string(),
+        ),
         (None, Some(star)) if star.trim() == "*" => Expect::Absent,
         _ => Expect::Any,
     };
@@ -277,13 +452,24 @@ async fn put_file(State(app): State<Shared>, UrlPath((id, rel)): UrlPath<(String
     match written {
         Ok(rev) => {
             let who = header("x-boardroom-app").unwrap_or_else(|| "unknown".into());
-            let message = header("x-boardroom-message").map(|m| percent_decode(&m)).unwrap_or_default();
+            let message = header("x-boardroom-message")
+                .map(|m| percent_decode(&m))
+                .unwrap_or_default();
             let _ = app.bus.send(serde_json::json!({"type": "changed", "project": id, "paths": [rel], "app": who, "message": message}).to_string());
-            Ok(([(header::ETAG, format!("\"{rev}\""))], Json(serde_json::json!({"rev": rev}))).into_response())
+            Ok((
+                [(header::ETAG, format!("\"{rev}\""))],
+                Json(serde_json::json!({"rev": rev})),
+            )
+                .into_response())
         }
         Err(WriteError::Conflict { current }) => {
-            let mut res = (StatusCode::PRECONDITION_FAILED, format!("{rel} changed since you opened it")).into_response();
-            if let Some(rev) = current.and_then(|r| HeaderValue::from_str(&format!("\"{r}\"")).ok()) {
+            let mut res = (
+                StatusCode::PRECONDITION_FAILED,
+                format!("{rel} changed since you opened it"),
+            )
+                .into_response();
+            if let Some(rev) = current.and_then(|r| HeaderValue::from_str(&format!("\"{r}\"")).ok())
+            {
                 res.headers_mut().insert(header::ETAG, rev);
             }
             Ok(res)
@@ -299,12 +485,178 @@ struct HistoryQuery {
 }
 
 /// The project's history, or one file's (`?path=`): git's, newest first.
-async fn history(State(app): State<Shared>, UrlPath(id): UrlPath<String>, Query(q): Query<HistoryQuery>) -> ApiResult<Json<Vec<serde_json::Value>>> {
+async fn history(
+    State(app): State<Shared>,
+    UrlPath(id): UrlPath<String>,
+    Query(q): Query<HistoryQuery>,
+) -> ApiResult<Json<Vec<serde_json::Value>>> {
     let root = project_path(&app, &id)?;
     let list = tokio::task::spawn_blocking(move || files::history(&root, q.path.as_deref()))
         .await
         .map_err(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(list))
+}
+
+#[derive(Deserialize, Default)]
+struct LinksQuery {
+    refresh: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct PinBody {
+    #[serde(default)]
+    reason: String,
+}
+
+#[derive(Deserialize)]
+struct FollowBody {
+    branch: String,
+}
+
+fn note_link_states(app: &App, project_id: &str, statuses: &[LinkStatus], force_emit: bool) {
+    let fp: Vec<LinkFingerprint> = statuses
+        .iter()
+        .map(|s| {
+            (
+                s.id.clone(),
+                s.state,
+                s.resolved.commit.clone(),
+                s.locked_by,
+            )
+        })
+        .collect();
+    let advanced = statuses
+        .iter()
+        .any(|s| s.state == LinkState::NewRevisionNoInterfaceChange);
+    let changed = {
+        let mut map = app.link_states.lock().unwrap();
+        let prev = map.insert(project_id.to_string(), fp.clone());
+        force_emit || advanced || prev.is_some_and(|old| old != fp)
+    };
+    if changed {
+        let _ = app
+            .bus
+            .send(serde_json::json!({"type": "links", "project": project_id}).to_string());
+    }
+}
+
+async fn project_links(
+    State(app): State<Shared>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    UrlPath(id): UrlPath<String>,
+    Query(q): Query<LinksQuery>,
+) -> ApiResult<Json<Vec<LinkStatus>>> {
+    let root = project_path(&app, &id)?;
+    let force = q
+        .refresh
+        .as_deref()
+        .is_some_and(|v| matches!(v, "1" | "true" | "yes"));
+    let statuses = links::list_links(&root, &app.links_cache, force, peer.ip().is_loopback())
+        .await
+        .map_err(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    note_link_states(&app, &id, &statuses, false);
+    Ok(Json(statuses))
+}
+
+async fn add_project_link(
+    State(app): State<Shared>,
+    UrlPath(id): UrlPath<String>,
+    Json(body): Json<AddLinkRequest>,
+) -> ApiResult<Json<LinkStatus>> {
+    let root = project_path(&app, &id)?;
+    let status = links::add_link(&root, body, &app.links_cache)
+        .await
+        .map_err(bad_link_op)?;
+    if let Ok(all) = links::list_links(&root, &app.links_cache, false, true).await {
+        note_link_states(&app, &id, &all, true);
+    } else {
+        let _ = app
+            .bus
+            .send(serde_json::json!({"type": "links", "project": id}).to_string());
+    }
+    Ok(Json(status))
+}
+
+async fn update_project_link(
+    State(app): State<Shared>,
+    UrlPath((id, link)): UrlPath<(String, String)>,
+) -> ApiResult<Json<LinkStatus>> {
+    let root = project_path(&app, &id)?;
+    let status = links::update_link(&root, &link, &app.links_cache)
+        .await
+        .map_err(bad_link_op)?;
+    if let Ok(all) = links::list_links(&root, &app.links_cache, false, true).await {
+        note_link_states(&app, &id, &all, true);
+    } else {
+        let _ = app
+            .bus
+            .send(serde_json::json!({"type": "links", "project": id}).to_string());
+    }
+    Ok(Json(status))
+}
+
+async fn pin_project_link(
+    State(app): State<Shared>,
+    UrlPath((id, link)): UrlPath<(String, String)>,
+    body: Bytes,
+) -> ApiResult<Json<LinkStatus>> {
+    let root = project_path(&app, &id)?;
+    let parsed: PinBody = if body.is_empty() {
+        PinBody::default()
+    } else {
+        serde_json::from_slice(&body)
+            .map_err(|e| bad(StatusCode::BAD_REQUEST, format!("invalid pin JSON: {e}")))?
+    };
+    let status = links::pin_link(&root, &link, parsed.reason, &app.links_cache)
+        .await
+        .map_err(bad_link_op)?;
+    if let Ok(all) = links::list_links(&root, &app.links_cache, false, true).await {
+        note_link_states(&app, &id, &all, true);
+    } else {
+        let _ = app
+            .bus
+            .send(serde_json::json!({"type": "links", "project": id}).to_string());
+    }
+    Ok(Json(status))
+}
+
+async fn follow_project_link(
+    State(app): State<Shared>,
+    UrlPath((id, link)): UrlPath<(String, String)>,
+    Json(body): Json<FollowBody>,
+) -> ApiResult<Json<LinkStatus>> {
+    let root = project_path(&app, &id)?;
+    let status = links::follow_link(&root, &link, body.branch, &app.links_cache)
+        .await
+        .map_err(bad_link_op)?;
+    if let Ok(all) = links::list_links(&root, &app.links_cache, false, true).await {
+        note_link_states(&app, &id, &all, true);
+    } else {
+        let _ = app
+            .bus
+            .send(serde_json::json!({"type": "links", "project": id}).to_string());
+    }
+    Ok(Json(status))
+}
+
+async fn delete_project_link(
+    State(app): State<Shared>,
+    UrlPath((id, link)): UrlPath<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let root = project_path(&app, &id)?;
+    let root2 = root.clone();
+    tokio::task::spawn_blocking(move || links::remove_link(&root2, &link))
+        .await
+        .map_err(|e| bad(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(bad_link_op)?;
+    if let Ok(all) = links::list_links(&root, &app.links_cache, false, true).await {
+        note_link_states(&app, &id, &all, true);
+    } else {
+        let _ = app
+            .bus
+            .send(serde_json::json!({"type": "links", "project": id}).to_string());
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// `%XX` escapes undone (the store sends a message so, as headers are ASCII).
@@ -313,12 +665,15 @@ fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() {
-            if let Some(v) = std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok()) {
-                out.push(v);
-                i += 3;
-                continue;
-            }
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && let Some(v) = std::str::from_utf8(&b[i + 1..i + 3])
+                .ok()
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+        {
+            out.push(v);
+            i += 3;
+            continue;
         }
         out.push(b[i]);
         i += 1;
@@ -328,8 +683,10 @@ fn percent_decode(s: &str) -> String {
 
 /// Resolves `rel` under `root`, refusing anything that leaves the folder.
 fn inside(root: &Path, rel: &str) -> ApiResult<PathBuf> {
-    let root = std::fs::canonicalize(root).map_err(|e| bad(StatusCode::NOT_FOUND, e.to_string()))?;
-    let path = std::fs::canonicalize(root.join(rel)).map_err(|_| bad(StatusCode::NOT_FOUND, "not found"))?;
+    let root =
+        std::fs::canonicalize(root).map_err(|e| bad(StatusCode::NOT_FOUND, e.to_string()))?;
+    let path = std::fs::canonicalize(root.join(rel))
+        .map_err(|_| bad(StatusCode::NOT_FOUND, "not found"))?;
     if !path.starts_with(&root) {
         return Err(bad(StatusCode::FORBIDDEN, "outside the project"));
     }
@@ -337,7 +694,13 @@ fn inside(root: &Path, rel: &str) -> ApiResult<PathBuf> {
 }
 
 fn mime(path: &Path) -> &'static str {
-    match path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "svg" => "image/svg+xml",
@@ -349,13 +712,18 @@ fn mime(path: &Path) -> &'static str {
         "js" | "mjs" => "text/javascript",
         "css" => "text/css",
         "glb" => "model/gltf-binary",
-        "md" | "csv" | "toml" | "txt" | "kicad_sch" | "kicad_pcb" | "kicad_dru" | "net" => "text/plain; charset=utf-8",
+        "md" | "csv" | "toml" | "txt" | "dxf" | "kicad_sch" | "kicad_pcb" | "kicad_dru" | "net" => {
+            "text/plain; charset=utf-8"
+        }
         _ => "application/octet-stream",
     }
 }
 
 /// Opens something for the person, on this machine's desktop.
-async fn open(State(app): State<Shared>, UrlPath((id, what)): UrlPath<(String, String)>) -> ApiResult<StatusCode> {
+async fn open(
+    State(app): State<Shared>,
+    UrlPath((id, what)): UrlPath<(String, String)>,
+) -> ApiResult<StatusCode> {
     let root = project_path(&app, &id)?;
     let (program, arg) = match what.as_str() {
         "folder" => ("xdg-open", root.clone()),
@@ -384,12 +752,23 @@ async fn open(State(app): State<Shared>, UrlPath((id, what)): UrlPath<(String, S
 /// The desktop's own folder dialog; a page can't learn a real path itself.
 async fn pick_folder() -> ApiResult<Json<serde_json::Value>> {
     let out = tokio::process::Command::new("zenity")
-        .args(["--file-selection", "--directory", "--title=Add a board project"])
+        .args([
+            "--file-selection",
+            "--directory",
+            "--title=Add a board project",
+        ])
         .output()
         .await
-        .map_err(|e| bad(StatusCode::NOT_IMPLEMENTED, format!("no folder dialog (zenity: {e}); paste the path instead")))?;
+        .map_err(|e| {
+            bad(
+                StatusCode::NOT_IMPLEMENTED,
+                format!("no folder dialog (zenity: {e}); paste the path instead"),
+            )
+        })?;
     let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    Ok(Json(serde_json::json!({"path": if out.status.success() && !path.is_empty() { Some(path) } else { None }})))
+    Ok(Json(
+        serde_json::json!({"path": if out.status.success() && !path.is_empty() { Some(path) } else { None }}),
+    ))
 }
 
 async fn bus_socket(State(app): State<Shared>, ws: WebSocketUpgrade) -> impl IntoResponse {
@@ -433,7 +812,14 @@ fn start_watcher(app: &Shared) {
             return;
         }
     }
-    let roots: Vec<PathBuf> = app.list.lock().unwrap().projects.iter().map(|p| p.path.clone()).collect();
+    let roots: Vec<PathBuf> = app
+        .list
+        .lock()
+        .unwrap()
+        .projects
+        .iter()
+        .map(|p| p.path.clone())
+        .collect();
     for root in roots {
         watch(app, &root);
     }
@@ -446,14 +832,23 @@ fn start_watcher(app: &Shared) {
             while let Ok(p) = rx.try_recv() {
                 changed.push(p);
             }
-            let projects: Vec<PathBuf> = app.list.lock().unwrap().projects.iter().map(|p| p.path.clone()).collect();
+            let projects: Vec<PathBuf> = app
+                .list
+                .lock()
+                .unwrap()
+                .projects
+                .iter()
+                .map(|p| p.path.clone())
+                .collect();
             let ids: BTreeSet<String> = changed
                 .iter()
                 .filter_map(|c| projects.iter().find(|root| c.starts_with(root)))
                 .map(|root| config::project_id(root))
                 .collect();
             for id in ids {
-                let _ = app.bus.send(serde_json::json!({"type": "status", "project": id}).to_string());
+                let _ = app
+                    .bus
+                    .send(serde_json::json!({"type": "status", "project": id}).to_string());
             }
         }
     });
@@ -462,10 +857,10 @@ fn start_watcher(app: &Shared) {
 fn watch(app: &App, root: &Path) {
     if let Some(w) = app.watcher.lock().unwrap().as_mut() {
         let design = root.join("design");
-        if design.is_dir() {
-            if let Err(e) = w.watch(&design, RecursiveMode::Recursive) {
-                eprintln!("boardroom: can't watch {}: {e}", design.display());
-            }
+        if design.is_dir()
+            && let Err(e) = w.watch(&design, RecursiveMode::Recursive)
+        {
+            eprintln!("boardroom: can't watch {}: {e}", design.display());
         }
     }
 }

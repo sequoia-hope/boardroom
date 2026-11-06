@@ -29,3 +29,6 @@ launch.sh
 
 # ultraroute, built by scripts/route.sh
 build/
+
+# Boardroom runtime state (materialized links, job logs, locks)
+.boardroom/

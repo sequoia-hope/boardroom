@@ -113,16 +113,19 @@ pub struct Git {
 /// A remote URL in one comparable form: https, no `.git`, no trailing slash.
 pub fn normalize_remote(url: &str) -> String {
     let url = url.trim().trim_end_matches('/').trim_end_matches(".git");
-    if let Some(rest) = url.strip_prefix("git@") {
-        if let Some((host, path)) = rest.split_once(':') {
-            return format!("https://{host}/{path}");
-        }
+    if let Some(rest) = url.strip_prefix("git@")
+        && let Some((host, path)) = rest.split_once(':')
+    {
+        return format!("https://{host}/{path}");
     }
     url.replacen("http://", "https://", 1)
 }
 
 pub fn summarize(id: &str, path: &Path, pinned: bool) -> Summary {
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let mut s = Summary {
         id: id.to_string(),
         path: path.to_path_buf(),
@@ -181,14 +184,20 @@ pub fn summarize(id: &str, path: &Path, pinned: bool) -> Summary {
         .into_iter()
         .find(|p| path.join(p).is_file())
         .map(str::to_string);
-    s.viewer = path.join("viewer/index.html").is_file().then(|| "viewer/index.html".to_string());
+    s.viewer = path
+        .join("viewer/index.html")
+        .is_file()
+        .then(|| "viewer/index.html".to_string());
     s.boards = find_boards(path);
     s.git = read_git(path);
     s
 }
 
 fn str_field(v: &Value, key: &str) -> Option<String> {
-    v.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string)
+    v.get(key)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 fn read_needs(status: &Value) -> Vec<Need> {
@@ -214,7 +223,11 @@ fn read_needs(status: &Value) -> Vec<Need> {
                     options: item
                         .get("options")
                         .and_then(Value::as_array)
-                        .map(|o| o.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                        .map(|o| {
+                            o.iter()
+                                .filter_map(|x| x.as_str().map(str::to_string))
+                                .collect()
+                        })
                         .unwrap_or_default(),
                 })
             })
@@ -226,7 +239,9 @@ fn read_needs(status: &Value) -> Vec<Need> {
 /// A Studio run that crashed, or left connections open when its clock ran
 /// out, is something to look at: `apps.studio.<board>.failed`.
 fn studio_failures(status: &Value) -> Vec<Need> {
-    let Some(Value::Object(boards)) = status.pointer("/apps/studio") else { return vec![] };
+    let Some(Value::Object(boards)) = status.pointer("/apps/studio") else {
+        return vec![];
+    };
     boards
         .iter()
         .filter_map(|(board, v)| {
@@ -234,28 +249,49 @@ fn studio_failures(status: &Value) -> Vec<Need> {
             let opens = v.get("opens").and_then(Value::as_u64).unwrap_or(0);
             let text = match failed.as_str() {
                 "crash" => format!("The router crashed routing {board}; see its run report"),
-                "deadline" => format!("Routing {board} ran out of time with {opens} connection(s) open"),
+                "deadline" => {
+                    format!("Routing {board} ran out of time with {opens} connection(s) open")
+                }
                 other => format!("Routing {board} failed ({other})"),
             };
-            Some(Need { id: format!("studio-{board}-{failed}"), kind: "alert".into(), text, gate: Some(7), options: vec![] })
+            Some(Need {
+                id: format!("studio-{board}-{failed}"),
+                kind: "alert".into(),
+                text,
+                gate: Some(7),
+                options: vec![],
+            })
         })
         .collect()
 }
 
 fn read_checks(status: &Value) -> Vec<Check> {
-    let Some(Value::Object(map)) = status.get("checks") else { return vec![] };
+    let Some(Value::Object(map)) = status.get("checks") else {
+        return vec![];
+    };
     map.iter()
         .map(|(name, v)| match v {
             // v1: {"result": "...", "ok": true}
             Value::Object(o) => Check {
                 name: name.clone(),
-                result: o.get("result").and_then(Value::as_str).unwrap_or("").to_string(),
+                result: o
+                    .get("result")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
                 ok: o.get("ok").and_then(Value::as_bool),
             },
             // Original: free text. Judge only what the text says outright.
             other => {
-                let result = other.as_str().map(str::to_string).unwrap_or_else(|| other.to_string());
-                Check { name: name.clone(), ok: judge(&result), result }
+                let result = other
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| other.to_string());
+                Check {
+                    name: name.clone(),
+                    ok: judge(&result),
+                    result,
+                }
             }
         })
         .collect()
@@ -279,7 +315,12 @@ fn read_links(status: &Value) -> Vec<Link> {
         .map(|items| {
             items
                 .iter()
-                .filter_map(|l| Some(Link { label: str_field(l, "label")?, href: str_field(l, "href")? }))
+                .filter_map(|l| {
+                    Some(Link {
+                        label: str_field(l, "label")?,
+                        href: str_field(l, "href")?,
+                    })
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -289,7 +330,11 @@ fn read_gates(status: &Value, root: &Path, phase: Option<u32>) -> Vec<Gate> {
     let passed: Vec<u32> = status
         .get("gates_passed")
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(|g| g.as_u64().map(|g| g as u32)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|g| g.as_u64().map(|g| g as u32))
+                .collect()
+        })
         .unwrap_or_default();
     let v1 = status.get("gates").and_then(Value::as_object);
     (0..PHASES.len() as u32)
@@ -336,7 +381,10 @@ pub fn board_pcb(root: &Path, board: &str, variant: &str) -> Option<String> {
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
     let pcbs: Vec<&String> = files.iter().filter(|f| f.ends_with(".kicad_pcb")).collect();
-    let by_pro = files.iter().find_map(|f| f.strip_suffix(".kicad_pro")).map(|stem| format!("{stem}.kicad_pcb"));
+    let by_pro = files
+        .iter()
+        .find_map(|f| f.strip_suffix(".kicad_pro"))
+        .map(|stem| format!("{stem}.kicad_pcb"));
     let named = format!("{board}.kicad_pcb");
     let chosen = by_pro
         .filter(|p| pcbs.contains(&p))
@@ -348,20 +396,36 @@ pub fn board_pcb(root: &Path, board: &str, variant: &str) -> Option<String> {
 /// KiCad projects live in `hw/<board>/<variant>/`.
 fn find_boards(root: &Path) -> Vec<Board> {
     let mut boards = vec![];
-    let Ok(hw) = std::fs::read_dir(root.join("hw")) else { return boards };
+    let Ok(hw) = std::fs::read_dir(root.join("hw")) else {
+        return boards;
+    };
     for board in hw.flatten().filter(|e| e.path().is_dir()) {
-        let Ok(variants) = std::fs::read_dir(board.path()) else { continue };
+        let Ok(variants) = std::fs::read_dir(board.path()) else {
+            continue;
+        };
         for variant in variants.flatten().filter(|e| e.path().is_dir()) {
             let kicad_pro = std::fs::read_dir(variant.path()).ok().and_then(|files| {
                 files
                     .flatten()
                     .map(|f| f.path())
                     .find(|p| p.extension().is_some_and(|e| e == "kicad_pro"))
-                    .and_then(|p| p.strip_prefix(root).ok().map(|r| r.to_string_lossy().into_owned()))
+                    .and_then(|p| {
+                        p.strip_prefix(root)
+                            .ok()
+                            .map(|r| r.to_string_lossy().into_owned())
+                    })
             });
-            let (name, var) = (board.file_name().to_string_lossy().into_owned(), variant.file_name().to_string_lossy().into_owned());
+            let (name, var) = (
+                board.file_name().to_string_lossy().into_owned(),
+                variant.file_name().to_string_lossy().into_owned(),
+            );
             let pcb = board_pcb(root, &name, &var);
-            boards.push(Board { board: name, variant: var, kicad_pro, pcb });
+            boards.push(Board {
+                board: name,
+                variant: var,
+                kicad_pro,
+                pcb,
+            });
         }
     }
     boards.sort_by(|a, b| (&a.board, &a.variant).cmp(&(&b.board, &b.variant)));
@@ -370,8 +434,15 @@ fn find_boards(root: &Path) -> Vec<Board> {
 
 fn read_git(root: &Path) -> Option<Git> {
     let git = |args: &[&str]| -> Option<String> {
-        let out = Command::new("git").arg("-C").arg(root).args(args).output().ok()?;
-        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
     };
     // Only report git for a folder that is its own repository's top, not a
     // folder that happens to sit inside some other checkout.
@@ -380,7 +451,9 @@ fn read_git(root: &Path) -> Option<Git> {
     let scope: &[&str] = if inside { &[] } else { &["--", "."] };
     let mut status_args = vec!["status", "--porcelain"];
     status_args.extend_from_slice(scope);
-    let dirty = git(&status_args).map(|s| s.lines().filter(|l| !l.is_empty()).count()).unwrap_or(0);
+    let dirty = git(&status_args)
+        .map(|s| s.lines().filter(|l| !l.is_empty()).count())
+        .unwrap_or(0);
     let mut log_args = vec!["log", "-1", "--format=%s%x1f%cs"];
     log_args.extend_from_slice(scope);
     let log = git(&log_args).unwrap_or_default();
