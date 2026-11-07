@@ -78,7 +78,7 @@ inspectable fillet), everything else as KiCad. Phase 3 library work; flagged MIN
 | U2 peak pulse (Table 1, p.2) | IEC 61000-4-2 15 kV contact and 15 kV air; MIL-STD-883G 25 kV | intent: ±8 kV contact (level 4) | OK; the front page says "level 4 compliance guaranteed at device level" (p.1) |
 | U2 VBUS (pin 5) working voltage | VRM 5.25 V (IRM 150 nA max, 25 °C, p.2); VBR ≥ 6 V at 1 mA (p.2). No higher DC rating is given | 5.5 V (vSafe5V upper limit, spec, from memory) | Above VRM by 0.25 V: leakage unspecified at 5.5 V but bounded below 1 mA by VBR ≥ 6 V at 1 mA. Harmless against a 500 mA budget. Above 6 V the TVS conducts hard; intent: don't care |
 | U2 I/O pins | rail-to-rail to VBUS and GND | 0–3.3 V signals, VBUS ≥ 4.5 V present whenever USB is | Steering diodes stay reverse-biased. OK |
-| RP2350 USB_DP/USB_DM (Table 1678, p.1335: type "USB IO", USB_OTP_VDD domain) | Not FT pads. Table 1680 (p.1336) gives −0.5 … IOVDD + 0.5 V for standard pads; reading that row with USB_OTP_VDD = 3.3 V gives 3.8 V | 3.3 V signalling; ESD residual (Calculations) | OK for signals. Note: the bluebuzz audit used the FT 5.5 V row for these pins; the datasheet does not type them FT |
+| RP2350 USB_DP/USB_DM (Table 1678, p.1335: type "USB IO", USB_OTP_VDD domain) | Not FT pads. Table 1680 (p.1336) gives −0.5 … IOVDD + 0.5 V for standard pads; reading that row with USB_OTP_VDD = 3.3 V gives 3.8 V | 3.3 V signalling; ESD residual (Calculations) | OK for signals. Note: an earlier audit used the FT 5.5 V row for these pins; the datasheet does not type them FT |
 | RP2350 ESD (Table 1681, p.1336) | HBM 2 kV all pins (4 kV for FT pins only), CDM 500 V | IEC ±8 kV contact at J1 | Not alone: U2 + 27 Ω required, present |
 | R_CC1/R_CC2 (0402, 62.5 mW, 50 V) | 62.5 mW | Default-Rp source: 0.42 V across → 35 µW; a non-compliant 5.5 V straight onto CC: 5.5²/5.1 k = 5.9 mW | 10× |
 | R_USB_DP/DM (62.5 mW) | 62.5 mW | FS signalling, ≈ 3.3 V into ≈ 45 Ω + 15 kΩ host pull-down; mW-class average | OK |
@@ -194,8 +194,8 @@ rejected for a bus-powered board with no other earth.
   Both orientations must work: test with the plug both ways at bring-up.
 - **SBU1/SBU2 (A8/B8) no-connect.** Put a no-connect flag on them in the schematic.
 - **RP2350 USB pads are not 5 V tolerant** (Table 1678 type "USB IO", not "FT"). Nothing on the
-  board puts more than 3.3 V on them in normal use; the bluebuzz reasoning about FT tolerance does
-  not carry over.
+  board puts more than 3.3 V on them in normal use; reading these pins as FT (5.5 V) would
+  be wrong.
 - **No VBUS sensing**: the RP2350 has no VBUS-detect pin wired here; it is bus-powered, so it only
   runs (and only pulls up D+) when VBUS is present. Powering the board from the header VBUS pin
   with a USB cable attached to an unpowered host is "not supported" (intent).
@@ -278,7 +278,7 @@ Ours:
 |---|---|---|
 | MINOR | KiCad's `USB_C_Receptacle_HRO_TYPE-C-31-M-12` SMT pads are 1.45 mm long at y −4.77…−3.32; the 2020 HRO drawing's land is ≈ 1.14 mm at y −4.24…−3.10 (derived). KiCad's pads are short by 0.22 mm at the front; the front shell slots are drilled 1.2 mm vs 1.4 mm drawn (0.4 mm clearance on the 0.8 mm leg remains). | Project-local footprint per the drawing (phase 3), or accept with a decision-log line. |
 | MINOR | U2's VBUS working voltage is 5.25 V (p.2), below the 5.5 V Type-C upper limit; leakage at 5.5 V is unspecified but < 1 mA (VBR ≥ 6 V at 1 mA). | None; recorded. |
-| NOTE | J1 pin map, 5 A / 20 V rating and −30…+80 °C range now verified from the HRO drawing; U2 pinout, ratings and layout guidance verified from ST's datasheet. Both were UNVERIFIED in the bluebuzz audit. | — |
+| NOTE | J1 pin map, 5 A / 20 V rating and −30…+80 °C range now verified from the HRO drawing; U2 pinout, ratings and layout guidance verified from ST's datasheet. Both were UNVERIFIED in an earlier audit. | — |
 | NOTE | RP2350 USB pads are type "USB IO" (Table 1678), not FT; their limit is the standard-pad row of Table 1680, not 5.5 V. | — |
 | NOTE | ESD residual into U1 through 27 Ω is ≈ 1 A peak with a tight U2 layout (≤ HBM 2 kV class), ≈ 12 A with ST's "unsuitable" 10 mm layout. | U2 ≤ 3 mm from J1, two GND vias (Layout guidance). |
 | NOTE | 27 Ω (C25100) is an extended part; required by the RP2350 (Table 1678, guide p.16). | Pay the fee. |
