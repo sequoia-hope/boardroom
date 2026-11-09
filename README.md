@@ -271,6 +271,7 @@ by `.github/workflows/pages.yml` from snapshots of the projects in `examples.tom
 | [`docs/shell-spec.md`](docs/shell-spec.md) | The Boardroom app, the project format, `status.json` v1, the vendored skill |
 | [`docs/demo-spec.md`](docs/demo-spec.md) | The whole workflow running on GitHub Pages |
 | [`docs/suite-spec.md`](docs/suite-spec.md) | Waffle Iron with Boardroom: linked projects, the shared outline, version tracking |
+| [`docs/monorepo-spec.md`](docs/monorepo-spec.md) | Merging Boardroom, Circuit Composer, pcbview and UltraRoute into one repo and one app, staged for Antigravity agents (draft) |
 
 ## Updating pcbview and ultraroute
 
