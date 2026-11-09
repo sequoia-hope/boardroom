@@ -4,7 +4,7 @@
     "commit": "d25ef9132ed8"
   },
   "input": {
-    "path": "/home/sequoia/Software/easy_pcb/examples/easy2350/hw/easy2350/a/easy2350.kicad_pcb",
+    "path": "examples/easy2350/hw/easy2350/a/easy2350.kicad_pcb",
     "sha256": "ed4c92e1021bb32236b3b294e3ddfb4d13710f97958c70d079ba72ecfc385c4f",
     "bytes": 1291459
   },
@@ -517,11 +517,11 @@
       "60",
       "--shove-patience",
       "8",
-      "/home/sequoia/Software/easy_pcb/examples/easy2350/hw/easy2350/a/easy2350.kicad_pcb",
+      "examples/easy2350/hw/easy2350/a/easy2350.kicad_pcb",
       "-o",
-      "/home/sequoia/Software/ultraroute/studio/runs/projects/easy2350-36061dda/easy2350-a/1793378031072.kicad_pcb",
+      "~/Software/ultraroute/studio/runs/projects/easy2350-36061dda/easy2350-a/1793378031072.kicad_pcb",
       "--report",
-      "/home/sequoia/Software/ultraroute/studio/runs/projects/easy2350-36061dda/easy2350-a/1793378031072.report.json",
+      "~/Software/ultraroute/studio/runs/projects/easy2350-36061dda/easy2350-a/1793378031072.report.json",
       "--live",
       "-"
     ],

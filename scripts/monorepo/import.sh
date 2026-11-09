@@ -24,7 +24,7 @@ usage: scripts/monorepo/import.sh [options] <scratch-dir>
 
 Options:
   --with-board-draw        Also import and merge board-draw into board-draw/ (Stage 3)
-  --source-root <dir>      Directory holding source checkouts (default: /home/sequoia/Software)
+  --source-root <dir>      Directory holding source checkouts (default: $HOME/Software)
   --branches-out <path>    Output path for unmerged branches list (default: scripts/monorepo/branches.txt)
   --report-out <path>      Output path for import report (default: scripts/monorepo/import-report.md)
   -h, --help               Show this help text
@@ -34,7 +34,7 @@ EOF
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 worktree_root="$(cd "$script_dir/../.." && pwd -P)"
 
-source_root="/home/sequoia/Software"
+source_root="$HOME/Software"
 with_board_draw=0
 scratch_dir=""
 branches_out="$script_dir/branches.txt"

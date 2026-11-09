@@ -1,8 +1,8 @@
 # Monorepo Import Report
 
 - **Generated:** `2026-11-08T19:41:11-08:00`
-- **Scratch workspace:** `/tmp/claude-1000/-home-sequoia-Software-boardroom/2839cd38-785c-4df1-bb66-acfc115153a9/scratchpad/stage1`
-- **Merged repository:** `/tmp/claude-1000/-home-sequoia-Software-boardroom/2839cd38-785c-4df1-bb66-acfc115153a9/scratchpad/stage1/boardroom` (branch `monorepo/import`, HEAD `0d898e097e4ab76d3375ac106c59a4685530fed3`)
+- **Scratch workspace:** `<scratchpad>/stage1`
+- **Merged repository:** `<scratchpad>/stage1/boardroom` (branch `monorepo/import`, HEAD `0d898e097e4ab76d3375ac106c59a4685530fed3`)
 - **Total commits on `monorepo/import`:** 635
 - **Total tags in merged repo:** 0
 - **`board-draw` included:** no (Stage 1 default; supported via `--with-board-draw`)
@@ -26,7 +26,7 @@
 
 ## 2. Unmerged Branches (Not Imported)
 
-Full machine-readable list written to `/home/sequoia/Software/boardroom/.claude/worktrees/monorepo-stage-1/scripts/monorepo/branches.txt`:
+Full machine-readable list written to `~/Software/boardroom/.claude/worktrees/monorepo-stage-1/scripts/monorepo/branches.txt`:
 
 | Source Repo | Unmerged Local Branches | Unmerged Remote Branches | Unmerged Detached Worktrees |
 |---|---:|---:|---:|
@@ -45,16 +45,16 @@ Full machine-readable list written to `/home/sequoia/Software/boardroom/.claude/
 | `local:boxed-prerebase-7dd54b7` | `7dd54b7` | `2026-11-03 06:23:12 -0800` | — |
 | `local:explore/escape-vias` | `93d5021` | `2026-10-28 00:42:46 -0700` | — |
 | `local:explore/narrow` | `efea627` | `2026-11-03 02:27:22 -0800` | — |
-| `local:explore/restarts` | `286bd2f` | `2026-11-05 14:39:42 -0800` | `/home/sequoia/Software/ultraroute/.claude/worktrees/explore-restarts` |
+| `local:explore/restarts` | `286bd2f` | `2026-11-05 14:39:42 -0800` | `~/Software/ultraroute/.claude/worktrees/explore-restarts` |
 | `local:explore/text` | `d2b9b4f` | `2026-11-03 06:18:42 -0800` | — |
 | `local:explore/text-noany` | `432ddbe` | `2026-11-03 11:57:40 -0800` | — |
 | `local:explore/text-nobridge` | `774cfee` | `2026-11-03 12:50:59 -0800` | — |
-| `local:feat/square-bundles` | `43601c2` | `2026-11-08 16:21:14 -0800` | `/home/sequoia/Software/ultraroute/.claude/worktrees/square-both` |
+| `local:feat/square-bundles` | `43601c2` | `2026-11-08 16:21:14 -0800` | `~/Software/ultraroute/.claude/worktrees/square-both` |
 | `local:fix/cap-joints` | `e42caf1` | `2026-11-01 07:30:08 -0800` | — |
-| `local:fix/crowded-pads` | `6d165d7` | `2026-11-05 11:05:27 -0800` | `/home/sequoia/Software/ultraroute/.claude/worktrees/crowded` |
+| `local:fix/crowded-pads` | `6d165d7` | `2026-11-05 11:05:27 -0800` | `~/Software/ultraroute/.claude/worktrees/crowded` |
 | `local:fix/pad-entry-depth` | `d1f4658` | `2026-11-02 01:40:36 -0800` | — |
-| `local:fix/qfn-escape` | `0a47a9e` | `2026-11-06 19:17:37 -0800` | `/home/sequoia/Software/ultraroute/.claude/worktrees/fine-pitch-fanout` |
-| `local:fix/stagger` | `7f0c638` | `2026-11-07 10:53:03 -0800` | `/home/sequoia/Software/ultraroute/.claude/worktrees/stagger` |
+| `local:fix/qfn-escape` | `0a47a9e` | `2026-11-06 19:17:37 -0800` | `~/Software/ultraroute/.claude/worktrees/fine-pitch-fanout` |
+| `local:fix/stagger` | `7f0c638` | `2026-11-07 10:53:03 -0800` | `~/Software/ultraroute/.claude/worktrees/stagger` |
 | `local:kicad/5-lengths` | `e3d5cce` | `2026-10-31 12:30:34 -0700` | — |
 | `local:merge/webgpu` | `d3625b7` | `2026-10-26 14:53:45 -0700` | — |
 | `local:remed/12-global` | `1b6660a` | `2026-10-30 04:07:31 -0700` | — |
@@ -134,7 +134,7 @@ Extracted from `monorepo/import` with `git clone --no-local <monorepo> x && git 
 ### Check 2: Only branch is `monorepo/import` (`git branch -a`)
 
 ```text
-$ git -C /tmp/claude-1000/-home-sequoia-Software-boardroom/2839cd38-785c-4df1-bb66-acfc115153a9/scratchpad/stage1/boardroom branch -a
+$ git -C <scratchpad>/stage1/boardroom branch -a
 * monorepo/import
 ```
 
@@ -160,7 +160,7 @@ $ git -C /tmp/claude-1000/-home-sequoia-Software-boardroom/2839cd38-785c-4df1-bb
 ### Check 4: Nothing from the "never imported" list is in the tree
 
 ```text
-$ git -C /tmp/claude-1000/-home-sequoia-Software-boardroom/2839cd38-785c-4df1-bb66-acfc115153a9/scratchpad/stage1/boardroom ls-files | grep -E 'copperroute|PCBench|/target'
+$ git -C <scratchpad>/stage1/boardroom ls-files | grep -E 'copperroute|PCBench|/target'
 (empty — 0 matches)
 ```
 
@@ -170,7 +170,7 @@ $ git -C /tmp/claude-1000/-home-sequoia-Software-boardroom/2839cd38-785c-4df1-bb
 ### Check 5: Boardroom's own files are unchanged
 
 ```text
-$ git -C /tmp/claude-1000/-home-sequoia-Software-boardroom/2839cd38-785c-4df1-bb66-acfc115153a9/scratchpad/stage1/boardroom diff 48a41a5 monorepo/import -- . ':!composer' ':!pcbview' ':!ultraroute'
+$ git -C <scratchpad>/stage1/boardroom diff 48a41a5 monorepo/import -- . ':!composer' ':!pcbview' ':!ultraroute'
 (empty — 0 lines of diff)
 ```
 

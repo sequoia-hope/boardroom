@@ -29,7 +29,7 @@ assembly drawing: `design/renders/schematic.pdf`, `assembly-top.pdf`.
 ### Sync
 
 ```
-sync_check: /home/sequoia/Software/easy_pcb/examples/easy2350/hw/easy2350/a
+sync_check: examples/easy2350/hw/easy2350/a
   schematic easy2350.kicad_sch: 58 symbols (0 excluded from board)
   board easy2350.kicad_pcb: 58 footprints (0 board-only)
   BOM bom-jlc.csv: 54 designators

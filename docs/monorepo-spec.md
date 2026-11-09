@@ -283,7 +283,7 @@ A freeze of about an hour, announced in stage 0.
    them as part of this work.
 7. `proj`: point `ultraroute` and `circuit-composer` at their new directories (or retire their
    web entries once stage 6 lands), keep `boardroom` on its port. Run `proj doctor`.
-8. sequoia-server: `git pull` its `~/Software/boardroom` clone. Its `~/Software/ultraroute` clone
+8. The build server: `git pull` its `~/Software/boardroom` clone. Its `~/Software/ultraroute` clone
    is left alone. The owner's global `~/.claude/CLAUDE.md` names ultraroute's server clone; Claude
    proposes the edit and the owner makes it.
 9. Moving in-flight work from an old checkout: in the old worktree,
@@ -376,7 +376,7 @@ doesn't run the router suite:
   pushes.
 
 PCBench is not in CI (too heavy, needs KiCad and 26 GB of lab data); it stays a local gate on
-loaf or sequoia-server through `reserve`.
+either build machine through `reserve`.
 
 ### Stage 6: one server (agent)
 
@@ -452,8 +452,8 @@ the snapshot step) and its three tests.
 Antigravity does not load `CLAUDE.md`, skills or Claude's memory, so every agent prompt starts
 with this section and the stage it runs.
 
-**Read first:** this spec; `/home/sequoia/Software/boardroom/CLAUDE.md`;
-`/home/sequoia/.claude/CLAUDE.md` (ports, `reserve`, sequoia-server); `README.md`; for stages
+**Read first:** this spec; `CLAUDE.md`;
+`~/.claude/CLAUDE.md` (ports, `reserve`, the build server); `README.md`; for stages
 touching ultraroute, `ultraroute/README.md`, `ultraroute/docs/pcbench.md` and
 `ultraroute/core/README.md`; for Composer, `composer/README.md` and `composer/docs/app-spec.md`.
 
@@ -468,7 +468,7 @@ touching ultraroute, `ultraroute/README.md`, `ultraroute/docs/pcbench.md` and
 - Ports: `--port`, then `$PORT`, then `proj port`, then fail. Never a literal, never an ad-hoc
   `python3 -m http.server <number>`.
 - Wrap builds, test suites, benchmarks and routing runs in `~/.claude/bin/reserve -c <n> -l "<label>" -- …`
-  (4 for a build, 8–12 for a test suite). Your branch is not on sequoia-server, so pass `--here`
+  (4 for a build, 8–12 for a test suite). Your branch is not on the build server, so pass `--here`
   if `reserve` offers to send the job there. Exit code 75 means the command never ran: report
   it, don't rerun without `reserve`.
 - Don't change behaviour while moving things. If a check in "Proving nothing changed" differs,

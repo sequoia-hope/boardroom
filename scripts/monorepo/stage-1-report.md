@@ -1,14 +1,14 @@
 # Stage 1 Report — Monorepo Import Script
 
 - **Branch:** `monorepo/stage-1`
-- **Worktree:** `/home/sequoia/Software/boardroom/.claude/worktrees/monorepo-stage-1`
-- **Scratch directory:** `/tmp/claude-1000/-home-sequoia-Software-boardroom/2839cd38-785c-4df1-bb66-acfc115153a9/scratchpad/stage1`
-- **Produced monorepo:** `/tmp/claude-1000/-home-sequoia-Software-boardroom/2839cd38-785c-4df1-bb66-acfc115153a9/scratchpad/stage1/boardroom` (branch `monorepo/import`, HEAD `0d898e097e4ab76d3375ac106c59a4685530fed3`)
+- **Worktree:** `~/Software/boardroom/.claude/worktrees/monorepo-stage-1`
+- **Scratch directory:** `<scratchpad>/stage1`
+- **Produced monorepo:** `<scratchpad>/stage1/boardroom` (branch `monorepo/import`, HEAD `0d898e097e4ab76d3375ac106c59a4685530fed3`)
 
 ## What Changed (Commits on `monorepo/stage-1`)
 
 1. `dff5fba` — `Stage 1: add monorepo import.sh, branches.txt, and import-report.md`
-   - `scripts/monorepo/import.sh`: re-runnable history importer taking `<scratch-dir>` (and optional `--with-board-draw` for Stage 3). Clones `/home/sequoia/Software/{boardroom,circuit-composer,pcbview,ultraroute,board-draw}` (`main` only) with `git clone --no-local`, never modifying any source checkout or worktree; runs `git filter-repo --analyze` per project; rewrites `circuit-composer` → `composer/`, `pcbview` → `pcbview/`, `ultraroute` → `ultraroute/` (and `board-draw` → `board-draw/` behind `--with-board-draw`) with `git filter-repo --preserve-commit-hashes --to-subdirectory-filter <dir> --tag-rename '':'<dir>-'`; merges each into a Boardroom clone on `monorepo/import` with `--allow-unrelated-histories --no-ff`; runs all Stage 1 acceptance checks; writes `branches.txt` and `import-report.md`.
+   - `scripts/monorepo/import.sh`: re-runnable history importer taking `<scratch-dir>` (and optional `--with-board-draw` for Stage 3). Clones `~/Software/{boardroom,circuit-composer,pcbview,ultraroute,board-draw}` (`main` only) with `git clone --no-local`, never modifying any source checkout or worktree; runs `git filter-repo --analyze` per project; rewrites `circuit-composer` → `composer/`, `pcbview` → `pcbview/`, `ultraroute` → `ultraroute/` (and `board-draw` → `board-draw/` behind `--with-board-draw`) with `git filter-repo --preserve-commit-hashes --to-subdirectory-filter <dir> --tag-rename '':'<dir>-'`; merges each into a Boardroom clone on `monorepo/import` with `--allow-unrelated-histories --no-ff`; runs all Stage 1 acceptance checks; writes `branches.txt` and `import-report.md`.
    - `scripts/monorepo/branches.txt`: every local and remote branch across all 5 source checkouts not merged into local `main`, with short SHA, commit date, and checked-out worktree (if any).
    - `scripts/monorepo/import-report.md`: source heads, local-ahead-of-remote report (`circuit-composer` `main` `bff8c19` is 3 commits ahead of `origin/main` `7ee8bfc`), imported heads, tag counts, `git filter-repo --analyze` > 5 MB summary, and acceptance check results.
 2. Follow-up commit on `monorepo/stage-1` — `Stage 1: add stage-1-report.md` (`scripts/monorepo/stage-1-report.md`, this file).
@@ -16,7 +16,7 @@
 First-parent commit log in the produced scratch monorepo (`.../scratchpad/stage1/boardroom`):
 
 ```text
-$ git -C /tmp/claude-1000/-home-sequoia-Software-boardroom/2839cd38-785c-4df1-bb66-acfc115153a9/scratchpad/stage1/boardroom log --first-parent --oneline -n 6 monorepo/import
+$ git -C <scratchpad>/stage1/boardroom log --first-parent --oneline -n 6 monorepo/import
 0d898e0 (HEAD -> monorepo/import) Import ultraroute history into ultraroute/
 ad20f27 Import pcbview history into pcbview/
 3e97497 Import circuit-composer history into composer/
@@ -30,7 +30,7 @@ ad20f27 Import pcbview history into pcbview/
 In all commands below:
 
 ```sh
-SCRATCH=/tmp/claude-1000/-home-sequoia-Software-boardroom/2839cd38-785c-4df1-bb66-acfc115153a9/scratchpad/stage1
+SCRATCH=<scratchpad>/stage1
 REPO=$SCRATCH/boardroom
 ```
 
@@ -45,7 +45,7 @@ for pair in "composer:circuit-composer" "pcbview:pcbview" "ultraroute:ultraroute
   rm -rf "$SCRATCH/mirrors/$dir"
   git clone --quiet --no-local "$REPO" "$SCRATCH/mirrors/$dir"
   git -C "$SCRATCH/mirrors/$dir" filter-repo --force --quiet --preserve-commit-hashes --subdirectory-filter "$dir"
-  src_sha="$(GIT_OPTIONAL_LOCKS=0 git --no-optional-locks -C "/home/sequoia/Software/$src" rev-parse refs/heads/main)"
+  src_sha="$(GIT_OPTIONAL_LOCKS=0 git --no-optional-locks -C "$HOME/Software/$src" rev-parse refs/heads/main)"
   ext_sha="$(git -C "$SCRATCH/mirrors/$dir" rev-parse HEAD)"
   echo "$dir ($src): source=$src_sha extracted=$ext_sha match=$([[ "$src_sha" == "$ext_sha" ]] && echo YES || echo NO)"
 done
@@ -156,7 +156,7 @@ Result: **PASS**.
 Command:
 
 ```sh
-BR_HEAD="$(GIT_OPTIONAL_LOCKS=0 git --no-optional-locks -C /home/sequoia/Software/boardroom rev-parse refs/heads/main)"
+BR_HEAD="$(GIT_OPTIONAL_LOCKS=0 git --no-optional-locks -C ~/Software/boardroom rev-parse refs/heads/main)"
 git -C "$REPO" diff "$BR_HEAD" monorepo/import -- . ':!composer' ':!pcbview' ':!ultraroute'
 git -C "$REPO" ls-tree monorepo/import .gitmodules vendor/pcbview vendor/ultraroute
 ```
@@ -174,7 +174,7 @@ Result: **PASS**.
 
 ### Re-runnability Verification
 
-`scripts/monorepo/import.sh "$SCRATCH"` was executed twice against `$SCRATCH` (which also contains `agy-stage1.log`). Both runs exited `0`, passed all checks, left `agy-stage1.log` intact, and left all five original checkouts under `/home/sequoia/Software/` untouched.
+`scripts/monorepo/import.sh "$SCRATCH"` was executed twice against `$SCRATCH` (which also contains `agy-stage1.log`). Both runs exited `0`, passed all checks, left `agy-stage1.log` intact, and left all five original checkouts under `~/Software/` untouched.
 
 ## Anything Skipped and Why
 

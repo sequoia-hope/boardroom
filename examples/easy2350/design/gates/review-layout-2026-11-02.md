@@ -1,6 +1,6 @@
 # Independent layout review 3 — easy2350 rev A (gates 7, 8, 9)
 
-Board: `/home/sequoia/Software/easy_pcb/examples/easy2350/hw/easy2350/a/easy2350.kicad_pcb` (commit ac760ed, ultraroute d791d9b, zones from `board.py regzones`). Every number below is my own measurement with KiCad 9.0.8 `kicad-cli`/`pcbnew`; scripts and crops are in `/tmp/claude-1000/-home-sequoia-Software-easy-pcb/7a2c7658-b6df-4f87-85c2-d6de8594fb26/scratchpad/review3/` (`dump.py`, `geo.py`, `pgnd.py`, `necks.py`, `necks2.py`, `necks3.py`, `checks.py`, `misc.py`, `ref.py`, `crop_ours_corner.png`, `crop_ref_corner.png`, `crop_ours_u1.png`, `crop_ref_u1.png`, `crop_ours_L2.png`, `crop_ours_ldo.png`). Coordinates are board mm from the top-left corner of the outline (file origin 100,100). Reference positions are mm relative to U1's centre (10.525, 26.525). No project file was edited.
+Board: `examples/easy2350/hw/easy2350/a/easy2350.kicad_pcb` (commit ac760ed, ultraroute d791d9b, zones from `board.py regzones`). Every number below is my own measurement with KiCad 9.0.8 `kicad-cli`/`pcbnew`; scripts and crops are in `<scratchpad>/review3/` (`dump.py`, `geo.py`, `pgnd.py`, `necks.py`, `necks2.py`, `necks3.py`, `checks.py`, `misc.py`, `ref.py`, `crop_ours_corner.png`, `crop_ref_corner.png`, `crop_ours_u1.png`, `crop_ref_u1.png`, `crop_ours_L2.png`, `crop_ours_ldo.png`). Coordinates are board mm from the top-left corner of the outline (file origin 100,100). Reference positions are mm relative to U1's centre (10.525, 26.525). No project file was edited.
 
 ## 1. Baseline
 

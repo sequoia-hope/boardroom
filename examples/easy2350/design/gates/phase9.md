@@ -19,7 +19,7 @@ lines; VBUS label narrowed; BOOT/SWD spacing; pin-1 dots).
 plus the stroke-level checks):
 
 ```
-silk_check: /home/sequoia/Software/easy_pcb/examples/easy2350/hw/easy2350/a
+silk_check: examples/easy2350/hw/easy2350/a
   58 parts, 0 designators shown (policy: none), 4 connectors, 58 board silk texts
   designator rotations: none
 

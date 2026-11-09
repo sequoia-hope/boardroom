@@ -7,7 +7,7 @@ length limit and a reason. Checked with `nets_check.py --rules` against the
 KiCad net classes written by `scripts/project.py`:
 
 ```
-nets_check: /home/sequoia/Software/easy_pcb/examples/easy2350/hw/easy2350/a
+nets_check: examples/easy2350/hw/easy2350/a
   61 named nets in easy2350.kicad_sch, 61 rows in nets.csv
 
   derived (mm; 1 oz outer / 0.5 oz inner, dT 10 C, 0.3 mm via = 0.80 A, x1.5 safety, clearance IPC-2221 B2)

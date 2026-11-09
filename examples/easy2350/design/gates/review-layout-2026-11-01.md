@@ -1,6 +1,6 @@
 # Independent layout review 2 — easy2350 rev A (gates 7, 8, 9)
 
-Board reviewed: `/home/sequoia/Software/easy_pcb/examples/easy2350/hw/easy2350/a/easy2350.kicad_pcb` (route of 2026-11-01, ultraroute 0b0f336 + `board.py regzones`). Everything below is my own measurement with KiCad 9.0.8 `pcbnew`/`kicad-cli`; scripts and crops are in `/tmp/claude-1000/-home-sequoia-Software-easy-pcb/7a2c7658-b6df-4f87-85c2-d6de8594fb26/scratchpad/review2/` (`dump.py`, `fills2.py`, `geo2.py`, `necks.py`, `necks2.py`, `conn.py`, `planes.py`, `xtalk.py`, `silk.py`, `crop_*.png`). Coordinates are board mm from the top-left corner. No project file was edited.
+Board reviewed: `examples/easy2350/hw/easy2350/a/easy2350.kicad_pcb` (route of 2026-11-01, ultraroute 0b0f336 + `board.py regzones`). Everything below is my own measurement with KiCad 9.0.8 `pcbnew`/`kicad-cli`; scripts and crops are in `<scratchpad>/review2/` (`dump.py`, `fills2.py`, `geo2.py`, `necks.py`, `necks2.py`, `conn.py`, `planes.py`, `xtalk.py`, `silk.py`, `crop_*.png`). Coordinates are board mm from the top-left corner. No project file was edited.
 
 Baseline: `kicad-cli pcb drc --severity-all`: 0 errors, 0 unconnected, 54 `lib_footprint_mismatch` warnings (board-local footprints), schematic parity 0. 138 vias (51 GND), 16 footprints locked, no locked copper. All nets.csv length/via limits met (XIN 8.0 mm L1 no vias; USB 7.7/7.4, 10.8/11.0, 3.6/3.6 mm; QSPI 5.3–14.1 mm; LX zone; AVDD 4.5 mm).
 

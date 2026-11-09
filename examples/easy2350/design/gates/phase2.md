@@ -19,7 +19,7 @@ Schematic: `hw/easy2350/a/easy2350.kicad_sch`, drawn by `scripts/schematic.py`
 ## Style check
 
 ```
-schematic_style_check: /home/sequoia/Software/easy_pcb/examples/easy2350/hw/easy2350/a/easy2350.kicad_sch
+schematic_style_check: examples/easy2350/hw/easy2350/a/easy2350.kicad_sch
   1 sheet(s), 58 parts, 22 of 25 capacitors name the pin they decouple
 
   WARNINGS (7)

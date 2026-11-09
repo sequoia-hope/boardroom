@@ -9,7 +9,7 @@
 //! setting in `~/.config/boardroom/config.toml`:
 //!
 //! ```toml
-//! waffle_relay = "uv run --project /home/sequoia/Software/waffle-iron/relay waffle-mcp-relay"
+//! waffle_relay = "uv run --project /path/to/waffle-iron/relay waffle-mcp-relay"
 //! ```
 //!
 //! Its WebSocket port comes from `waffle_relay_port` in `config.toml`, else
