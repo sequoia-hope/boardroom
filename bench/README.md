@@ -8,6 +8,7 @@ are what the `examine` crate grows from.
 |---|---|
 | `truth.py` | **the designers' boards**: prepares each corpus board from its raw file (the designer's own copper and pours, refilled by KiCad) and the same board bare with its pours kept; counts how `processed` differs; draws both side by side |
 | `netlists.py` | which boards ship a netlist that is theirs: every fetched `.net` compared with the designer's board pad for pad (`examine::netmatch`) |
+| `extract.py` | **what the designers did**: plane layers, the frame of the routing per neighbourhood, bundles and repeats, read from the designer's board (`examine::designer`); `look` draws each over the look set, `count` totals a tier |
 | `pcbench.py` | prepare, run, report, compare, rejudge, tiers, ab over the PCBench corpus; judged by `kicad-cli` DRC after a KiCad refill |
 | `pcbench_tiers.json`, `pcbench_timeouts.json`, `pcbench_variants.json`, `variants/`, `apply_variant.py` | the tiers (smoke, focus, gate, full), per-board time, our own patched boards |
 | `rulebench.py` | boards with rule files, judged the same way |
@@ -50,6 +51,15 @@ stops and says which is missing.
   Netlists, same day (`netlists.py --tier gate`): 215 of the 314 ship a `.net` beside the board
   in its source repository; it is the board's on 156 (at least 95% of its nets are the same
   pads), close on 37 (80% to 95%), and not on 22 (another revision or variant).
+  What the designers did, same day (`extract.py count --tier gate`, a first reading: the
+  pictures and the list of what it reads wrongly are at `LAB/planned/extraction/`): 53 of the
+  61 multi-layer boards have a plane layer (half poured, little track) and 35 a layer both
+  poured and routed; 159 of the 253 two-layer boards have a side at least half poured. Ten
+  boards have more than 10% of their track off the 45-degree grid of the board's axes, and on
+  those it is mostly off every grid (drawn at any angle): routing on a turned grid is rare in
+  the corpus (the ErgoDone's thumb cluster at 20 degrees; motionhexa, outside it, at 30). 167
+  boards have a quarter or more of their track in bundles and 83 a bundle of eight or more
+  nets; 59 have parts routed alike, 25 four or more of them.
 - **What changes when the harness runs on the raw-based boards** (from the UltraRoute session,
   read from the code, not yet run):
   - Unconnected is KiCad's count, unfiltered. With the designers' pours back, a pad the

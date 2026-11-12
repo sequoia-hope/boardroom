@@ -15,7 +15,10 @@ fn parse_limit(s: &str) -> Limit {
         ">=" => ">=",
         _ => panic!("limit {s}"),
     };
-    Limit { op, value: v.trim().parse().unwrap() }
+    Limit {
+        op,
+        value: v.trim().parse().unwrap(),
+    }
 }
 
 fn check_layout(name: &str) {
@@ -23,11 +26,17 @@ fn check_layout(name: &str) {
 }
 
 fn check_package_layout(package: &str, block: &str, name: &str) {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages").join(package).join("layouts").join(name);
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages")
+        .join(package)
+        .join("layouts")
+        .join(name);
     let board = board::pcb::Board::load(&dir.join("fixture.kicad_pcb")).unwrap();
-    let roles: BTreeMap<String, String> = serde_json::from_str(&std::fs::read_to_string(dir.join("roles.json")).unwrap()).unwrap();
+    let roles: BTreeMap<String, String> =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("roles.json")).unwrap()).unwrap();
     let roles = BuckRoles::from_map(&roles).unwrap();
-    let published: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("verify.json")).unwrap()).unwrap();
+    let published: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("verify.json")).unwrap()).unwrap();
     let limits: BTreeMap<String, Limit> = published["limits"]
         .as_object()
         .unwrap()
@@ -35,14 +44,30 @@ fn check_package_layout(package: &str, block: &str, name: &str) {
         .map(|(k, v)| (k.clone(), parse_limit(v.as_str().unwrap())))
         .collect();
     let r = check(&board, block, &roles, &limits).unwrap();
-    assert!(r.geometry.routed, "{name}: the block's copper joins every loop");
+    assert!(
+        r.geometry.routed,
+        "{name}: the block's copper joins every loop"
+    );
     for m in &r.measurements {
-        assert_ne!(m.passed, Some(false), "{name}: {} = {} fails {:?}", m.check, m.measured, m.limit);
+        assert_ne!(
+            m.passed,
+            Some(false),
+            "{name}: {} = {} fails {:?}",
+            m.check,
+            m.measured,
+            m.limit
+        );
     }
     // No worse than the measurements published with the layout.
     for m in &r.measurements {
         let was = published["measurements"][m.check].as_f64().unwrap();
-        assert!((m.measured - was).abs() < 1e-3, "{name}: {} moved: {} now, {} published", m.check, m.measured, was);
+        assert!(
+            (m.measured - was).abs() < 1e-3,
+            "{name}: {} moved: {} now, {} published",
+            m.check,
+            m.measured,
+            was
+        );
     }
 }
 

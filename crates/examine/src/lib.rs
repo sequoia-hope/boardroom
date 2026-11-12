@@ -3,9 +3,10 @@
 
 pub mod bridge;
 pub mod buck;
-pub mod protect;
+pub mod designer;
 pub mod netmatch;
 pub mod nets;
+pub mod protect;
 pub mod svg;
 
 /// Synthetic boards for the checks' tests.
@@ -25,18 +26,56 @@ pub(crate) mod test_board {
             .map(|(i, &(part, pin, net, at))| {
                 parts
                     .entry(part.to_string())
-                    .or_insert_with(|| Part { reference: part.into(), value: String::new(), footprint: String::new(), at, rotation: 0.0, back: false, locked: false, courtyard: None, pads: vec![] })
+                    .or_insert_with(|| Part {
+                        reference: part.into(),
+                        value: String::new(),
+                        footprint: String::new(),
+                        at,
+                        rotation: 0.0,
+                        back: false,
+                        locked: false,
+                        courtyard: None,
+                        pads: vec![],
+                    })
                     .pads
                     .push(i);
-                let sq = vec![[at[0] - 0.5, at[1] - 0.5], [at[0] + 0.5, at[1] - 0.5], [at[0] + 0.5, at[1] + 0.5], [at[0] - 0.5, at[1] + 0.5]];
-                Pad { part: part.into(), pin: pin.into(), net: net.into(), layers: vec!["F.Cu".into()], centre: at, shape: vec![sq] }
+                let sq = vec![
+                    [at[0] - 0.5, at[1] - 0.5],
+                    [at[0] + 0.5, at[1] - 0.5],
+                    [at[0] + 0.5, at[1] + 0.5],
+                    [at[0] - 0.5, at[1] + 0.5],
+                ];
+                Pad {
+                    part: part.into(),
+                    pin: pin.into(),
+                    net: net.into(),
+                    layers: vec!["F.Cu".into()],
+                    centre: at,
+                    shape: vec![sq],
+                }
             })
             .collect();
-        Board { layers: vec!["F.Cu".into(), "B.Cu".into()], parts, pads, tracks, vias: vec![], fills, rules: None, outline: None }
+        Board {
+            layers: vec!["F.Cu".into(), "B.Cu".into()],
+            parts,
+            pads,
+            tracks,
+            vias: vec![],
+            fills,
+            rules: None,
+            outline: None,
+        }
     }
 
     pub fn track(net: &str, a: P, b: P) -> Track {
-        Track { a, b, width: 0.2, layer: "F.Cu".into(), net: net.into(), locked: false }
+        Track {
+            a,
+            b,
+            width: 0.2,
+            layer: "F.Cu".into(),
+            net: net.into(),
+            locked: false,
+        }
     }
 }
 
