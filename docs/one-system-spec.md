@@ -101,6 +101,7 @@ boardroom/
   view/           pcbview's Python and web files, behind `boardroom view`
   bench/          the corpus harness, the look set, the scoreboards
   packages/       Composer's chip packages
+  library/        Composer's research data, beside packages/ (crates find it as packages/../library)
   gpl/kicad-text/ GPL text outlines: its own binary, run as a process, never linked
   skills/         pcb-design and circuit-composer (linked from .claude/skills/)
   template/  examples/  docs/
@@ -112,8 +113,11 @@ boardroom/
 - **`plan`, `wire`, `route`, `reshape` and `examine` depend only on Foundation and
   Understanding.** Never on a Composer crate, `render`, `project`, the server or the web app. This
   is what makes the router usable alone, and lets `examine` score any board, a designer's from the
-  corpus included. Judging sits above Composer because `blockgen` scores its candidate layouts
-  with `examine`.
+  corpus included.
+- **The generators stay independent of the judge.** `blockgen` does not depend on `examine`: a
+  generator that ranked with the verifier would search out its blind spots and then be signed off
+  by them. The role types `blockgen` takes from Composer's `verify` today (`BuckRoles`) move into
+  `intent`; `blockgen` keeps ranking with its own estimate.
 - `board` does not know how it is drawn. Stage crates may emit `scene` data (that is how each
   offers a picture without depending on `render`); `view(board)` lives in `render`.
 - `boardroom route board.kicad_pcb` works on a bare board with no project and no `intent.json`:
@@ -133,6 +137,7 @@ boardroom/
 | `shape`, `intent`, `recognise`, `library`, `interfaces`, `compose`, `pinsolve`, `floorplan`, `blockgen` | Composer | `ccomp`'s commands become `boardroom compose …` |
 | `examine` | Composer `verify`; from ultraroute `tools/`: the style features of `tidy.py`, `dfm.py` (acute angles, same-net slots), `designer.py` (hot loops on a routed board), `netcheck.py` (whether a designer routes a net within the rules); new physical measures | the design of the "sound" scoreboard is `ultraroute/docs/spec/verification.md`, which moves here with `from-zero.md` |
 | `plan`, `wire`, `route`, `reshape` | written here | `from-zero.md` |
+| board-reading fixes in Composer `pcb` | into `kicad` and `board`, with their tests | the exposed-mask `(layers "B.Cu" "B.Mask")` rewrite, paste-only pads, KiCad 10 zone net names (these three are not in ultraroute's `kicad-pcb`), and the stacked-via join |
 | what `compile` did | Composer `compile`, split up, each piece with its tests | `merge_dru` and diff-pair skew rules → `kicad`; `ipc2221_width_mm` and "`min_mm` only from a trusted figure" → the router's reading of intent; regions derived from package constraints and the board's geometry (`via_count <= 0`, `unreferenced_length_mm`: layers with no ground fill beside them, rectangles over voids in the ground fill) → `route`, or a function in `examine` or `check` that `route` calls; `check_regions` → `check` or `examine`. History, not a rule: Composer sent voids as small rectangles because the old router's per-cell region raster stalled on 683-vertex polygons; in the new router a void is an obstacle or priced area in the plan's gap graph, and needing polygons simplified would be a router defect |
 | Python kept from Composer `tools/` | under `packages/tools/` and `bench/` | must come: `import_altium` (pcbnew's importer), `library_fetch`, `library_import`, `library_quotes`, package authoring (`circuit_check`, `package_circuit`, `package_nets`, `kicad_pins`, `rp2350_mux`), `extract_layout`, `lift_layout`, `compose_from_netlist`; into `bench/`: `handcheck`, `fp_bench`, `bench_buck`, `compare_buck`, `pcbgolf_score`; kept until Rust covers them: `compose_kicad` (schematics, through the skill's `kicad_write.py`), `verify_routed`. Replaced by `kicad`: `apply_layout`, `apply_placement`, `prepare_route`. Gone: `route_board.sh` |
 | `project`, `server`, `boardroom`, `gtk` | Boardroom `app/server`, `app/gtk` | `project` is the project model out of the server, so commands work without HTTP |
@@ -163,7 +168,11 @@ not KiCad's, which is why the benchmark judge refills zones through KiCad before
   through intent, except those that need the board's geometry, which the router derives (see the
   table). Block roles for hot loops are already in intent (`Block.roles`). `Block` gains a `group`
   field naming the KiCad group that holds its locked layout (today `<block type>_<anchor>`), so
-  the router keeps that copper and scores it by roles without matching groups by part sets.
+  the router keeps that copper and scores it by roles without matching groups by part sets. This
+  is unproven end to end: the committed routed rp2350-battery board has 65 locked items and no
+  `(group …)`, and group names (`core_reg`), intent block ids (`mcu/core_reg`) and recognise's
+  names (`<type>_<inductor>`) do not match today. The `kicad` writer needs a test that groups
+  survive a read and write, and one naming has to be chosen.
 - **Rules still reach KiCad.** `kicad` writes `.kicad_dru` and net classes from intent, called by
   `compose` and `check`, because `kicad-cli` DRC stays the outside judge and the boards are opened
   in KiCad.
@@ -245,8 +254,10 @@ not brought over; what it can do is the list of operations `reshape` must offer.
 - **Composer's eight boards:** two are designs, bolt-earring and flame-earring, which become
   projects in their own repos (a small fixture is cut from bolt-earring first, since `pinsolve`
   and `shape` tests read it). rp2350-battery and rp2350-matrix are fixtures and go to `examples/`.
-  Composer's easy2350 tests are pointed at `examples/easy2350`, after checking it holds what they
-  read (`input/`, `floorplan/`, intent). rp2350-flight-controllers, rp2350-motor-controller and
+  `examples/easy2350` cannot serve Composer's easy2350 tests as it stands (no intent, composition,
+  floorplan, binding, shape or netlist files, and its board is a later re-route with 16 of 58
+  parts locked), so Composer's files and its own pinned board come in under
+  `examples/easy2350/compose/easy2350/`. rp2350-flight-controllers, rp2350-motor-controller and
   pcbgolf are mined results and a challenge board: evidence for packages, kept under `bench/` or a
   mining area, not projects. Boards and files from others are read in place, never copied in.
 - Existing board repos (round-pendant, simple-earring, robot-link) keep their old pins and scripts
@@ -256,7 +267,9 @@ not brought over; what it can do is the list of operations `reshape` must offer.
 
 The bar is on what has arrived, not on what was there before:
 
-- A crate that has come in builds, its own tests come with it and pass, clippy is clean.
+- A crate that has come in builds, its own tests come with it and pass, clippy is clean. (On
+  arrival `interfaces` has 3 clippy warnings and `pinsolve` 6; fixing them is part of bringing
+  them in.)
 - `check` still agrees with `kicad-cli` DRC on the boards its tests cover.
 - The dependency test passes.
 - `main` builds at every commit. App features may be missing or broken mid-migration; each step's
@@ -315,6 +328,9 @@ Each of the UltraRoute and Composer sessions, before it ends:
 4. Says which of its Claude memories are no longer true. All of them were merged into Boardroom's
    memory on 2026-11-12 (owner's decision; prefixed `ur-` and `cc-`); the Boardroom session copies
    again at cutover to pick up later changes, then removes the ones named as stale.
+   Done: UltraRoute's are `ultraroute/docs/handoff/` (`router-brief.md`, `2026-11-12.md`);
+   Composer's are `circuit-composer/docs/handoff/` (c558971, 20 files, start with `README.md`).
+   Read the note for a crate before bringing it in.
 5. Names the rules it works by that are written nowhere, so they go into Boardroom's `CLAUDE.md`
    (the benchmark rules; "look at pictures before trusting a table"). From Composer so far: judge
    a placement or floorplan change over several seeds, not one; every figure in a package is cited
