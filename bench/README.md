@@ -46,6 +46,18 @@ stops and says which is missing.
   have a layer at least half poured, 60 of the 61 multi-layer boards pour an inner layer; on 270
   the pour nets' copper in `processed` is not the designer's; on the other nets the two agree
   within 5% of track length on all but 37 boards. Pictures: `LAB/planned/truth/`.
+- **What changes when the harness runs on the raw-based boards** (from the UltraRoute session,
+  read from the code, not yet run):
+  - Unconnected is KiCad's count, unfiltered. With the designers' pours back, a pad the
+    designer's own pour does not reach counts against every run: judge `designer.kicad_pcb`
+    with the same judge first and take its unconnected count per board as the floor.
+  - The published baselines (FreeRouting, PcbRouter, RL-MCTS wirelength and vias) and every
+    stored run and figure (273 or 274 of 315 on the gate tier, 1,009 of 1,182 on the corpus)
+    were made on `processed`, where pour nets are tracks. They do not carry over.
+  - The tiers were chosen on `processed`, stratified on whether a board has zones; nearly every
+    raw-based board has them, so the gate and noisy lists need choosing again.
+  - The frozen router takes `--strip-all` (removes tracks and vias, keeps zones) and
+    `--auto-planes`, so it can run on `bare.kicad_pcb` as it is.
 - **Not yet fixed:** `tidy.py` measures direction in the board's x and y, so a board routed in a
   turned frame scores as off-angle.
 - pcbnew hangs on some old boards when its output is a pipe or it has a console, and its zone

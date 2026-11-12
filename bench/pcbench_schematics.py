@@ -110,8 +110,12 @@ def main():
         for r in errs[:12]:
             print(f"  {r['id']}: {r['error']}")
         return
+    # The survey already says what each board has; look again only at a board it does not hold.
+    surveyed = {r["id"]: r for r in json.loads((out / "survey.json").read_text())} if (out / "survey.json").exists() else {}
     for bid in a.ids:
-        r = look(bid, cache)
+        if (out / bid / "SOURCE.json").exists():
+            continue
+        r = surveyed.get(bid) or look(bid, cache)
         if not r.get("sheets"):
             print(f"{bid}: no schematic found ({r.get('error') or 'none beside the board'})")
             continue
