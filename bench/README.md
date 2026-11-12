@@ -6,6 +6,7 @@ are what the `examine` crate grows from.
 
 | Tool | What it does |
 |---|---|
+| `truth.py` | **the designers' boards**: prepares each corpus board from its raw file (the designer's own copper and pours, refilled by KiCad) and the same board bare with its pours kept; counts how `processed` differs; draws both side by side |
 | `pcbench.py` | prepare, run, report, compare, rejudge, tiers, ab over the PCBench corpus; judged by `kicad-cli` DRC after a KiCad refill |
 | `pcbench_tiers.json`, `pcbench_timeouts.json`, `pcbench_variants.json`, `variants/`, `apply_variant.py` | the tiers (smoke, focus, gate, full), per-board time, our own patched boards |
 | `rulebench.py` | boards with rule files, judged the same way |
@@ -33,11 +34,18 @@ stops and says which is missing.
 - Runs go through `~/.claude/bin/reserve`, and under a memory cap.
 - Compare two routers with `pcbench.py ab`, which interleaves them in one pool; anything else
   biases the slower side.
-- **Two known faults in the measure, not yet fixed** (found 2026-11-12): the corpus's input
-  boards have the designers' pours removed, so comparisons with the designers on boards with
-  planes are not to be trusted; and `tidy.py` measures direction in the board's x and y, so a
-  board routed in a turned frame scores as off-angle. Fixing both is the first work of step 4
-  (`docs/one-system-spec.md`), before any router code.
+- **`processed` is not the designer's board** (found 2026-11-12, worse than "the pours were
+  removed"). PCBench's cleaning deletes every copper pour, deletes every track and via on the
+  pours' nets, and routes those nets again with FreeRouting. So what the old harness called the
+  designer's routing is FreeRouting's on every ground and supply net that had a pour. The
+  designer's board is `raw`; `truth.py` prepares it. Until the harness runs on those boards
+  (`LAB/pcbench/truth/ID/{designer,bare}.kicad_pcb`), no comparison with "the designers" on a
+  board with pours is to be trusted, and the old router's results were measured on boards with
+  the planes taken away.
+- **Not yet fixed:** `tidy.py` measures direction in the board's x and y, so a board routed in a
+  turned frame scores as off-angle.
+- pcbnew hangs on some old boards when its output is a pipe or it has a console, and its zone
+  filler never returns on a few: `truth.py` gives it files, no input and a time limit.
 - Look at the designer's board beside ours before quoting any number.
 
 Not yet run end to end from this directory: `pcbench.py run` with a router built here (there is
