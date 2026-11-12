@@ -1,35 +1,23 @@
 [package]
-name = "boardroom"
+name = "server"
+description = "Boardroom's HTTP server: the API, the apps under one origin, the terminals"
 version.workspace = true
 edition.workspace = true
-description = "Boardroom: the project manager and main window of the board design suite"
 license.workspace = true
 
-[lib]
-name = "boardroom"
-path = "src/lib.rs"
-
-[[bin]]
-name = "boardroom"
-path = "src/main.rs"
-
 [dependencies]
+project = { path = "../project" }
 axum = { version = "0.8", features = ["ws"] }
 board-interface = { git = "https://github.com/sequoia-hope/board-interface", tag = "v0.2.2" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "net", "fs", "io-util", "time"] }
 tower-http = { version = "0.6", features = ["fs", "set-header"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
 toml = "0.9"
-toml_edit = "0.25"
 notify = "8"
-hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
-http-body-util = "0.1"
 httpdate = "1"
 portable-pty = "0.9"
 
 [dev-dependencies]
-futures-util = "0.3"
-tokio-tungstenite = "0.29"
-tower = { version = "0.5", features = ["util"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+http-body-util = "0.1"

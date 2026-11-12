@@ -1,9 +1,9 @@
 use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode, Uri, header};
-use boardroom::config::{self, ProjectList};
-use boardroom::links::LinksCache;
-use boardroom::terminals::{TermSummary, TerminalsOptions};
+use ::project::config::{self, ProjectList};
+use ::project::links::LinksCache;
+use server::terminals::{TermSummary, TerminalsOptions};
 use futures_util::{SinkExt, StreamExt};
 use http_body_util::BodyExt;
 use hyper_util::client::legacy::Client;
@@ -27,7 +27,7 @@ struct Harness {
     project_id: String,
     project2_id: String,
     port: u16,
-    app: boardroom::server::Shared,
+    app: server::server::Shared,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -114,7 +114,7 @@ impl Harness {
             relay_port_resolver: Arc::new(move || fallback),
         };
 
-        let (router, app) = boardroom::server::router_with_options(
+        let (router, app) = server::server::router_with_options(
             cfg_dir.clone(),
             list,
             web_dir,
@@ -498,7 +498,7 @@ async fn non_loopback_refused_on_all_term_and_selection_routes() {
     std::fs::create_dir_all(root.join("web")).unwrap();
     std::fs::write(root.join("web/index.html"), "<!doctype html>").unwrap();
 
-    let (router, app) = boardroom::server::router_with_options(
+    let (router, app) = server::server::router_with_options(
         root.join("cfg"),
         ProjectList::default(),
         root.join("web"),
@@ -908,7 +908,7 @@ async fn claude_override_passes_system_prompt_mcp_and_continue_across_restart() 
     let canon_again = list2.add(&canon_proj1).unwrap();
     let pid2 = config::project_id(&canon_again);
 
-    let (router2, app2) = boardroom::server::router_with_options(
+    let (router2, app2) = server::server::router_with_options(
         cfg_dir2,
         list2,
         web_dir2,

@@ -19,12 +19,13 @@
 //! The port comes from --port, then $PORT, then `proj port`; with none the
 //! command fails rather than guessing (see docs/shell-spec.md).
 
-use boardroom::links::{self, AddLinkRequest, GitRef, LinkStatus, LinksCache};
-use boardroom::{config, project, repo_dir, server, snapshot};
+use ::project::links::{self, AddLinkRequest, GitRef, LinkStatus, LinksCache};
+use ::project::{config, project, repo_dir, snapshot};
+use ::server::server;
 use std::path::PathBuf;
 
-fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+/// Run one command line (without the program name); the exit code.
+pub fn run(args: Vec<String>) -> i32 {
     let (command, rest) = match args.split_first() {
         Some((c, r)) => (c.as_str(), r),
         None => ("help", &[][..]),
@@ -41,7 +42,7 @@ fn main() {
         "snapshot" => snapshot::write(rest),
         "help" | "-h" | "--help" => {
             // The usage is the module comment's command list.
-            let usage: Vec<&str> = include_str!("main.rs")
+            let usage: Vec<&str> = include_str!("cli.rs")
                 .lines()
                 .filter_map(|l| l.strip_prefix("//!     "))
                 .filter(|l| l.starts_with("boardroom"))
@@ -51,9 +52,12 @@ fn main() {
         }
         other => Err(format!("unknown command '{other}' (try: boardroom help)")),
     };
-    if let Err(e) = result {
-        eprintln!("boardroom: {e}");
-        std::process::exit(1);
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("boardroom: {e}");
+            1
+        }
     }
 }
 

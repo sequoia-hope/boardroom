@@ -120,19 +120,14 @@ dependencies = [
  "board-interface",
  "futures-util",
  "http-body-util",
- "httpdate",
  "hyper-util",
- "notify",
- "portable-pty",
- "serde",
+ "project",
  "serde_json",
- "sha2",
+ "server",
  "tokio",
  "tokio-tungstenite",
  "toml 0.9.12+spec-1.1.0",
- "toml_edit",
  "tower",
- "tower-http",
 ]
 
 [[package]]
@@ -1022,6 +1017,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "project"
+version = "0.1.0"
+dependencies = [
+ "board-interface",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "toml 0.9.12+spec-1.1.0",
+ "toml_edit",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1179,6 +1187,25 @@ dependencies = [
  "cfg-if",
  "libc",
  "windows-sys",
+]
+
+[[package]]
+name = "server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "board-interface",
+ "http-body-util",
+ "httpdate",
+ "hyper-util",
+ "notify",
+ "portable-pty",
+ "project",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml 0.9.12+spec-1.1.0",
+ "tower-http",
 ]
 
 [[package]]

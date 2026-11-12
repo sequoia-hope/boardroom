@@ -1,0 +1,25 @@
+[package]
+name = "boardroom"
+description = "Boardroom: the one binary, and its commands as functions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+project = { path = "../project" }
+server = { path = "../server" }
+axum = { version = "0.8", features = ["ws"] }
+board-interface = { git = "https://github.com/sequoia-hope/board-interface", tag = "v0.2.2" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "net", "fs", "io-util", "time"] }
+serde_json = "1"
+toml = "0.9"
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+http-body-util = "0.1"
+
+[dev-dependencies]
+futures-util = "0.3"
+tokio-tungstenite = "0.29"
+tower = { version = "0.5", features = ["util"] }
+
+[lib]
+doctest = false

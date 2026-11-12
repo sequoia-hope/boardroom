@@ -4,10 +4,10 @@ use board_interface::{
     Author, Driver, Element, ElementKind, Hole, Loop, Manifest, NM_PER_MM, Point, Record,
     SCHEMA_VERSION, seal, write,
 };
-use boardroom::config::{self, ProjectList};
-use boardroom::gates;
-use boardroom::links::{LinkState, LinkStatus, LinksCache};
-use boardroom::project;
+use ::project::config::{self, ProjectList};
+use ::project::gates;
+use ::project::links::{LinkState, LinkStatus, LinksCache};
+use ::project::project;
 use http_body_util::BodyExt;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
@@ -99,7 +99,7 @@ impl TempProj {
     }
 
     fn record_gate(&self, gate: u32) {
-        let script = boardroom::repo_dir().join(".claude/skills/pcb-design/scripts/gate_inputs.py");
+        let script = ::project::repo_dir().join(".claude/skills/pcb-design/scripts/gate_inputs.py");
         let out = Command::new("python3")
             .arg(&script)
             .arg("record")
@@ -441,7 +441,7 @@ async fn link_same_geometry_advance_not_stale_and_new_geometry_stales_gate_4_and
     list.save_to(&cfg_dir).unwrap();
     let project_id = config::project_id(&canon_proj);
 
-    let (router, _) = boardroom::server::router_with_cache(
+    let (router, _) = server::server::router_with_cache(
         cfg_dir,
         list,
         web_dir,
@@ -665,7 +665,7 @@ fn gate_without_record_is_never_auto_stale_including_easy2350() {
 
     // 2) examples/easy2350 (read-only, no backfill records): gates 0..=6 stay passed,
     //    gates 7..=10 keep their hand-written stale_because.
-    let easy = boardroom::repo_dir().join("examples/easy2350");
+    let easy = ::project::repo_dir().join("examples/easy2350");
     let es = project::summarize("easy2350", &easy, false);
     for g in 0..=6 {
         assert!(
@@ -686,7 +686,7 @@ fn gate_without_record_is_never_auto_stale_including_easy2350() {
 
 #[test]
 fn python_and_rust_board_aspect_hashes_match_on_easy2350() {
-    let repo = boardroom::repo_dir();
+    let repo = ::project::repo_dir();
     let pcb = repo.join("examples/easy2350/hw/easy2350/a/easy2350.kicad_pcb");
     let script_dir = repo.join(".claude/skills/pcb-design/scripts");
     let mut seen = std::collections::HashSet::new();

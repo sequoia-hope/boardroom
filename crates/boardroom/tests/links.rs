@@ -4,8 +4,8 @@ use board_interface::{
     Author, Change, ChangeKind, Classification, Driver, Element, ElementKind, Handover, Hole, Loop,
     Manifest, NM_PER_MM, Point, Record, Role, SCHEMA_VERSION, seal, write,
 };
-use boardroom::config::{self, ProjectList};
-use boardroom::links::{LinkState, LinkStatus, LinksCache, sha256_hex};
+use ::project::config::{self, ProjectList};
+use ::project::links::{LinkState, LinkStatus, LinksCache, sha256_hex};
 use http_body_util::BodyExt;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
@@ -67,7 +67,7 @@ impl Harness {
         list.save_to(&cfg_dir).unwrap();
         let project_id = config::project_id(&canon_proj);
 
-        let (router, _) = boardroom::server::router_with_cache(
+        let (router, _) = server::server::router_with_cache(
             cfg_dir,
             list,
             web_dir,
@@ -344,7 +344,7 @@ async fn link_new_revision_no_interface_change_advances_resolved_for_branch() {
     assert_eq!(list[0].resolved.commit, c2);
 
     // `design/links.toml` on disk quietly advanced `resolved.commit` to c2.
-    let stored = boardroom::links::read_links_file(&h.project_dir).unwrap();
+    let stored = ::project::links::read_links_file(&h.project_dir).unwrap();
     assert_eq!(stored[0].resolved.commit, c2);
 
     // Next check sees `tip == resolved` -> `Current`.
@@ -833,7 +833,7 @@ async fn links_toml_round_trip_preserves_comments_and_unknown_keys() {
         );
     }
     // And the resulting TOML still parses cleanly.
-    let parsed = boardroom::links::read_links_file(&h.project_dir).unwrap();
+    let parsed = ::project::links::read_links_file(&h.project_dir).unwrap();
     assert_eq!(parsed.len(), 1);
     assert_eq!(parsed[0].resolved.commit, c2);
 }
@@ -977,7 +977,7 @@ async fn link_writes_rejected_from_non_loopback_peers() {
     std::fs::create_dir_all(root.join("web")).unwrap();
     std::fs::write(root.join("web/index.html"), "<!doctype html>").unwrap();
 
-    let (router, _) = boardroom::server::router_with_cache(
+    let (router, _) = server::server::router_with_cache(
         root.join("cfg"),
         ProjectList::default(),
         root.join("web"),

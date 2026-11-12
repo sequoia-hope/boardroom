@@ -6,8 +6,10 @@ the code**: it has the layout, the dependency rules, the order of work and where
 comes from. Nothing has to keep working during the migration, but `main` builds at every commit
 and each step's commit message says what is broken.
 
-This repository holds the Cargo workspace (`crates/`: `server`, the `boardroom` binary, and
-`gtk`, the native window), the web app (`web/`, with the shared store in `web/store/`), the
+This repository holds the Cargo workspace (`crates/`: `project`, a board project on disk;
+`server`, the HTTP server; `boardroom`, the one binary, whose commands are functions in
+`cli.rs`; `gtk`, the native window; `crates/boardroom/tests/layers.rs` enforces the spec's
+dependency rules, so a new crate must be added to a group there), the web app (`web/`, with the shared store in `web/store/`), the
 viewer (`view/`, pcbview, run by `scripts/view.sh`), the design specs (`docs/`), the upstream
 `pcb-design` skill (`.claude/skills/pcb-design/`), the board scripts
 (`scripts/{doctor,view,route}.sh`), the board-project skeleton (`template/`, instantiated by

@@ -18,8 +18,8 @@
 //! project with a `waffle` link in `design/links.toml`, or started with
 //! `{"waffle": true}`).
 
-use crate::config::{self, Config};
-use crate::project;
+use ::project::config::{self, Config};
+use ::project::project;
 use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};

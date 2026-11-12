@@ -1,0 +1,15 @@
+[package]
+name = "project"
+description = "A board project on disk: status, gates, staleness, files, links, the snapshot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+board-interface = { git = "https://github.com/sequoia-hope/board-interface", tag = "v0.2.2" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "net", "fs", "io-util", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+toml = "0.9"
+toml_edit = "0.25"

@@ -4,15 +4,15 @@
 //! need (docs/shell-spec.md, "One origin").
 
 use crate::apps;
-use crate::config::{self, ProjectList};
-use crate::examples;
-use crate::files::{self, Expect, WriteError};
-use crate::links::{
+use ::project::config::{self, ProjectList};
+use ::project::examples;
+use ::project::files::{self, Expect, WriteError};
+use ::project::links::{
     self, AddLinkRequest, LinkOpError, LinkState, LinkStatus, LinksCache, Published, PushError,
     PushResult,
 };
-use crate::problem;
-use crate::project;
+use ::project::problem;
+use ::project::project;
 use crate::terminals::{StartTermRequest, TermError, TermSummary, Terminals, TerminalsOptions};
 use axum::{
     Json, Router,
@@ -332,8 +332,8 @@ async fn projects(
             .collect();
         examples::tag(
             &mut out,
-            &examples::load(&crate::repo_dir()),
-            &crate::repo_dir(),
+            &examples::load(&::project::repo_dir()),
+            &::project::repo_dir(),
         );
         out
     })
@@ -357,7 +357,7 @@ async fn projects(
 async fn list_examples(State(app): State<Shared>) -> impl IntoResponse {
     let entries = app.list.lock().unwrap().projects.clone();
     let found = tokio::task::spawn_blocking(move || {
-        let repo = crate::repo_dir();
+        let repo = ::project::repo_dir();
         let list = examples::load(&repo);
         let summaries: Vec<_> = entries
             .iter()

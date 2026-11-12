@@ -7,7 +7,7 @@
 //! directory named in `~/.config/boardroom/config.toml`, with unknown paths falling back to
 //! `index.html` for client-side routing.
 
-use crate::config::Config;
+use ::project::config::Config;
 use crate::server::Shared;
 use axum::{
     body::Body,
@@ -147,7 +147,7 @@ pub async fn slash(UrlPath(name): UrlPath<String>) -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ProjectList;
+    use ::project::config::ProjectList;
     use http_body_util::BodyExt;
     use std::path::PathBuf;
 

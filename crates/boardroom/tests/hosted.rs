@@ -5,8 +5,8 @@ use board_interface::{
     Author, Driver, Element, ElementKind, Hole, Loop, Manifest, NM_PER_MM, Point, Record,
     SCHEMA_VERSION, seal, write,
 };
-use boardroom::config::{self, ProjectList};
-use boardroom::links::{
+use ::project::config::{self, ProjectList};
+use ::project::links::{
     LinkState, LinkStatus, LinksCache, Locator, Published, PublishedState, PushResult, Unpushed,
     classify_git_error, published_status, remote_cache_key,
 };
@@ -70,7 +70,7 @@ impl ServerHarness {
         }
         list.save_to(&cfg_dir).unwrap();
 
-        let (router, _) = boardroom::server::router_with_cache(
+        let (router, _) = server::server::router_with_cache(
             cfg_dir,
             list,
             web_dir,
@@ -643,7 +643,7 @@ async fn rehost_refuses_until_accepted_commit_pushed_and_preserves_toml_comments
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let recs = boardroom::links::read_links_file(&proj2).unwrap();
+    let recs = ::project::links::read_links_file(&proj2).unwrap();
     let Locator::Git {
         remote: cli_remote, ..
     } = &recs[0].locator;
