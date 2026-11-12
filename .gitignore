@@ -27,8 +27,14 @@ __pycache__/
 # per-machine launcher
 launch.sh
 
-# ultraroute, built by scripts/route.sh
+# scratch builds
 build/
 
 # Boardroom runtime state (materialized links, job logs, locks)
 .boardroom/
+
+# builds
+/target/
+/web/dist/
+/web/dist-pages/
+node_modules/

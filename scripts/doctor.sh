@@ -22,12 +22,16 @@ else
   bad "python 3.11+" "install a newer python3"
 fi
 python3 -c 'import numpy' 2>/dev/null && ok "numpy" || bad "numpy" "pip install numpy (or your distro's python3-numpy)"
-if [[ -x "$root/vendor/pcbview/bin/pcbview" || -n "${PCBVIEW:-}" ]]; then
+if [[ -x "$root/view/bin/pcbview" ]]; then
+  ok "pcbview (Boardroom's own, view/)"
+elif [[ -x "$root/vendor/pcbview/bin/pcbview" || -n "${PCBVIEW:-}" ]]; then
   ok "pcbview ($(git -C "$root/vendor/pcbview" describe --always 2>/dev/null || echo "\$PCBVIEW"))"
 else
   bad "pcbview" "git submodule update --init"
 fi
-if [[ -f "$root/vendor/ultraroute/core/Cargo.toml" || -n "${ULTRAROUTE:-}" ]]; then
+if [[ -d "$root/crates" && -z "${ULTRAROUTE:-}" ]]; then
+  ok "router: being rewritten inside Boardroom (docs/one-system-spec.md, step 6); none to check"
+elif [[ -f "$root/vendor/ultraroute/core/Cargo.toml" || -n "${ULTRAROUTE:-}" ]]; then
   ok "ultraroute ($(git -C "$root/vendor/ultraroute" describe --always 2>/dev/null || echo "\$ULTRAROUTE"))"
 else
   bad "ultraroute" "git submodule update --init"

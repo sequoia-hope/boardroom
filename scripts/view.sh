@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# view.sh -- run pcbview, the board viewer generator, from the pinned submodule.
+# view.sh -- run pcbview, the board viewer generator: a board repo's pinned submodule, or
+# Boardroom's own copy (view/) when run inside Boardroom.
 #
 #     scripts/view.sh build pcbview.toml          every board in the config
 #     scripts/view.sh models pcbview.toml         which parts lack a 3D model
@@ -8,6 +9,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 pcbview="${PCBVIEW:-$root/vendor/pcbview/bin/pcbview}"
+[[ -z "${PCBVIEW:-}" && ! -x "$pcbview" && -x "$root/view/bin/pcbview" ]] && pcbview="$root/view/bin/pcbview"
 
 if [[ ! -x "$pcbview" ]]; then
   echo "view.sh: pcbview not found at $pcbview" >&2

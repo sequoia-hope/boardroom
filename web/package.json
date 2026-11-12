@@ -1,0 +1,28 @@
+{
+  "name": "boardroom-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:pages": "VITE_STATIC=1 vite build --outDir dist-pages",
+    "smoke": "node tests/smoke.mjs",
+    "test:store": "node tests/store.mjs",
+    "test:stale": "node tests/stale.mjs",
+    "test:board": "node tests/board.mjs",
+    "test:terminal": "node tests/terminal.mjs"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "playwright-core": "1.48.2",
+    "svelte": "5.57.2",
+    "vite": "8.3.4"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
+    "marked": "15.0.12",
+    "three": "0.169.0"
+  }
+}

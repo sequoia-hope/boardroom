@@ -1,0 +1,14 @@
+# Boardroom: one program, many crates (docs/one-system-spec.md).
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+# boardroom-gtk needs GTK 4 and WebKitGTK 6.0 headers; build it with `-p boardroom-gtk`.
+default-members = ["crates/server"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[profile.release]
+opt-level = 3

@@ -5,6 +5,13 @@
 design skill, the board project template, and the app that lists your projects and launches the
 other suite apps. It also defines the format every board repo in the suite follows.
 
+> **Migration under way (2026-11).** Boardroom is becoming one program with many crates:
+> Projects, Compose and Route as modes of one app, with the router rewritten here
+> ([`docs/one-system-spec.md`](docs/one-system-spec.md)). So far: one Cargo workspace (`crates/`),
+> the web app at `web/`, pcbview in the tree as `view/`, and no submodules. Not working until
+> their crates arrive: the live Board view, Compose and Route. Sections below that describe
+> separate repos and submodules describe board repos made so far, which stay on their pins.
+
 **Try it:** [sequoia-hope.github.io/boardroom](https://sequoia-hope.github.io/boardroom/) is a
 read-only copy of the app, open on the worked example, easy2350.
 
@@ -240,13 +247,13 @@ today" table says what works now.
 ## The Boardroom app
 
 The app lists your board projects, shows each one's status, gates and renders, and opens
-Composer, UltraRoute Studio and Waffle Iron in tabs on one origin.
+Waffle Iron in a tab on one origin. Compose and Route are becoming modes of the app itself.
 
 ```sh
-app/build.sh                                  # build server, page and desktop window
-app/serve.sh --port N                         # serve it
-app/gtk/target/release/boardroom-gtk          # desktop window (GTK 4 / WebKitGTK); app/gtk/install-desktop.sh adds a launcher
-app/server/target/release/boardroom open      # or a Chrome app window
+./build.sh                                    # build the web app, the boardroom binary and the desktop window
+./serve.sh --port N                           # serve it
+target/release/boardroom-gtk                  # desktop window (GTK 4 / WebKitGTK); crates/gtk/install-desktop.sh adds a launcher
+target/release/boardroom open                 # or a Chrome app window
 ```
 
 The project list is `~/.config/boardroom/projects.toml`, and machine paths, such as a Waffle Iron
@@ -275,17 +282,12 @@ by `.github/workflows/pages.yml` from snapshots of the projects in `examples.tom
 | [`docs/one-system-spec.md`](docs/one-system-spec.md) | **The migration under way:** Boardroom as one program with many crates (Projects, Compose, Route), the router rewritten here, no history import |
 | [`docs/monorepo-spec.md`](docs/monorepo-spec.md) | Superseded by `one-system-spec.md`; kept for its inventory of what existed |
 
-## Updating pcbview and ultraroute
+## pcbview and the router
 
-```sh
-git -C vendor/pcbview pull
-git add vendor/pcbview && git commit -m "Bump pcbview"
-git -C vendor/ultraroute pull                  # scripts/route.sh rebuilds on the next run
-git add vendor/ultraroute && git commit -m "Bump ultraroute"
-```
-
-A new ultraroute can route a board differently. After bumping it, re-run phase 7 and its gate
-rather than mixing a new router with an old route.
+pcbview lives in this repository as `view/` and is edited here; `scripts/view.sh` runs it. There
+is no router in this repository until the new one is written (`docs/one-system-spec.md`, step 6);
+`scripts/route.sh` uses `$ULTRAROUTE` when it is set. Board repos made so far keep their
+`vendor/pcbview` and `vendor/ultraroute` submodules at their pins.
 
 ## The skill learns
 

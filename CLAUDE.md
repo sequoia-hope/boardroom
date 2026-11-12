@@ -1,17 +1,30 @@
 # Boardroom
 
-This repository holds the Boardroom app (`app/`), its design specs (`docs/`), the
-upstream `pcb-design` skill (`.claude/skills/pcb-design/`), the shared board
-tooling (`scripts/{doctor,view,route}.sh` and pinned `vendor/{pcbview,ultraroute}`
-submodules), the board-project skeleton (`template/`, instantiated by
-`scripts/new-board.sh`), and the worked example (`examples/easy2350/`). The root
-itself is no longer a board project (`template/CLAUDE.md` is the board-repo version).
+Boardroom is becoming one program with many crates: Projects, Compose and Route as modes of
+one app, with the router rewritten here. **Read `docs/one-system-spec.md` before any work on
+the code**: it has the layout, the dependency rules, the order of work and where each crate
+comes from. Nothing has to keep working during the migration, but `main` builds at every commit
+and each step's commit message says what is broken.
 
-- **App (`app/`):** build with `app/build.sh` and serve with `app/serve.sh --port N`
-  (never hardcode a port).
+This repository holds the Cargo workspace (`crates/`: `server`, the `boardroom` binary, and
+`gtk`, the native window), the web app (`web/`, with the shared store in `web/store/`), the
+viewer (`view/`, pcbview, run by `scripts/view.sh`), the design specs (`docs/`), the upstream
+`pcb-design` skill (`.claude/skills/pcb-design/`), the board scripts
+(`scripts/{doctor,view,route}.sh`), the board-project skeleton (`template/`, instantiated by
+`scripts/new-board.sh`), and the worked example (`examples/easy2350/`). The root itself is not
+a board project (`template/CLAUDE.md` is the board-repo version).
+
+- **Build and serve:** `./build.sh` (book cores with `reserve`) and `./serve.sh --port N` (never
+  hardcode a port). The toolchain is pinned in `rust-toolchain.toml`. `cargo build` builds the
+  server; the window is `cargo build -p boardroom-gtk`.
+- **Checks:** `cargo clippy --all-targets -- -D warnings`, `cargo test`, and in `web/`
+  `npm run test:store` and `test:stale` (after `npm run build:pages`).
+- **There is no router here yet.** `scripts/route.sh` needs `$ULTRAROUTE` (a built binary of the
+  old router) until the new one exists. The old router's code is never brought in or built here.
 - **Making a board repo:** run `scripts/new-board.sh <dir> [--name <title>] [--github <owner>/<repo> [--private]]`,
-  which copies `template/`, the upstream skill, `scripts/{doctor,view,route}.sh`, and
-  the pinned `vendor/pcbview` and `vendor/ultraroute` submodules.
+  which copies `template/`, the upstream skill and `scripts/{doctor,view,route}.sh`, and adds
+  `vendor/pcbview` and `vendor/ultraroute` submodules at the last pins of the old repositories
+  (board repos stay on those until `boardroom new` replaces the script).
 - **Board work** happens in board repos or in `examples/easy2350/`. Load the
   `pcb-design` skill in `.claude/skills/pcb-design/` for any board work and follow its
   phases and gates. Start every board session by reading `.claude/skills/pcb-design/LESSONS.md`
@@ -21,10 +34,10 @@ itself is no longer a board project (`template/CLAUDE.md` is the board-repo vers
   `hw/<board>/<variant>/`, and the static project page is `index.html` (status from
   `design/status.json` plus the embedded viewer; served in board repos with
   `./serve.sh --port N`).
-- The viewer is pcbview, pinned at `vendor/pcbview`. Build the example's viewer with
-  `scripts/view.sh build examples/easy2350/pcbview.toml` (or `scripts/view.sh build pcbview.toml`
-  in a board repo). Never edit files under `vendor/` or `viewer/`. Viewer gaps
-  go to the board's `design/pcbview-requests.md` and to `sequoia-hope/pcbview`.
+- The viewer is pcbview, in `view/` here (in a board repo, pinned at `vendor/pcbview`). Build the
+  example's viewer with `scripts/view.sh build examples/easy2350/pcbview.toml` (or
+  `scripts/view.sh build pcbview.toml` in a board repo). Never edit generated files under
+  `viewer/`, or `vendor/` in a board repo. `view/` is Boardroom's own code now and is edited here.
 - `README.md` is the suite's map for agents (projects, repos, pages, board-repo layout).
   Keep it true when the suite changes.
 - Update `design/status.json` and rebuild the viewer at every gate during board work.

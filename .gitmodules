@@ -1,6 +1,0 @@
-[submodule "vendor/pcbview"]
-	path = vendor/pcbview
-	url = https://github.com/sequoia-hope/pcbview
-[submodule "vendor/ultraroute"]
-	path = vendor/ultraroute
-	url = https://github.com/sequoia-hope/ultraroute

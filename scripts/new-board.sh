@@ -116,8 +116,12 @@ boardroom_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 pinned_sha() {
   local sub="$1" sha=""
-  # The pin is the commit Boardroom records, not whatever the submodule has checked out.
-  sha="$(git -C "$boardroom_root" ls-tree HEAD "vendor/$sub" | awk '{print $3}')"
+  # Boardroom no longer vendors these (docs/one-system-spec.md): board repos stay on the last
+  # pins of the old repositories until `boardroom new` replaces this script (step 7).
+  case "$sub" in
+    pcbview) sha=26ba32bb8edbc5761d84e3238a312a29cbcc1aca ;;
+    ultraroute) sha=b38a039495387813147dca046ff48d2b13954a5f ;;
+  esac
   if [[ -z "$sha" ]]; then
     echo "new-board.sh: cannot determine pinned commit for vendor/$sub" >&2
     exit 1
@@ -186,7 +190,7 @@ add_pinned_submodule() {
   git -C "$dest" submodule add "$url" "vendor/$sub"
   if ! git -C "$dest/vendor/$sub" cat-file -e "${sha}^{commit}" 2>/dev/null; then
     git -C "$dest/vendor/$sub" fetch origin "$sha" 2>/dev/null \
-      || git -C "$dest/vendor/$sub" fetch "$boardroom_root/vendor/$sub" "$sha"
+      || { echo "new-board.sh: cannot fetch $sub at $sha from $url" >&2; exit 1; }
   fi
   git -C "$dest/vendor/$sub" checkout --quiet "$sha"
 }

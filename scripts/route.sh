@@ -17,8 +17,9 @@ if [[ -n "${ULTRAROUTE:-}" ]]; then
   bin="$ULTRAROUTE"
 else
   if [[ ! -f "$core/Cargo.toml" ]]; then
-    echo "route.sh: ultraroute not found at $core" >&2
-    echo "          run: git submodule update --init" >&2
+    echo "route.sh: no router here. In a board repo: git submodule update --init." >&2
+    echo "          In Boardroom the router is being rewritten (docs/one-system-spec.md, step 6);" >&2
+    echo "          set \$ULTRAROUTE to a built ultraroute binary to route with the old one." >&2
     exit 1
   fi
   target="$root/build/ultraroute"
