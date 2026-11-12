@@ -391,6 +391,17 @@ def page(a):
         pictures = dict(pool.map(page_one, [(i["id"], layers_of(i), out) for i in shown]))
 
     e = html.escape
+    netlist_row = ""
+    nl = paths.lab() / "pcbench" / "netlists.json"
+    if nl.exists():
+        ids = {i["id"] for i in infos}
+        rows_nl = [r for r in json.loads(nl.read_text()) if r["id"] in ids]
+        read = [r for r in rows_nl if "share" in r]
+        ok = sum(r["matches"] for r in read)
+        near = sum(1 for r in read if not r["matches"] and r["share"] >= 0.8)
+        netlist_row = (f"<tr><th>Ship a netlist</th><td>{sum(1 for r in rows_nl if r['netlists'])}; it is the board's on {ok} "
+                       f"(at least 95% of its nets are the same pads on the board), close on {near} (80% to 95%), not on {len(read) - ok - near} "
+                       f"(<code>bench/netlists.py</code>)</td></tr>\n")
     rows = []
     for i in shown:
         b, g, o = i["id"], i["processed"]["pour_nets"], i["processed"]["other_nets"]
@@ -433,7 +444,7 @@ ones where <code>processed</code> strays furthest, drawn layer by layer beside i
 <tr><th>Pour-net copper differs in <code>processed</code></th><td>{s['pour_net_copper_differs_in_processed']} (track length by more than 1%, or via count)</td></tr>
 <tr><th>Other nets' copper differs in <code>processed</code></th><td>{s['other_copper_differs_in_processed']}</td></tr>
 <tr><th>KiCad could not refill</th><td>{len(s['not_refilled'])}</td></tr>
-</table>
+{netlist_row}</table>
 <h2>Boards drawn</h2><ul>{index}</ul>
 {''.join(rows)}
 """)

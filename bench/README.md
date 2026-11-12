@@ -47,6 +47,9 @@ stops and says which is missing.
   have a layer at least half poured, 60 of the 61 multi-layer boards pour an inner layer; on 270
   the pour nets' copper in `processed` is not the designer's; on the other nets the two agree
   within 5% of track length on all but 37 boards. Pictures: `LAB/planned/truth/`.
+  Netlists, same day (`netlists.py --tier gate`): 215 of the 314 ship a `.net` beside the board
+  in its source repository; it is the board's on 156 (at least 95% of its nets are the same
+  pads), close on 37 (80% to 95%), and not on 22 (another revision or variant).
 - **What changes when the harness runs on the raw-based boards** (from the UltraRoute session,
   read from the code, not yet run):
   - Unconnected is KiCad's count, unfiltered. With the designers' pours back, a pad the
