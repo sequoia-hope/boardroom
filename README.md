@@ -9,7 +9,9 @@ other suite apps. It also defines the format every board repo in the suite follo
 > Projects, Compose and Route as modes of one app, with the router rewritten here
 > ([`docs/one-system-spec.md`](docs/one-system-spec.md)). So far: one Cargo workspace (`crates/`),
 > the web app at `web/`, pcbview in the tree as `view/`, and no submodules. The KiCad reader, the
-> board model and the renderer are in (`crates/kicad`, `board`, `scene`, `render`, `wasm`). Not
+> board model, the renderer and the intent, recognition and judging crates are in (`crates/kicad`,
+> `board`, `scene`, `render`, `wasm`, `intent`, `recognise`, `library`, `interfaces`, `examine`),
+> with Composer's `packages/` and `library/`. Not
 > working until their crates arrive: Compose and Route. Sections below that describe
 > separate repos and submodules describe board repos made so far, which stay on their pins.
 

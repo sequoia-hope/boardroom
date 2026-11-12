@@ -2,6 +2,9 @@
 //! layer in a spatial index, connectivity, and the design-rule checks a router must keep.
 
 pub mod model;
+/// The board as Composer's checks and generators see it: parts, pads with nets, copper per net,
+/// in millimetres (from Circuit Composer's `pcb` crate, API kept).
+pub mod pcb;
 pub mod check;
 pub mod custom;
 pub mod connect;

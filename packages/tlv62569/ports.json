@@ -1,0 +1,158 @@
+{
+  "note": "Pins by number for the SOT-23-5 (DBV) variant; what each function means and its default net class. The DBV variant has no power-good pin: PG exists only on TLV62569PDDC and TLV62569PDRL (Device Comparison, p.1; Pin Functions, p.3).",
+  "functions": {
+    "VIN": {
+      "power": {
+        "v": [
+          2.5,
+          5.5
+        ],
+        "note": "Recommended operating range. The converter's own draw is its quiescent current, on VOUT's iq_a; the supply rule adds the load's input current",
+        "citation": {
+          "source": "tlv62569_ds",
+          "locator": "§6.3 p.4"
+        }
+      },
+      "kind": "power_in",
+      "class": "POWER",
+      "supply": "VIN",
+      "note": "Power supply input, 2.5-5.5 V recommended (p.4), 6 V absolute maximum (p.3). Also the high-side switch's drain: CIN goes between this pin and GND.",
+      "citation": {
+        "source": "tlv62569_ds",
+        "locator": "§5 Pin Functions p.3; §6.3 p.4"
+      }
+    },
+    "GND": {
+      "kind": "ground",
+      "class": "GROUND",
+      "note": "Ground pin: the low-side switch's return and the control ground (one pin, no exposed pad on DBV).",
+      "citation": {
+        "source": "tlv62569_ds",
+        "locator": "§5 Pin Functions p.3"
+      }
+    },
+    "SW": {
+      "kind": "switch",
+      "class": "SWITCH",
+      "supply": "VIN",
+      "note": "Switch node: the internal FETs to the inductor. DC -0.3 V to VIN+0.3 V; -3 V to 9 V for under 10 ns while switching (p.3).",
+      "citation": {
+        "source": "tlv62569_ds",
+        "locator": "§5 Pin Functions p.3; §6.1 p.3"
+      }
+    },
+    "FB": {
+      "kind": "feedback",
+      "class": "ANALOG",
+      "note": "Feedback input, regulated to VFB = 0.6 V (0.588-0.612 V). Connect to an external divider from VOUT; 5.5 V absolute maximum.",
+      "citation": {
+        "source": "tlv62569_ds",
+        "locator": "§5 Pin Functions p.3; §6.5 p.4"
+      }
+    },
+    "EN": {
+      "kind": "enable",
+      "class": "SIGNAL",
+      "supply": "VIN",
+      "note": "Enable, active high: VIH 1.2 V max, VIL 0.4 V min (2.5 V <= VIN <= 5.5 V). Must not be left floating. Low = shutdown, 0.1 uA typical, 2 uA max.",
+      "citation": {
+        "source": "tlv62569_ds",
+        "locator": "§5 Pin Functions p.3; §6.5 p.4; §7.4.1 p.7"
+      },
+      "levels": {
+        "vih": "1.2",
+        "vil": "0.4",
+        "vin_max": "6",
+        "note": "VIH 1.2 V max and VIL 0.4 V min for 2.5 V <= VIN <= 5.5 V; EN's absolute maximum is 6 V, whatever VIN is",
+        "citation": {
+          "source": "tlv62569_ds",
+          "locator": "p.3 (absolute maximum ratings); p.4 (electrical characteristics)"
+        }
+      }
+    },
+    "VOUT": {
+      "kind": "power_out",
+      "class": "POWER",
+      "supply": "VIN",
+      "note": "Not a pin: the package circuit's output, past L1 and the RFB_TOP/RFB_BOT divider (circuit port VOUT). Described here so the supply rule can match it",
+      "power": {
+        "from": "VIN",
+        "port": "VOUT",
+        "topology": "buck",
+        "v_out": [
+          3.198,
+          3.441
+        ],
+        "i_max_a": 2.0,
+        "r_on_ohm": 0.152,
+        "efficiency": {
+          "value": 0.94,
+          "at_a": 0.1,
+          "vin": 5.0,
+          "citation": {
+            "source": "tlv62569_ds",
+            "locator": "Figure 9 p.11 (3.3-V output efficiency, VIN = 5 V): read off a typical curve as 94-95 % at 100 mA, with the datasheet's own application parts"
+          }
+        },
+        "iq_a": 3.5e-05,
+        "theta_ja_c_per_w": 188.2,
+        "tj_max_c": 125,
+        "enable": {
+          "function": "EN",
+          "on_when_open": true,
+          "note": "The package circuit's R_EN (1 MOhm to VIN) holds EN high; the chip's own EN must not float (§7.4.1 p.7)"
+        },
+        "note": "v_out: VFB 0.588-0.612 V (p.4) times 1 + 453k/100k with both resistors at 1 % worst case (3.318 V nominal). In Power Save Mode the output rises slightly above nominal (§7.3.1 p.6, not quantified). i_max_a is the recommended maximum output current (§6.3 p.4); this circuit's caps and L1 (3.4 A) were picked for it. Below regulation it runs at 100 % duty, VIN(min) = VOUT + IOUT x (RDS(on) + RL) (§7.3.2 p.6): r_on_ohm is the high-side RDS(on), 100 mOhm typical at VIN = 5 V with no maximum given (p.5), plus L1's 52 mOhm maximum DCR (smnr4020_ds p.4). iq_a typical, not switching (p.4). theta_ja for DBV (SOT-23-5) on the JEDEC board (§6.4 p.4); tj_max the operating maximum (§6.3 p.4)",
+        "citation": {
+          "source": "tlv62569_ds",
+          "locator": "§6.3 p.4; §6.4 p.4; §6.5 pp.4-5; §7.3.2 p.6; Equation 2 p.9"
+        }
+      }
+    }
+  },
+  "variants": {
+    "TLV62569DBV": {
+      "package": "SOT-23-5 (DBV0005A)",
+      "source": {
+        "source": "tlv62569_ds",
+        "locator": "§5 Pin Configuration and Functions p.3 (DBV top view and Pin Functions table); KiCad Regulator_Switching:TLV62569DBV (extends TLV62568DBV) has the same numbers and names"
+      },
+      "pins": {
+        "1": {
+          "name": "EN",
+          "function": "EN"
+        },
+        "2": {
+          "name": "GND",
+          "function": "GND"
+        },
+        "3": {
+          "name": "SW",
+          "function": "SW"
+        },
+        "4": {
+          "name": "VIN",
+          "function": "VIN"
+        },
+        "5": {
+          "name": "FB",
+          "function": "FB"
+        }
+      }
+    }
+  },
+  "interfaces": {
+    "en": {
+      "type": "logic",
+      "dir": "in",
+      "pins": {
+        "IO": "EN"
+      },
+      "note": "Active high, VIH 1.2 V max and VIL 0.4 V min: 1.8 V or 3.3 V logic drives it. Must not float",
+      "citation": {
+        "source": "tlv62569_ds",
+        "locator": "§5 Pin Functions p.3; §6.5 p.4; §7.4.1 p.7"
+      }
+    }
+  }
+}

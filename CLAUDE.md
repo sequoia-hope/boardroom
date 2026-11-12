@@ -9,11 +9,12 @@ and each step's commit message says what is broken.
 This repository holds the Cargo workspace (`crates/`: `project`, a board project on disk;
 `server`, the HTTP server; `boardroom`, the one binary, whose commands are functions in
 `cli.rs`; `kicad`, the only reader and writer of KiCad files; `board`, the board model with the checker;
+`intent`, `recognise`, `library`, `interfaces` and `examine` (the judge, from Composer's verifier);
 `scene`, plain drawing data and its mesh; `render`, a board as a scene, with the WebGL renderer in
 `crates/render/js`; `wasm`, the browser module, built by `web/scripts/wasm.sh`; `gtk`, the native
 window; `gpl/kicad-text`, the GPL text program that is run and never linked; `crates/boardroom/tests/layers.rs` enforces the spec's
 dependency rules, so a new crate must be added to a group there), the web app (`web/`, with the shared store in `web/store/`), the
-viewer (`view/`, pcbview, run by `scripts/view.sh`), the design specs (`docs/`), the upstream
+viewer (`view/`, pcbview, run by `scripts/view.sh`), Composer's chip packages and research library (`packages/`, `library/`), the design specs (`docs/`), the upstream
 `pcb-design` skill (`.claude/skills/pcb-design/`), the board scripts
 (`scripts/{doctor,view,route}.sh`), the board-project skeleton (`template/`, instantiated by
 `scripts/new-board.sh`), and the worked example (`examples/easy2350/`). The root itself is not
