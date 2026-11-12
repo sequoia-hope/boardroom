@@ -316,9 +316,10 @@ Steps 4 and 5 can overlap. Step 6 starts as soon as step 4's scoreboards exist.
 Each of the UltraRoute and Composer sessions, before it ends:
 
 1. Commits or deliberately discards everything uncommitted and untracked, and says which.
-   UltraRoute's six untracked items (`REVIEW.md`, `REMEDIATION.md`, two research notes,
-   `jobs/earring-v2a/`, `jobs/motionhexa-unified/`) are the owner's call; UltraRoute is asking.
-   Composer's tree is clean and pushed at 80ac000, `main` only.
+   Done. UltraRoute (d98e953): its review and remediation plan and two research notes are
+   committed; `jobs/earring-v2a/` is left untracked on purpose, to become a Boardroom project;
+   `jobs/motionhexa-unified/` is another person's board and is never committed anywhere.
+   Composer's tree is clean and pushed at c558971, `main` only.
 2. Lists its branches and worktrees holding work not on `main`, one line each on whether it
    matters. (UltraRoute has 13 local branches; the tips of 131 deleted on 2026-11-09 are in
    `ultraroute-lab/deleted-branches-2026-11-09.txt`.)
