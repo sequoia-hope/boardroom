@@ -42,6 +42,10 @@ stops and says which is missing.
   (`LAB/pcbench/truth/ID/{designer,bare}.kicad_pcb`), no comparison with "the designers" on a
   board with pours is to be trusted, and the old router's results were measured on boards with
   the planes taken away.
+  Gate tier, 2026-11-12 (`truth.py report --tier gate`): 314 of 314 prepared; 281 have pours, 210
+  have a layer at least half poured, 60 of the 61 multi-layer boards pour an inner layer; on 270
+  the pour nets' copper in `processed` is not the designer's; on the other nets the two agree
+  within 5% of track length on all but 37 boards. Pictures: `LAB/planned/truth/`.
 - **Not yet fixed:** `tidy.py` measures direction in the board's x and y, so a board routed in a
   turned frame scores as off-angle.
 - pcbnew hangs on some old boards when its output is a pipe or it has a console, and its zone

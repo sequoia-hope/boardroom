@@ -154,42 +154,55 @@ def fresh_uuids(path):
     path.write_text(re.sub(r'\(uuid "([^"]*)"\)', fresh, path.read_text()))
 
 
-SEGMENT = re.compile(r"\(segment\s*\(start ([-\d.]+) ([-\d.]+)\)\s*\(end ([-\d.]+) ([-\d.]+)\)[^\n]*?\(net (\d+)\)")
-VIA = re.compile(r"\(via\s[^\n]*?\(net (\d+)\)")
+# Track length and via count per net name of a board, by pcbnew: the corpus's files come in
+# several text layouts, so counting in the text misses whole boards.
+COPPER = r"""
+import json, sys
+import pcbnew
+b = pcbnew.LoadBoard(sys.argv[1])
+out = {}
+for t in b.GetTracks():
+    e = out.setdefault(t.GetNetname(), [0.0, 0])
+    if t.Type() == pcbnew.PCB_VIA_T:
+        e[1] += 1
+    else:
+        e[0] += t.GetLength() * 1e-6
+print("TRUTH " + json.dumps(out), flush=True)
+"""
 
 
-def copper_by_net(text):
-    """Track length in millimetres and via count per net number, from a board file's text
-    (KiCad 4 and 5 files: one segment or via to a line, which is what the corpus holds)."""
-    length, vias = {}, {}
-    for x0, y0, x1, y1, net in SEGMENT.findall(text):
-        length[net] = length.get(net, 0.0) + ((float(x1) - float(x0)) ** 2 + (float(y1) - float(y0)) ** 2) ** 0.5
-    for net in VIA.findall(text):
-        vias[net] = vias.get(net, 0) + 1
-    return length, vias
-
-
-def against_processed(b):
-    """How `processed` differs from `raw`, on the nets the raw board pours and on the others:
-    track length and via count of each. Counting segments would not do: a re-import splits
-    and joins tracks without moving them."""
-    d = paths.corpus() / "PCBs" / b
-    raw = (d / "raw.kicad_pcb").read_text(errors="replace")
-    pro = d / "processed.kicad_pcb"
-    if not pro.exists():
+def copper_by_net(pcb, log):
+    """{net name: [track mm, vias]} of a board file, or None if pcbnew cannot say."""
+    try:
+        with open(log, "w") as sink:
+            subprocess.run([sys.executable, "-c", COPPER, str(pcb)], stdin=subprocess.DEVNULL, stdout=sink, stderr=subprocess.STDOUT, timeout=300)
+    except subprocess.TimeoutExpired:
         return None
-    pro = pro.read_text(errors="replace")
-    zone_nets = set(re.findall(r"\n\s*\(zone\s*\(net (\d+)\)", raw)) - {"0"}
-    (rl, rv), (pl, pv) = copper_by_net(raw), copper_by_net(pro)
+    line = next((l for l in Path(log).read_text(errors="replace").splitlines() if l.startswith("TRUTH ")), None)
+    return json.loads(line[6:]) if line else None
 
-    def total(d, on_zone_nets):
-        return round(sum(v for n, v in d.items() if (n in zone_nets) == on_zone_nets), 2)
 
-    return {
-        "zones_in_processed": len(re.findall(r"\n\s*\(zone\s", pro)),
-        "pour_nets": {"mm_raw": total(rl, True), "mm_processed": total(pl, True), "vias_raw": total(rv, True), "vias_processed": total(pv, True)},
-        "other_nets": {"mm_raw": total(rl, False), "mm_processed": total(pl, False), "vias_raw": total(rv, False), "vias_processed": total(pv, False)},
-    }
+def against_processed(b, zones):
+    """How `processed` differs from the designer's board, on the nets the designer pours and on
+    the others: track length and via count of each, by net name. `processed` is read as the
+    harness prepared it (LAB/pcbench/boards/ID/board.kicad_pcb, saved by this KiCad)."""
+    out = paths.lab() / "pcbench" / "truth" / b
+    processed = paths.lab() / "pcbench" / "boards" / b / "board.kicad_pcb"
+    if not processed.exists():
+        return None
+    d = copper_by_net(out / "designer.kicad_pcb", out / "copper.designer.log")
+    p = copper_by_net(processed, out / "copper.processed.log")
+    if d is None or p is None:
+        return None
+    pour_nets = {z["net"] for z in zones if z["net"]}
+
+    def total(c, on_pour_nets, k):
+        return round(sum(v[k] for n, v in c.items() if (n in pour_nets) == on_pour_nets), 2)
+
+    def group(on):
+        return {"mm_raw": total(d, on, 0), "mm_processed": total(p, on, 0), "vias_raw": total(d, on, 1), "vias_processed": total(p, on, 1)}
+
+    return {"by": "pcbnew", "pour_nets": group(True), "other_nets": group(False)}
 
 
 def differs(group):
@@ -202,7 +215,12 @@ def prepare_one(job):
     out = paths.lab() / "pcbench" / "truth" / b
     record = out / "truth.json"
     if record.exists() and not redo:
-        return b, json.loads(record.read_text())
+        info = json.loads(record.read_text())
+        # An older record compared the files' text: compare again, without preparing again.
+        if "error" not in info and (info.get("processed") or {}).get("by") != "pcbnew":
+            info["processed"] = against_processed(b, info["zones"])
+            record.write_text(json.dumps(info, indent=1))
+        return b, info
     out.mkdir(parents=True, exist_ok=True)
     designer, bare = out / "designer.kicad_pcb", out / "bare.kicad_pcb"
     info = {"id": b}
@@ -236,7 +254,7 @@ def prepare_one(job):
                 except subprocess.TimeoutExpired:
                     info["refill_error"] = f"KiCad's zone filler did not return in {REFILL_S} s; the file's own fills are kept"
                 refilled.unlink(missing_ok=True)
-            info["processed"] = against_processed(b)
+            info["processed"] = against_processed(b, info["zones"])
     except subprocess.TimeoutExpired:
         info["error"] = "pcbnew took more than 900 s"
     record.write_text(json.dumps(info, indent=1))
