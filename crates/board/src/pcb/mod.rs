@@ -4,7 +4,6 @@
 pub mod geom;
 pub mod graph;
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -104,8 +103,7 @@ impl Board {
     }
 
     pub fn parse(text: &str) -> Result<Board, String> {
-        let text = normalise_track_layers(text);
-        let (pcb, copper) = kicad::parse_board(&text).map_err(|e| e.to_string())?;
+        let (pcb, copper) = kicad::parse_board(text).map_err(|e| e.to_string())?;
         let net_name: BTreeMap<u32, String> = pcb.nets.iter().map(|n| (n.number, n.name.clone())).collect();
         let name = |n: u32| net_name.get(&n).cloned().unwrap_or_default();
         let layers: Vec<String> = copper.layers.iter().map(|l| l.name.clone()).collect();
@@ -226,111 +224,6 @@ impl Board {
         }
         out
     }
-}
-
-/// KiCad 8+ writes `(layers "B.Cu" "B.Mask")` instead of `(layer "B.Cu")` on a `segment` or `arc`
-/// whose solder mask is opened (common on exposed power busbars and Altium imports). Rewrites only
-/// direct `(layers ...)` children of `(segment ...)` and `(arc ...)` to their copper `(layer ...)`.
-fn normalise_track_layers(text: &str) -> Cow<'_, str> {
-    let bytes = text.as_bytes();
-    let mut out: Option<String> = None;
-    let mut copied = 0usize;
-    let mut i = 0usize;
-    let mut depth = 0usize;
-    let mut in_string = false;
-    let mut track_depth: Option<usize> = None;
-
-    while i < bytes.len() {
-        let b = bytes[i];
-        if in_string {
-            if b == b'\\' {
-                i += 2;
-                continue;
-            }
-            if b == b'"' {
-                in_string = false;
-            }
-            i += 1;
-            continue;
-        }
-        match b {
-            b'"' => {
-                in_string = true;
-                i += 1;
-            }
-            b'(' => {
-                depth += 1;
-                let rest = &text[i + 1..];
-                let kw_end = rest.find(|c: char| c.is_ascii_whitespace() || c == ')' || c == '(').unwrap_or(rest.len());
-                let kw = &rest[..kw_end];
-                if track_depth.is_none() && (kw == "segment" || kw == "arc") {
-                    track_depth = Some(depth);
-                    i += 1 + kw_end;
-                } else if track_depth == Some(depth - 1) && kw == "layers" {
-                    // Scan to the matching ')' of this `(layers ...)` form.
-                    let start = i;
-                    let mut j = i + 1 + kw_end;
-                    let mut sub_depth = 1usize;
-                    let mut sub_str = false;
-                    while j < bytes.len() && sub_depth > 0 {
-                        match (sub_str, bytes[j]) {
-                            (true, b'\\') => {
-                                j += 2;
-                                continue;
-                            }
-                            (true, b'"') => sub_str = false,
-                            (false, b'"') => sub_str = true,
-                            (false, b'(') => sub_depth += 1,
-                            (false, b')') => sub_depth -= 1,
-                            _ => {}
-                        }
-                        j += 1;
-                    }
-                    let form = &text[start..j];
-                    if let Some(cu) = first_copper_layer(&form[1 + kw_end..form.len().saturating_sub(1)]) {
-                        let buf = out.get_or_insert_with(|| String::with_capacity(text.len()));
-                        buf.push_str(&text[copied..start]);
-                        let newlines = form.bytes().filter(|&c| c == b'\n').count();
-                        buf.push_str(&format!("(layer \"{cu}\")"));
-                        for _ in 0..newlines {
-                            buf.push('\n');
-                        }
-                        copied = j;
-                    }
-                    depth -= 1;
-                    i = j;
-                } else {
-                    i += 1;
-                }
-            }
-            b')' => {
-                if track_depth == Some(depth) {
-                    track_depth = None;
-                }
-                depth = depth.saturating_sub(1);
-                i += 1;
-            }
-            _ => i += 1,
-        }
-    }
-
-    match out {
-        Some(mut buf) => {
-            buf.push_str(&text[copied..]);
-            Cow::Owned(buf)
-        }
-        None => Cow::Borrowed(text),
-    }
-}
-
-fn first_copper_layer(s: &str) -> Option<&str> {
-    for tok in s.split_ascii_whitespace() {
-        let name = tok.trim_matches('"');
-        if name.ends_with(".Cu") && !name.contains('*') {
-            return Some(name);
-        }
-    }
-    None
 }
 
 #[cfg(test)]

@@ -354,7 +354,7 @@ pub fn read_copper_with(root: &Node, footprints: &[Footprint], shaper: crate::te
                 start: point(child, "start")?,
                 end: point(child, "end")?,
                 width: number(child, "width")?,
-                layer: text(child, "layer")?,
+                layer: track_layer(child)?,
                 net: net(child),
                 locked: locked(child),
                 uuid: uuid(child),
@@ -365,7 +365,7 @@ pub fn read_copper_with(root: &Node, footprints: &[Footprint], shaper: crate::te
                 mid: point(child, "mid")?,
                 end: point(child, "end")?,
                 width: number(child, "width")?,
-                layer: text(child, "layer")?,
+                layer: track_layer(child)?,
                 net: net(child),
                 locked: locked(child),
                 uuid: uuid(child),
@@ -1126,6 +1126,17 @@ fn number(n: &Node, name: &str) -> Result<f64, KicadParse> {
     Ok(required(n, name)?.number_arg(0, name)? * MM)
 }
 
+/// A track's copper layer: `(layer "B.Cu")`, or, on a track whose solder mask is opened (KiCad 8
+/// and later: exposed busbars, Altium imports), the copper layer in `(layers "B.Cu" "B.Mask")`.
+fn track_layer(n: &Node) -> Result<String, KicadParse> {
+    if n.find("layer").is_none() {
+        if let Some(cu) = n.find("layers").and_then(|l| l.args().iter().filter_map(Node::text).find(|l| l.ends_with(".Cu") && !l.contains('*'))) {
+            return Ok(cu.to_string());
+        }
+    }
+    text(n, "layer")
+}
+
 fn text(n: &Node, name: &str) -> Result<String, KicadParse> {
     Ok(required(n, name)?.text_arg(0, name)?.to_string())
 }
@@ -1151,6 +1162,22 @@ fn uuid(n: &Node) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_track_with_its_mask_opened_is_read_on_its_copper_layer() {
+        // KiCad 8 and later write `(layers "B.Cu" "B.Mask")` on such a segment or arc.
+        let src = r#"(kicad_pcb (version 20241229) (generator "pcbnew")
+          (general (thickness 1.6))
+          (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (36 "B.Mask" user))
+          (net 0 "") (net 1 "GND")
+          (segment (start 0 0) (end 5 0) (width 0.25) (layers "B.Cu" "B.Mask") (solder_mask_margin 0) (net 1))
+          (arc (start 5 0) (mid 6 1) (end 7 0) (width 0.25) (layers "B.Mask" "B.Cu") (net 1))
+          (segment (start 0 1) (end 5 1) (width 0.25) (layer "F.Cu") (net 1))
+        )"#;
+        let (_, copper) = crate::parse_board(src).unwrap();
+        assert_eq!(copper.tracks.iter().map(|t| t.layer.as_str()).collect::<Vec<_>>(), ["B.Cu", "F.Cu"]);
+        assert_eq!(copper.arcs[0].layer, "B.Cu");
+    }
+
     #[test]
     fn a_chamfered_corner_is_cut_and_the_others_keep_their_rounding() {
         // An RP2350 QFN corner pin: 0.875 x 0.2 mm, roundrect 0.25, top-left chamfered 0.25.
