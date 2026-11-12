@@ -4,6 +4,7 @@
 pub mod bridge;
 pub mod buck;
 pub mod protect;
+pub mod netmatch;
 pub mod nets;
 pub mod svg;
 

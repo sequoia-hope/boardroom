@@ -11,6 +11,7 @@ license.workspace = true
 
 [dependencies]
 board = { path = "../board" }
+intent = { path = "../intent" }
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]

@@ -7,6 +7,7 @@ are what the `examine` crate grows from.
 | Tool | What it does |
 |---|---|
 | `truth.py` | **the designers' boards**: prepares each corpus board from its raw file (the designer's own copper and pours, refilled by KiCad) and the same board bare with its pours kept; counts how `processed` differs; draws both side by side |
+| `netlists.py` | which boards ship a netlist that is theirs: every fetched `.net` compared with the designer's board pad for pad (`examine::netmatch`) |
 | `pcbench.py` | prepare, run, report, compare, rejudge, tiers, ab over the PCBench corpus; judged by `kicad-cli` DRC after a KiCad refill |
 | `pcbench_tiers.json`, `pcbench_timeouts.json`, `pcbench_variants.json`, `variants/`, `apply_variant.py` | the tiers (smoke, focus, gate, full), per-board time, our own patched boards |
 | `rulebench.py` | boards with rule files, judged the same way |
