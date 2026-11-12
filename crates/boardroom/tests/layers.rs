@@ -18,7 +18,8 @@ enum Group {
 fn group(name: &str) -> Option<Group> {
     use Group::*;
     Some(match name {
-        "kicad" | "board" | "check" | "shape" | "scene" => Foundation,
+        // kicad-text is the GPL program the reader runs; only its tests use the reader.
+        "kicad" | "kicad-text" | "board" | "check" | "shape" | "scene" => Foundation,
         "intent" | "recognise" | "library" | "interfaces" => Understanding,
         "examine" => Judging,
         "compose" | "pinsolve" | "floorplan" | "blockgen" => Composer,

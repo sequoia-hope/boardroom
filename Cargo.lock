@@ -103,6 +103,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "board"
+version = "0.1.0"
+dependencies = [
+ "kicad",
+]
+
+[[package]]
 name = "board-interface"
 version = "0.2.2"
 source = "git+https://github.com/sequoia-hope/board-interface?tag=v0.2.2#cf831a8ffbcf8945ec3ba5a9e2e2a97d83a2ce59"
@@ -773,6 +780,24 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps 7.0.8",
+]
+
+[[package]]
+name = "kicad"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "kicad-text"
+version = "0.1.0"
+dependencies = [
+ "kicad",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
