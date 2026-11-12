@@ -1,5 +1,9 @@
 # One repo, one app: Boardroom, Circuit Composer, pcbview and UltraRoute — spec (draft)
 
+**Superseded 2026-11-12** by the owner's new direction (no history import, no old structure, one
+program with many crates, router rewritten, Claude executes): see `one-system-spec.md`. Do not
+execute the stages below. "What exists today" is still a useful inventory.
+
 Status: draft, 2026-11-08. Written from the owner's request: "merge boardroom, circuit composer,
 pcbview, and ultraroute into one app/repo; Google Antigravity agents will execute." Nothing here is
 built. Choices the owner has not confirmed are marked **Recommended**, and every open one is under
