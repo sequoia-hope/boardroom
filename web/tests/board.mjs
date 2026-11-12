@@ -1,7 +1,7 @@
 // The Board tab drawing a board straight from its .kicad_pcb (docs/demo-spec.md, milestone 5), in
 // the Pages build, in Chrome, on a made-up origin whose snapshot is the worked example's board:
 //
-//     scripts/draw.sh && npm run build:pages && npm run test:board
+//     scripts/wasm.sh && npm run build:pages && npm run test:board
 //
 // It draws easy2350 (its parts, tracks and vias counted), a click picks a part, a save of the
 // board from another app redraws it, and it has no stale bar.
@@ -23,7 +23,7 @@ const project = {
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm' };
 
 if (!existsSync(`${DIST}/index.html`)) {
-  console.error('test:board: build the Pages page first: scripts/draw.sh && npm run build:pages');
+  console.error('test:board: build the Pages page first: scripts/wasm.sh && npm run build:pages');
   process.exit(2);
 }
 const browser = await chromium.launch({
@@ -73,6 +73,7 @@ await check('draws the board from its .kicad_pcb', async () => {
   // colour and compresses to almost nothing, a drawn board doesn't.
   await page.waitForTimeout(300);
   const png = await page.locator('.live canvas').screenshot();
+  if (process.env.BOARD_SHOT) (await import('node:fs')).writeFileSync(process.env.BOARD_SHOT, await page.locator('.live').screenshot());
   assert(png.length > 50000, `the canvas looks empty (${png.length} bytes of PNG)`);
 });
 

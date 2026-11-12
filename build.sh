@@ -6,6 +6,8 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
+# The Board tab's WASM module (crates/wasm), then the page.
+web/scripts/wasm.sh
 (cd web && { [[ -d node_modules ]] || npm ci --no-audit --no-fund; } && npm run build)
 cargo build --release
 echo "Built: target/release/boardroom (serves web/dist)"

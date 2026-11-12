@@ -8,7 +8,10 @@ and each step's commit message says what is broken.
 
 This repository holds the Cargo workspace (`crates/`: `project`, a board project on disk;
 `server`, the HTTP server; `boardroom`, the one binary, whose commands are functions in
-`cli.rs`; `gtk`, the native window; `crates/boardroom/tests/layers.rs` enforces the spec's
+`cli.rs`; `kicad`, the only reader and writer of KiCad files; `board`, the board model with the checker;
+`scene`, plain drawing data and its mesh; `render`, a board as a scene, with the WebGL renderer in
+`crates/render/js`; `wasm`, the browser module, built by `web/scripts/wasm.sh`; `gtk`, the native
+window; `gpl/kicad-text`, the GPL text program that is run and never linked; `crates/boardroom/tests/layers.rs` enforces the spec's
 dependency rules, so a new crate must be added to a group there), the web app (`web/`, with the shared store in `web/store/`), the
 viewer (`view/`, pcbview, run by `scripts/view.sh`), the design specs (`docs/`), the upstream
 `pcb-design` skill (`.claude/skills/pcb-design/`), the board scripts
@@ -19,8 +22,10 @@ a board project (`template/CLAUDE.md` is the board-repo version).
 - **Build and serve:** `./build.sh` (book cores with `reserve`) and `./serve.sh --port N` (never
   hardcode a port). The toolchain is pinned in `rust-toolchain.toml`. `cargo build` builds the
   server; the window is `cargo build -p boardroom-gtk`.
-- **Checks:** `cargo clippy --all-targets -- -D warnings`, `cargo test`, and in `web/`
-  `npm run test:store` and `test:stale` (after `npm run build:pages`).
+- **Checks:** `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
+  (booked with `reserve`), and in `web/` `npm run test:store`, `test:stale` and `test:board`
+  (after `scripts/wasm.sh` and `npm run build:pages`). `BOARD_SHOT=out.png npm run test:board`
+  saves a picture of the Board tab: look at it after changing what is drawn.
 - **There is no router here yet.** `scripts/route.sh` needs `$ULTRAROUTE` (a built binary of the
   old router) until the new one exists. The old router's code is never brought in or built here.
 - **Making a board repo:** run `scripts/new-board.sh <dir> [--name <title>] [--github <owner>/<repo> [--private]]`,

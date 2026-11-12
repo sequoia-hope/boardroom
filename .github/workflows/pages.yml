@@ -48,6 +48,13 @@ jobs:
       - name: Build ccomp
         run: cargo build --release --quiet --manifest-path ../circuit-composer/Cargo.toml -p ccomp
 
+      # The Board tab draws the .kicad_pcb with Boardroom's own WASM module (crates/wasm).
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --version 0.14.0 --locked
+
+      - name: Build the WASM module
+        run: web/scripts/wasm.sh
+
       - name: Build the static page
         working-directory: web
         run: |
@@ -64,7 +71,10 @@ jobs:
         working-directory: web
         run: npm run test:stale
 
-      # test:board returns with the Board tab on Boardroom's own renderer (one-system-spec, step 3).
+      # The Board tab drawing the worked example's .kicad_pcb, and drawing it again after a save.
+      - name: Test the board drawing
+        working-directory: web
+        run: npm run test:board
 
       # examples.toml names each example by a path here or by its own repo and
       # ref; the repo ones are cloned for this build only (no submodules).

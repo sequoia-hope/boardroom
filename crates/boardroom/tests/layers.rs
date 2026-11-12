@@ -24,7 +24,7 @@ fn group(name: &str) -> Option<Group> {
         "examine" => Judging,
         "compose" | "pinsolve" | "floorplan" | "blockgen" => Composer,
         "plan" | "wire" | "route" | "reshape" => UltraRoute,
-        "render" | "project" | "server" | "boardroom" | "wasm" | "boardroom-gtk" => Program,
+        "render" | "wasm" | "project" | "server" | "boardroom" | "boardroom-gtk" => Program,
         _ => return None,
     })
 }

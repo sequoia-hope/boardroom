@@ -1,0 +1,9 @@
+[package]
+name = "scene"
+description = "A printed circuit board picture in millimetres: plain drawing data any crate can emit, meshed for a WebGL2 capsule shader, with hit testing and cheap part moves."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# From board-draw (github.com/sequoia-hope/board-draw, MIT, same author) at b45cc3f. No
+# dependencies, so every stage crate can offer a picture of its result (docs/one-system-spec.md).

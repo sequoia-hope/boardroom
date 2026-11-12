@@ -1,0 +1,11 @@
+[package]
+name = "render"
+description = "A board as a picture: view(board) -> scene, and the WebGL2 renderer that draws a scene's mesh (js/)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+board = { path = "../board" }
+kicad = { path = "../kicad" }
+scene = { path = "../scene" }

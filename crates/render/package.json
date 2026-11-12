@@ -1,0 +1,9 @@
+{
+  "name": "boardroom-render",
+  "private": true,
+  "version": "0.1.0",
+  "description": "WebGL2 drawing for scene meshes: anti-aliased capsules and fills.",
+  "license": "MIT",
+  "type": "module",
+  "exports": { ".": "./js/renderer.js" }
+}

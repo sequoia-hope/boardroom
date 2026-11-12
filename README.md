@@ -8,8 +8,9 @@ other suite apps. It also defines the format every board repo in the suite follo
 > **Migration under way (2026-11).** Boardroom is becoming one program with many crates:
 > Projects, Compose and Route as modes of one app, with the router rewritten here
 > ([`docs/one-system-spec.md`](docs/one-system-spec.md)). So far: one Cargo workspace (`crates/`),
-> the web app at `web/`, pcbview in the tree as `view/`, and no submodules. Not working until
-> their crates arrive: the live Board view, Compose and Route. Sections below that describe
+> the web app at `web/`, pcbview in the tree as `view/`, and no submodules. The KiCad reader, the
+> board model and the renderer are in (`crates/kicad`, `board`, `scene`, `render`, `wasm`). Not
+> working until their crates arrive: Compose and Route. Sections below that describe
 > separate repos and submodules describe board repos made so far, which stay on their pins.
 
 **Try it:** [sequoia-hope.github.io/boardroom](https://sequoia-hope.github.io/boardroom/) is a
