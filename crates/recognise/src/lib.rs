@@ -179,7 +179,7 @@ impl<'a> Cx<'a> {
         let id = format!("{kind}_{anchor}");
         self.blocks.insert(
             id,
-            Block { kind: kind.into(), package: None, parts, roles, placement_goal: None, ports: BTreeMap::new(), provenance: Some(prov(confidence, evidence)), note: None },
+            Block { kind: kind.into(), package: None, parts, roles, group: None, placement_goal: None, ports: BTreeMap::new(), provenance: Some(prov(confidence, evidence)), note: None },
         );
     }
 

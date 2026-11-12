@@ -493,6 +493,13 @@
     "Block": {
       "additionalProperties": false,
       "properties": {
+        "group": {
+          "description": "The KiCad group on the board that holds this block's locked layout (its parts and its\ncopper, pours included), when it has one. Written by whatever applies the layout, so\nthe router keeps that copper and the judge scores it by `roles` without matching\ngroups to blocks by their parts.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "note": {
           "type": [
             "string",

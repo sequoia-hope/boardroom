@@ -118,5 +118,20 @@ fn round_trips() {
 fn committed_schema_is_current() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("schema/intent.schema.json");
     let committed: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-    assert_eq!(committed, intent::json_schema(), "run `ccomp schema -o schema/intent.schema.json`");
+    assert_eq!(committed, intent::json_schema(), "run `cargo run -p intent --example schema > crates/intent/schema/intent.schema.json`");
+}
+
+#[test]
+fn a_block_may_name_the_group_that_holds_its_layout() {
+    let (mut file, netlist) = board();
+    let (id, block) = file.blocks.iter_mut().next().expect("easy2350 has blocks");
+    let id = id.clone();
+    block.group = Some("buck_U1".into());
+    let text = serde_json::to_string(&file).unwrap();
+    let back: IntentFile = serde_json::from_str(&text).unwrap();
+    assert_eq!(back.blocks[&id].group.as_deref(), Some("buck_U1"));
+    assert!(validate(&back, Some(&netlist)).ok);
+    // Absent, it is not written: files without layouts are unchanged.
+    let (plain, _) = board();
+    assert!(serde_json::to_value(&plain.blocks[&id]).unwrap().get("group").is_none());
 }

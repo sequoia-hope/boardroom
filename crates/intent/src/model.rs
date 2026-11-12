@@ -311,6 +311,12 @@ pub struct Block {
     /// buck names `vin`, `sw`, `pgnd`, `fb` (the IC's pads) and `cin`, `cout`, `inductor`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub roles: BTreeMap<String, String>,
+    /// The KiCad group on the board that holds this block's locked layout (its parts and its
+    /// copper, pours included), when it has one. Written by whatever applies the layout, so
+    /// the router keeps that copper and the judge scores it by `roles` without matching
+    /// groups to blocks by their parts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement_goal: Option<PlacementGoal>,
     /// External interface, keyed by port name.
