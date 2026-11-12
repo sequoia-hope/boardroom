@@ -58,14 +58,8 @@ pub struct BridgeRoles {
 
 impl BridgeRoles {
     pub fn from_map(m: &BTreeMap<String, String>) -> Result<BridgeRoles, String> {
-        let get = |k: &str| {
-            m.get(k)
-                .cloned()
-                .ok_or_else(|| format!("half-bridge role `{k}` is not given"))
-        };
-        let known = [
-            "hs", "ls", "cbus", "ho", "lo", "vs", "vb", "com", "vcc", "rgh", "rgl", "cboot",
-        ];
+        let get = |k: &str| m.get(k).cloned().ok_or_else(|| format!("half-bridge role `{k}` is not given"));
+        let known = ["hs", "ls", "cbus", "ho", "lo", "vs", "vb", "com", "vcc", "rgh", "rgl", "cboot"];
         if let Some(k) = m.keys().find(|k| !known.contains(&k.as_str())) {
             return Err(format!("`{k}` is not a half-bridge role"));
         }
@@ -120,36 +114,22 @@ pub struct BridgeReport {
 }
 
 pub(crate) fn pad<'a>(b: &'a Board, ref_pin: &str) -> Result<&'a Pad, String> {
-    b.pad(ref_pin)
-        .ok_or_else(|| format!("pad {ref_pin} is not on the board"))
+    b.pad(ref_pin).ok_or_else(|| format!("pad {ref_pin} is not on the board"))
 }
 
 pub(crate) fn pads<'a>(b: &'a Board, part: &str) -> Result<Vec<&'a Pad>, String> {
-    let p = b
-        .parts
-        .get(part)
-        .ok_or_else(|| format!("part {part} is not on the board"))?;
+    let p = b.parts.get(part).ok_or_else(|| format!("part {part} is not on the board"))?;
     Ok(p.pads.iter().map(|&i| &b.pads[i]).collect())
 }
 
 /// `part`'s pin on `net`, as `REF.PIN`.
 pub(crate) fn pin_on(b: &Board, part: &str, net: &str) -> Result<String, String> {
-    pads(b, part)?
-        .into_iter()
-        .find(|p| p.net == net)
-        .map(|p| format!("{part}.{}", p.pin))
-        .ok_or_else(|| format!("{part} has no pad on net `{net}`"))
+    pads(b, part)?.into_iter().find(|p| p.net == net).map(|p| format!("{part}.{}", p.pin)).ok_or_else(|| format!("{part} has no pad on net `{net}`"))
 }
 
 /// The two-pad part joining nets `a` and `b` whose reference starts with `prefix`; an error
 /// unless there is exactly one.
-pub(crate) fn bridging(
-    b: &Board,
-    a: &str,
-    c: &str,
-    prefix: &str,
-    what: &str,
-) -> Result<String, String> {
+pub(crate) fn bridging(b: &Board, a: &str, c: &str, prefix: &str, what: &str) -> Result<String, String> {
     let found: Vec<&str> = b
         .parts
         .values()
@@ -163,31 +143,16 @@ pub(crate) fn bridging(
     match found[..] {
         [one] => Ok(one.to_string()),
         [] => Err(format!("no {what} joins `{a}` and `{c}`; name it")),
-        _ => Err(format!(
-            "{} could each be the {what} between `{a}` and `{c}`; name one",
-            found.join(", ")
-        )),
+        _ => Err(format!("{} could each be the {what} between `{a}` and `{c}`; name one", found.join(", "))),
     }
 }
 
 /// The mean of a pin's pad centres: where a part's terminal is, for the placed loop.
 pub(crate) fn centre(b: &Board, ref_pin: &str) -> P {
     let (r, pin) = ref_pin.split_once('.').unwrap_or_default();
-    let cs: Vec<P> = b
-        .parts
-        .get(r)
-        .map(|p| {
-            p.pads
-                .iter()
-                .map(|&i| &b.pads[i])
-                .filter(|p| p.pin == pin)
-                .map(|p| p.centre)
-                .collect()
-        })
-        .unwrap_or_default();
+    let cs: Vec<P> = b.parts.get(r).map(|p| p.pads.iter().map(|&i| &b.pads[i]).filter(|p| p.pin == pin).map(|p| p.centre).collect()).unwrap_or_default();
     let n = cs.len().max(1) as f64;
-    cs.iter()
-        .fold([0.0, 0.0], |s, c| geom::add(s, geom::scale(*c, 1.0 / n)))
+    cs.iter().fold([0.0, 0.0], |s, c| geom::add(s, geom::scale(*c, 1.0 / n)))
 }
 
 /// A loop of copper legs `(net, from, to)`, each the shortest copper path, consecutive legs
@@ -213,16 +178,7 @@ pub(crate) fn legs_loop(b: &Board, legs: &[(&str, &str, &str)]) -> (Vec<P>, bool
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn measurement(
-    block: &str,
-    check: &'static str,
-    nets: &[&str],
-    location: P,
-    measured: f64,
-    unit: &'static str,
-    fix: FixStage,
-    method: &str,
-) -> Measurement {
+pub(crate) fn measurement(block: &str, check: &'static str, nets: &[&str], location: P, measured: f64, unit: &'static str, fix: FixStage, method: &str) -> Measurement {
     Measurement {
         check,
         block: block.to_string(),
@@ -238,85 +194,33 @@ pub(crate) fn measurement(
 }
 
 pub(crate) fn routed_note(routed: bool, how: &str) -> String {
-    if routed {
-        how.to_string()
-    } else {
-        "pad centres: a leg is unrouted".to_string()
-    }
+    if routed { how.to_string() } else { "pad centres: a leg is unrouted".to_string() }
 }
 
-pub fn check(
-    board: &Board,
-    block: &str,
-    roles: &BridgeRoles,
-    limits: &BTreeMap<String, Limit>,
-) -> Result<BridgeReport, String> {
-    let (hs, ls, cbus) = (
-        pads(board, &roles.hs)?,
-        pads(board, &roles.ls)?,
-        pads(board, &roles.cbus)?,
-    );
+pub fn check(board: &Board, block: &str, roles: &BridgeRoles, limits: &BTreeMap<String, Limit>) -> Result<BridgeReport, String> {
+    let (hs, ls, cbus) = (pads(board, &roles.hs)?, pads(board, &roles.ls)?, pads(board, &roles.cbus)?);
     if cbus.len() != 2 {
-        return Err(format!(
-            "bus capacitor {} has {} pads",
-            roles.cbus,
-            cbus.len()
-        ));
+        return Err(format!("bus capacitor {} has {} pads", roles.cbus, cbus.len()));
     }
     // The bus is the capacitor's net the high side is on; ground is its other.
-    let (bus, gnd) = match (
-        hs.iter().any(|p| p.net == cbus[0].net),
-        hs.iter().any(|p| p.net == cbus[1].net),
-    ) {
+    let (bus, gnd) = match (hs.iter().any(|p| p.net == cbus[0].net), hs.iter().any(|p| p.net == cbus[1].net)) {
         (true, false) => (cbus[0].net.clone(), cbus[1].net.clone()),
         (false, true) => (cbus[1].net.clone(), cbus[0].net.clone()),
-        _ => {
-            return Err(format!(
-                "{} is not across {}'s drain and {}'s source",
-                roles.cbus, roles.hs, roles.ls
-            ))
-        }
+        _ => return Err(format!("{} is not across {}'s drain and {}'s source", roles.cbus, roles.hs, roles.ls)),
     };
     if !ls.iter().any(|p| p.net == gnd) {
-        return Err(format!(
-            "{}'s source is not on {gnd}, the bus capacitor's other side",
-            roles.ls
-        ));
+        return Err(format!("{}'s source is not on {gnd}, the bus capacitor's other side", roles.ls));
     }
-    let phase = hs
-        .iter()
-        .map(|p| p.net.clone())
-        .find(|n| *n != bus && ls.iter().any(|q| q.net == *n))
-        .ok_or_else(|| format!("{} and {} share no phase node", roles.hs, roles.ls))?;
-    let gate_of = |fet: &[&Pad], skip: [&str; 2], who: &str| {
-        fet.iter()
-            .map(|p| p.net.clone())
-            .find(|n| !skip.contains(&n.as_str()))
-            .ok_or_else(|| format!("{who} has no gate pad"))
-    };
+    let phase = hs.iter().map(|p| p.net.clone()).find(|n| *n != bus && ls.iter().any(|q| q.net == *n)).ok_or_else(|| format!("{} and {} share no phase node", roles.hs, roles.ls))?;
+    let gate_of = |fet: &[&Pad], skip: [&str; 2], who: &str| fet.iter().map(|p| p.net.clone()).find(|n| !skip.contains(&n.as_str())).ok_or_else(|| format!("{who} has no gate pad"));
     let hs_gate = gate_of(&hs, [&bus, &phase], &roles.hs)?;
     let ls_gate = gate_of(&ls, [&gnd, &phase], &roles.ls)?;
-    let nets = BridgeNets {
-        bus: bus.clone(),
-        phase: phase.clone(),
-        gnd: gnd.clone(),
-        hs_gate: hs_gate.clone(),
-        ls_gate: ls_gate.clone(),
-    };
+    let nets = BridgeNets { bus: bus.clone(), phase: phase.clone(), gnd: gnd.clone(), hs_gate: hs_gate.clone(), ls_gate: ls_gate.clone() };
 
-    let (ho, lo, vs, vb, com, vcc) = (
-        pad(board, &roles.ho)?,
-        pad(board, &roles.lo)?,
-        pad(board, &roles.vs)?,
-        pad(board, &roles.vb)?,
-        pad(board, &roles.com)?,
-        pad(board, &roles.vcc)?,
-    );
+    let (ho, lo, vs, vb, com, vcc) =
+        (pad(board, &roles.ho)?, pad(board, &roles.lo)?, pad(board, &roles.vs)?, pad(board, &roles.vb)?, pad(board, &roles.com)?, pad(board, &roles.vcc)?);
     if vs.net != phase {
-        return Err(format!(
-            "{} (VS) is on {}, not the phase node {phase}",
-            roles.vs, vs.net
-        ));
+        return Err(format!("{} (VS) is on {}, not the phase node {phase}", roles.vs, vs.net));
     }
     let rgh = match &roles.rgh {
         Some(r) => r.clone(),
@@ -332,137 +236,38 @@ pub fn check(
     };
 
     let p = |part: &str, net: &str| pin_on(board, part, net);
-    let (hs_d, hs_s, hs_g) = (
-        p(&roles.hs, &bus)?,
-        p(&roles.hs, &phase)?,
-        p(&roles.hs, &hs_gate)?,
-    );
-    let (ls_d, ls_s, ls_g) = (
-        p(&roles.ls, &phase)?,
-        p(&roles.ls, &gnd)?,
-        p(&roles.ls, &ls_gate)?,
-    );
+    let (hs_d, hs_s, hs_g) = (p(&roles.hs, &bus)?, p(&roles.hs, &phase)?, p(&roles.hs, &hs_gate)?);
+    let (ls_d, ls_s, ls_g) = (p(&roles.ls, &phase)?, p(&roles.ls, &gnd)?, p(&roles.ls, &ls_gate)?);
     let (cb_p, cb_n) = (p(&roles.cbus, &bus)?, p(&roles.cbus, &gnd)?);
 
     let mut out = Vec::new();
-    let mut geo = BridgeGeometry {
-        rgh: rgh.clone(),
-        rgl: rgl.clone(),
-        cboot: cboot.clone(),
-        ..Default::default()
-    };
+    let mut geo = BridgeGeometry { rgh: rgh.clone(), rgl: rgl.clone(), cboot: cboot.clone(), ..Default::default() };
 
     // Commutation loop.
-    let (hot, routed, _) = legs_loop(
-        board,
-        &[
-            (&bus, &cb_p, &hs_d),
-            (&phase, &hs_s, &ls_d),
-            (&gnd, &ls_s, &cb_n),
-        ],
-    );
+    let (hot, routed, _) = legs_loop(board, &[(&bus, &cb_p, &hs_d), (&phase, &hs_s, &ls_d), (&gnd, &ls_s, &cb_n)]);
     let how = routed_note(routed, "copper paths on the bus, phase and ground nets, joined through the bus capacitor and each switch");
-    out.push(measurement(
-        block,
-        "hot_loop_area_mm2",
-        &[&bus, &phase, &gnd],
-        geom::centroid(&hot),
-        geom::loop_area(&hot, 400),
-        "mm2",
-        FixStage::Block,
-        &how,
-    ));
-    let placed: Vec<P> = [&cb_p, &hs_d, &hs_s, &ls_d, &ls_s, &cb_n]
-        .iter()
-        .map(|r| centre(board, r))
-        .collect();
-    out.push(measurement(
-        block,
-        "hot_loop_area_placed_mm2",
-        &[&bus, &phase, &gnd],
-        geom::centroid(&placed),
-        geom::loop_area(&placed, 400),
-        "mm2",
-        FixStage::Floorplan,
-        "pad centres (a pin's pads averaged)",
-    ));
+    out.push(measurement(block, "hot_loop_area_mm2", &[&bus, &phase, &gnd], geom::centroid(&hot), geom::loop_area(&hot, 400), "mm2", FixStage::Block, &how));
+    let placed: Vec<P> = [&cb_p, &hs_d, &hs_s, &ls_d, &ls_s, &cb_n].iter().map(|r| centre(board, r)).collect();
+    out.push(measurement(block, "hot_loop_area_placed_mm2", &[&bus, &phase, &gnd], geom::centroid(&placed), geom::loop_area(&placed, 400), "mm2", FixStage::Floorplan, "pad centres (a pin's pads averaged)"));
     geo.hot_loop = hot;
     geo.routed = routed;
 
     let (phase_link, routed_p, phase_len) = legs_loop(board, &[(&phase, &hs_s, &ls_d)]);
-    out.push(measurement(
-        block,
-        "phase_path_mm",
-        &[&phase],
-        geom::centroid(&phase_link),
-        phase_len,
-        "mm",
-        FixStage::Block,
-        &routed_note(
-            routed_p,
-            "shortest copper path, high-side source pads to low-side drain pads",
-        ),
-    ));
+    out.push(measurement(block, "phase_path_mm", &[&phase], geom::centroid(&phase_link), phase_len, "mm", FixStage::Block, &routed_note(routed_p, "shortest copper path, high-side source pads to low-side drain pads")));
 
     // Gate loops: out through the resistor, back from the source to the driver's return.
     for (check, path_check, out_pin, r, gate_net, gate_pin, src, ret_net, ret_pin, is_hs) in [
-        (
-            "hs_gate_loop_area_mm2",
-            "hs_gate_path_mm",
-            &roles.ho,
-            &rgh,
-            &hs_gate,
-            &hs_g,
-            &hs_s,
-            &phase,
-            &roles.vs,
-            true,
-        ),
-        (
-            "ls_gate_loop_area_mm2",
-            "ls_gate_path_mm",
-            &roles.lo,
-            &rgl,
-            &ls_gate,
-            &ls_g,
-            &ls_s,
-            &gnd,
-            &roles.com,
-            false,
-        ),
+        ("hs_gate_loop_area_mm2", "hs_gate_path_mm", &roles.ho, &rgh, &hs_gate, &hs_g, &hs_s, &phase, &roles.vs, true),
+        ("ls_gate_loop_area_mm2", "ls_gate_path_mm", &roles.lo, &rgl, &ls_gate, &ls_g, &ls_s, &gnd, &roles.com, false),
     ] {
         let drive_net = &pad(board, out_pin)?.net;
         let (r_in, r_out) = (p(r, drive_net)?, p(r, gate_net)?);
-        let (fwd, routed_f, fwd_len) = legs_loop(
-            board,
-            &[(drive_net, out_pin, &r_in), (gate_net, &r_out, gate_pin)],
-        );
+        let (fwd, routed_f, fwd_len) = legs_loop(board, &[(drive_net, out_pin, &r_in), (gate_net, &r_out, gate_pin)]);
         let (ret, _, _) = legs_loop(board, &[(ret_net, src, ret_pin)]);
         let lp: Vec<P> = fwd.iter().chain(ret.iter()).copied().collect();
         let how = routed_note(routed_f, "copper from the driver pin through the gate resistor to the gate, back from the source to the driver's return pin");
-        out.push(measurement(
-            block,
-            check,
-            &[drive_net, gate_net, ret_net],
-            geom::centroid(&lp),
-            geom::loop_area(&lp, 400),
-            "mm2",
-            FixStage::Block,
-            &how,
-        ));
-        out.push(measurement(
-            block,
-            path_check,
-            &[drive_net, gate_net],
-            centre(board, gate_pin),
-            fwd_len,
-            "mm",
-            FixStage::Block,
-            &routed_note(
-                routed_f,
-                "copper, driver pin to gate pad, through the gate resistor",
-            ),
-        ));
+        out.push(measurement(block, check, &[drive_net, gate_net, ret_net], geom::centroid(&lp), geom::loop_area(&lp, 400), "mm2", FixStage::Block, &how));
+        out.push(measurement(block, path_check, &[drive_net, gate_net], centre(board, gate_pin), fwd_len, "mm", FixStage::Block, &routed_note(routed_f, "copper, driver pin to gate pad, through the gate resistor")));
         if is_hs {
             geo.hs_gate_loop = lp;
         } else {
@@ -472,68 +277,26 @@ pub fn check(
 
     // Bootstrap.
     let (cb_vb, cb_vs) = (p(&cboot, &vb.net)?, p(&cboot, &phase)?);
-    let (boot, routed_b, boot_len) = legs_loop(
-        board,
-        &[(&vb.net, &roles.vb, &cb_vb), (&phase, &cb_vs, &roles.vs)],
-    );
+    let (boot, routed_b, boot_len) = legs_loop(board, &[(&vb.net, &roles.vb, &cb_vb), (&phase, &cb_vs, &roles.vs)]);
     let how = routed_note(routed_b, "copper VB → bootstrap capacitor → VS");
-    out.push(measurement(
-        block,
-        "bootstrap_loop_area_mm2",
-        &[&vb.net, &phase],
-        geom::centroid(&boot),
-        geom::loop_area(&boot, 400),
-        "mm2",
-        FixStage::Block,
-        &how,
-    ));
-    out.push(measurement(
-        block,
-        "bootstrap_path_mm",
-        &[&vb.net, &phase],
-        vb.centre,
-        boot_len,
-        "mm",
-        FixStage::Block,
-        &how,
-    ));
+    out.push(measurement(block, "bootstrap_loop_area_mm2", &[&vb.net, &phase], geom::centroid(&boot), geom::loop_area(&boot, 400), "mm2", FixStage::Block, &how));
+    out.push(measurement(block, "bootstrap_path_mm", &[&vb.net, &phase], vb.centre, boot_len, "mm", FixStage::Block, &how));
     geo.bootstrap_loop = boot;
 
     // Driver supply.
     let driver = roles.vcc.split_once('.').map_or("", |(r, _)| r);
     let dec = crate::nets::decoupling(board, driver, std::slice::from_ref(&vcc.net), &com.net)?;
-    if let Some(d) = dec
-        .iter()
-        .find(|d| d.pin == roles.vcc.split_once('.').map_or("", |(_, p)| p))
-    {
+    if let Some(d) = dec.iter().find(|d| d.pin == roles.vcc.split_once('.').map_or("", |(_, p)| p)) {
         if let (Some(c), Some(len)) = (&d.cap, d.length_mm) {
             geo.cvcc = Some(c.clone());
-            out.push(measurement(
-                block,
-                "driver_supply_path_mm",
-                &[&vcc.net],
-                vcc.centre,
-                len,
-                "mm",
-                FixStage::Block,
-                &format!(
-                    "copper, VCC pin to {c}, the nearest capacitor to {} along it",
-                    com.net
-                ),
-            ));
+            out.push(measurement(block, "driver_supply_path_mm", &[&vcc.net], vcc.centre, len, "mm", FixStage::Block, &format!("copper, VCC pin to {c}, the nearest capacitor to {} along it", com.net)));
         }
     }
 
     for x in &mut out {
         x.judge(limits.get(x.check).copied());
     }
-    Ok(BridgeReport {
-        block: block.into(),
-        roles: roles.clone(),
-        nets,
-        measurements: out,
-        geometry: geo,
-    })
+    Ok(BridgeReport { block: block.into(), roles: roles.clone(), nets, measurements: out, geometry: geo })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -548,22 +311,11 @@ pub struct SenseRoles {
 
 impl SenseRoles {
     pub fn from_map(m: &BTreeMap<String, String>) -> Result<SenseRoles, String> {
-        let get = |k: &str| {
-            m.get(k)
-                .cloned()
-                .ok_or_else(|| format!("current-sense role `{k}` is not given"))
-        };
-        if let Some(k) = m
-            .keys()
-            .find(|k| !["inp", "inn", "shunt"].contains(&k.as_str()))
-        {
+        let get = |k: &str| m.get(k).cloned().ok_or_else(|| format!("current-sense role `{k}` is not given"));
+        if let Some(k) = m.keys().find(|k| !["inp", "inn", "shunt"].contains(&k.as_str())) {
             return Err(format!("`{k}` is not a current-sense role"));
         }
-        Ok(SenseRoles {
-            inp: get("inp")?,
-            inn: get("inn")?,
-            shunt: get("shunt")?.split('+').map(str::to_string).collect(),
-        })
+        Ok(SenseRoles { inp: get("inp")?, inn: get("inn")?, shunt: get("shunt")?.split('+').map(str::to_string).collect() })
     }
 
     pub fn amp(&self) -> &str {
@@ -593,13 +345,7 @@ pub struct SenseReport {
 /// Where a sense path first meets copper carrying the load current, and how far that is from
 /// the nearest pad of `targets` (0 on the pad). Load copper is a fill of `net`, or a pad of any
 /// part but the `quiet` ones (the sensing IC and what hangs off its pin), on the path's layer.
-pub(crate) fn kelvin_tap(
-    board: &Board,
-    path: &board::pcb::graph::Path,
-    net: &str,
-    quiet: &[&str],
-    targets: &[&str],
-) -> (P, f64) {
+pub(crate) fn kelvin_tap(board: &Board, path: &board::pcb::graph::Path, net: &str, quiet: &[&str], targets: &[&str]) -> (P, f64) {
     let target_shapes: Vec<&Vec<P>> = targets
         .iter()
         .filter_map(|t| board.parts.get(*t))
@@ -608,16 +354,8 @@ pub(crate) fn kelvin_tap(
         .flat_map(|p| p.shape.iter())
         .collect();
     let loaded = |q: P, layer: &str| {
-        board
-            .fills
-            .iter()
-            .any(|f| f.net == net && f.layer == layer && geom::inside(&f.polygon, q))
-            || board.pads.iter().any(|p| {
-                p.net == net
-                    && !quiet.contains(&p.part.as_str())
-                    && p.layers.iter().any(|l| l == layer)
-                    && p.shape.iter().any(|s| geom::inside(s, q))
-            })
+        board.fills.iter().any(|f| f.net == net && f.layer == layer && geom::inside(&f.polygon, q))
+            || board.pads.iter().any(|p| p.net == net && !quiet.contains(&p.part.as_str()) && p.layers.iter().any(|l| l == layer) && p.shape.iter().any(|s| geom::inside(s, q)))
     };
     let mut tap = *path.points.last().unwrap();
     'walk: for w in 0..path.points.len().saturating_sub(1) {
@@ -634,41 +372,21 @@ pub(crate) fn kelvin_tap(
             }
         }
     }
-    let offset = target_shapes
-        .iter()
-        .map(|s| {
-            if geom::inside(s, tap) {
-                0.0
-            } else {
-                geom::point_poly_dist(tap, s)
-            }
-        })
-        .fold(f64::INFINITY, f64::min);
+    let offset = target_shapes.iter().map(|s| if geom::inside(s, tap) { 0.0 } else { geom::point_poly_dist(tap, s) }).fold(f64::INFINITY, f64::min);
     (tap, offset)
 }
 
-pub fn sense(
-    board: &Board,
-    block: &str,
-    roles: &SenseRoles,
-    limits: &BTreeMap<String, Limit>,
-) -> Result<SenseReport, String> {
+pub fn sense(board: &Board, block: &str, roles: &SenseRoles, limits: &BTreeMap<String, Limit>) -> Result<SenseReport, String> {
     let (inp, inn) = (pad(board, &roles.inp)?, pad(board, &roles.inn)?);
     let amp = roles.amp();
     for s in &roles.shunt {
         let n: Vec<&str> = pads(board, s)?.iter().map(|p| p.net.as_str()).collect();
         if !(n.contains(&inp.net.as_str()) && n.contains(&inn.net.as_str())) {
-            return Err(format!(
-                "shunt {s} is not across {} ({}) and {} ({})",
-                roles.inp, inp.net, roles.inn, inn.net
-            ));
+            return Err(format!("shunt {s} is not across {} ({}) and {} ({})", roles.inp, inp.net, roles.inn, inn.net));
         }
     }
     let mut out = Vec::new();
-    let mut geo = SenseGeometry {
-        routed: true,
-        ..Default::default()
-    };
+    let mut geo = SenseGeometry { routed: true, ..Default::default() };
     let mut legs: Vec<(Vec<P>, String)> = Vec::new();
     for (side, input) in [("pos", inp), ("neg", inn)] {
         let from = format!("{amp}.{}", input.pin);
@@ -686,42 +404,15 @@ pub fn sense(
                 let to = pin_on(board, &roles.shunt[0], &input.net)?;
                 let pts = vec![input.centre, centre(board, &to)];
                 let layer = input.layers.first().cloned().unwrap_or_default();
-                (
-                    to,
-                    board::pcb::graph::Path {
-                        length: geom::dist(pts[0], pts[1]),
-                        points: pts,
-                        layers: vec![layer.clone(), layer],
-                    },
-                )
+                (to, board::pcb::graph::Path { length: geom::dist(pts[0], pts[1]), points: pts, layers: vec![layer.clone(), layer] })
             }
         };
-        let check_path = if side == "pos" {
-            "sense_path_pos_mm"
-        } else {
-            "sense_path_neg_mm"
-        };
-        out.push(measurement(
-            block,
-            check_path,
-            &[&input.net],
-            input.centre,
-            path.length,
-            "mm",
-            FixStage::Block,
-            &routed_note(
-                geo.routed,
-                "copper, amplifier input to the nearest shunt pad",
-            ),
-        ));
+        let check_path = if side == "pos" { "sense_path_pos_mm" } else { "sense_path_neg_mm" };
+        out.push(measurement(block, check_path, &[&input.net], input.centre, path.length, "mm", FixStage::Block, &routed_note(geo.routed, "copper, amplifier input to the nearest shunt pad")));
 
         let shunts: Vec<&str> = roles.shunt.iter().map(String::as_str).collect();
         let (tap, offset) = kelvin_tap(board, &path, &input.net, &[amp], &shunts);
-        let check_tap = if side == "pos" {
-            "kelvin_offset_pos_mm"
-        } else {
-            "kelvin_offset_neg_mm"
-        };
+        let check_tap = if side == "pos" { "kelvin_offset_pos_mm" } else { "kelvin_offset_neg_mm" };
         out.push(measurement(
             block,
             check_tap,
@@ -747,22 +438,13 @@ pub fn sense(
         geom::loop_area(&lp, 400),
         "mm2",
         FixStage::Route,
-        &routed_note(
-            geo.routed,
-            "copper of both inputs to the shunt, closed across the shunt and the amplifier",
-        ),
+        &routed_note(geo.routed, "copper of both inputs to the shunt, closed across the shunt and the amplifier"),
     ));
     geo.loop_ = lp;
     for x in &mut out {
         x.judge(limits.get(x.check).copied());
     }
-    Ok(SenseReport {
-        block: block.into(),
-        roles: roles.clone(),
-        nets: [inp.net.clone(), inn.net.clone()],
-        measurements: out,
-        geometry: geo,
-    })
+    Ok(SenseReport { block: block.into(), roles: roles.clone(), nets: [inp.net.clone(), inn.net.clone()], measurements: out, geometry: geo })
 }
 
 #[cfg(test)]
@@ -804,60 +486,17 @@ mod tests {
             vec![track("VCC", [10.0, 6.0], [12.0, 6.0])],
             vec![],
         );
-        let roles: BTreeMap<String, String> = [
-            ("hs", "Q1"),
-            ("ls", "Q2"),
-            ("cbus", "C1"),
-            ("ho", "U1.7"),
-            ("lo", "U1.5"),
-            ("vs", "U1.6"),
-            ("vb", "U1.8"),
-            ("com", "U1.4"),
-            ("vcc", "U1.1"),
-        ]
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect();
-        let r = check(
-            &b,
-            "hb",
-            &BridgeRoles::from_map(&roles).unwrap(),
-            &BTreeMap::new(),
-        )
-        .unwrap();
-        assert_eq!(
-            (
-                r.nets.bus.as_str(),
-                r.nets.phase.as_str(),
-                r.nets.gnd.as_str()
-            ),
-            ("VM", "PH", "GND")
-        );
-        assert_eq!(
-            (
-                r.geometry.rgh.as_str(),
-                r.geometry.rgl.as_str(),
-                r.geometry.cboot.as_str()
-            ),
-            ("R1", "R2", "C2")
-        );
-        let m = |c: &str| {
-            r.measurements
+        let roles: BTreeMap<String, String> =
+            [("hs", "Q1"), ("ls", "Q2"), ("cbus", "C1"), ("ho", "U1.7"), ("lo", "U1.5"), ("vs", "U1.6"), ("vb", "U1.8"), ("com", "U1.4"), ("vcc", "U1.1")]
                 .iter()
-                .find(|m| m.check == c)
-                .unwrap()
-                .measured
-        };
-        assert!(
-            (m("hot_loop_area_placed_mm2") - 16.0).abs() < 0.2,
-            "{}",
-            m("hot_loop_area_placed_mm2")
-        );
-        assert!(
-            (m("hot_loop_area_mm2") - 16.0).abs() < 0.2,
-            "{}",
-            m("hot_loop_area_mm2")
-        );
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+        let r = check(&b, "hb", &BridgeRoles::from_map(&roles).unwrap(), &BTreeMap::new()).unwrap();
+        assert_eq!((r.nets.bus.as_str(), r.nets.phase.as_str(), r.nets.gnd.as_str()), ("VM", "PH", "GND"));
+        assert_eq!((r.geometry.rgh.as_str(), r.geometry.rgl.as_str(), r.geometry.cboot.as_str()), ("R1", "R2", "C2"));
+        let m = |c: &str| r.measurements.iter().find(|m| m.check == c).unwrap().measured;
+        assert!((m("hot_loop_area_placed_mm2") - 16.0).abs() < 0.2, "{}", m("hot_loop_area_placed_mm2"));
+        assert!((m("hot_loop_area_mm2") - 16.0).abs() < 0.2, "{}", m("hot_loop_area_mm2"));
         assert!((m("driver_supply_path_mm") - 2.0).abs() < 1e-9);
         assert_eq!(r.geometry.cvcc.as_deref(), Some("C3"));
     }
@@ -865,53 +504,18 @@ mod tests {
     #[test]
     fn a_sense_line_into_the_pour_is_not_kelvin() {
         // + runs straight onto its shunt pad; − enters a fill of its net 1 mm before the pad.
-        let fill = Fill {
-            net: "N".into(),
-            layer: "F.Cu".into(),
-            polygon: vec![[5.0, -1.5], [7.0, -1.5], [7.0, 1.0], [5.0, 1.0]],
-        };
+        let fill = Fill { net: "N".into(), layer: "F.Cu".into(), polygon: vec![[5.0, -1.5], [7.0, -1.5], [7.0, 1.0], [5.0, 1.0]] };
         let b = board(
-            &[
-                ("U5", "8", "P", [0.0, -5.0]),
-                ("U5", "1", "N", [6.0, -5.0]),
-                ("RS", "2", "P", [0.0, 0.0]),
-                ("RS", "1", "N", [6.0, 0.0]),
-            ],
-            vec![
-                track("P", [0.0, -5.0], [0.0, 0.0]),
-                track("N", [6.0, -5.0], [6.0, 0.0]),
-            ],
+            &[("U5", "8", "P", [0.0, -5.0]), ("U5", "1", "N", [6.0, -5.0]), ("RS", "2", "P", [0.0, 0.0]), ("RS", "1", "N", [6.0, 0.0])],
+            vec![track("P", [0.0, -5.0], [0.0, 0.0]), track("N", [6.0, -5.0], [6.0, 0.0])],
             vec![fill],
         );
-        let roles: BTreeMap<String, String> = [("inp", "U5.8"), ("inn", "U5.1"), ("shunt", "RS")]
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        let r = sense(
-            &b,
-            "s",
-            &SenseRoles::from_map(&roles).unwrap(),
-            &BTreeMap::new(),
-        )
-        .unwrap();
-        let m = |c: &str| {
-            r.measurements
-                .iter()
-                .find(|m| m.check == c)
-                .unwrap()
-                .measured
-        };
+        let roles: BTreeMap<String, String> = [("inp", "U5.8"), ("inn", "U5.1"), ("shunt", "RS")].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let r = sense(&b, "s", &SenseRoles::from_map(&roles).unwrap(), &BTreeMap::new()).unwrap();
+        let m = |c: &str| r.measurements.iter().find(|m| m.check == c).unwrap().measured;
         assert_eq!(m("kelvin_offset_pos_mm"), 0.0);
-        assert!(
-            (m("kelvin_offset_neg_mm") - 1.0).abs() < 0.03,
-            "{}",
-            m("kelvin_offset_neg_mm")
-        );
+        assert!((m("kelvin_offset_neg_mm") - 1.0).abs() < 0.03, "{}", m("kelvin_offset_neg_mm"));
         assert!((m("sense_path_pos_mm") - 5.0).abs() < 1e-9);
-        assert!(
-            (m("sense_loop_area_mm2") - 30.0).abs() < 0.5,
-            "{}",
-            m("sense_loop_area_mm2")
-        );
+        assert!((m("sense_loop_area_mm2") - 30.0).abs() < 0.5, "{}", m("sense_loop_area_mm2"));
     }
 }

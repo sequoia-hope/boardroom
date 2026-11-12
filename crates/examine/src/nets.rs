@@ -28,8 +28,7 @@ pub fn path(board: &Board, from: &str, to: &str) -> Result<PathReport, String> {
     if a.net != b.net {
         return Err(format!("{from} is on {} and {to} on {}", a.net, b.net));
     }
-    let p = copper_path(board, &a.net, from, to)
-        .ok_or_else(|| format!("{from} and {to} are not joined by copper on {}", a.net))?;
+    let p = copper_path(board, &a.net, from, to).ok_or_else(|| format!("{from} and {to} are not joined by copper on {}", a.net))?;
     let vias = p.layers.windows(2).filter(|w| w[0] != w[1]).count();
     let mut layers: Vec<String> = Vec::new();
     for l in &p.layers {
@@ -37,14 +36,7 @@ pub fn path(board: &Board, from: &str, to: &str) -> Result<PathReport, String> {
             layers.push(l.clone());
         }
     }
-    Ok(PathReport {
-        from: from.into(),
-        to: to.into(),
-        net: a.net.clone(),
-        length_mm: p.length,
-        vias,
-        layers,
-    })
+    Ok(PathReport { from: from.into(), to: to.into(), net: a.net.clone(), length_mm: p.length, vias, layers })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -77,18 +69,11 @@ pub fn return_path(board: &Board, net: &str, ground: &str, step: f64) -> ReturnP
             if f.net == ground {
                 fills_by_layer.entry(l).or_default().push(&f.polygon);
             } else if f.net != net && !f.net.is_empty() {
-                others_by_layer
-                    .entry(l)
-                    .or_default()
-                    .push((&f.net, &f.polygon));
+                others_by_layer.entry(l).or_default().push((&f.net, &f.polygon));
             }
         }
     }
-    let neighbours = |layer: usize| {
-        [layer.checked_sub(1), Some(layer + 1)]
-            .into_iter()
-            .flatten()
-    };
+    let neighbours = |layer: usize| [layer.checked_sub(1), Some(layer + 1)].into_iter().flatten();
     let referenced = |layer: usize, p: P| -> bool {
         neighbours(layer)
             .filter_map(|n| fills_by_layer.get(&n))
@@ -107,20 +92,14 @@ pub fn return_path(board: &Board, net: &str, ground: &str, step: f64) -> ReturnP
         let (mut run, mut run_start) = (0.0, None);
         for i in 0..n {
             // Sample the middle of each step.
-            let p = geom::add(
-                t.a,
-                geom::scale(geom::sub(t.b, t.a), (i as f64 + 0.5) / n as f64),
-            );
+            let p = geom::add(t.a, geom::scale(geom::sub(t.b, t.a), (i as f64 + 0.5) / n as f64));
             if referenced(l, p) {
                 run = 0.0;
                 run_start = None;
             } else {
                 unreferenced_mm += len / n as f64;
                 layer[1] += len / n as f64;
-                let under = neighbours(l)
-                    .filter_map(|n| others_by_layer.get(&n))
-                    .flatten()
-                    .find(|(_, poly)| geom::inside(poly, p));
+                let under = neighbours(l).filter_map(|n| others_by_layer.get(&n)).flatten().find(|(_, poly)| geom::inside(poly, p));
                 if let Some((other, _)) = under {
                     *over_other.entry(other.to_string()).or_default() += len / n as f64;
                 }
@@ -133,16 +112,7 @@ pub fn return_path(board: &Board, net: &str, ground: &str, step: f64) -> ReturnP
             }
         }
     }
-    ReturnPathReport {
-        net: net.into(),
-        ground: ground.into(),
-        track_mm,
-        unreferenced_mm,
-        worst_at,
-        worst_mm,
-        by_layer,
-        over_other,
-    }
+    ReturnPathReport { net: net.into(), ground: ground.into(), track_mm, unreferenced_mm, worst_at, worst_mm, by_layer, over_other }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -161,29 +131,13 @@ pub struct DecouplingReport {
 /// For each pad of `part` on one of `nets`, the nearest capacitor (a two-pad part whose
 /// reference starts with `C`, with one pad on that net and the other on `ground`) along the
 /// copper.
-pub fn decoupling(
-    board: &Board,
-    part: &str,
-    nets: &[String],
-    ground: &str,
-) -> Result<Vec<DecouplingReport>, String> {
-    let ic = board
-        .parts
-        .get(part)
-        .ok_or_else(|| format!("no part {part}"))?;
+pub fn decoupling(board: &Board, part: &str, nets: &[String], ground: &str) -> Result<Vec<DecouplingReport>, String> {
+    let ic = board.parts.get(part).ok_or_else(|| format!("no part {part}"))?;
     let caps: Vec<(&str, BTreeMap<&str, &str>)> = board
         .parts
         .values()
         .filter(|p| p.reference.starts_with('C') && p.pads.len() == 2)
-        .map(|p| {
-            (
-                p.reference.as_str(),
-                p.pads
-                    .iter()
-                    .map(|&i| (board.pads[i].net.as_str(), board.pads[i].pin.as_str()))
-                    .collect(),
-            )
-        })
+        .map(|p| (p.reference.as_str(), p.pads.iter().map(|&i| (board.pads[i].net.as_str(), board.pads[i].pin.as_str())).collect()))
         .filter(|(_, by_net): &(&str, BTreeMap<&str, &str>)| by_net.contains_key(ground))
         .collect();
     let mut out = Vec::new();
@@ -195,11 +149,7 @@ pub fn decoupling(
         let from = format!("{part}.{}", pad.pin);
         let best = caps
             .iter()
-            .filter_map(|(c, by_net)| {
-                by_net
-                    .get(pad.net.as_str())
-                    .map(|pin| (*c, format!("{c}.{pin}")))
-            })
+            .filter_map(|(c, by_net)| by_net.get(pad.net.as_str()).map(|pin| (*c, format!("{c}.{pin}"))))
             .filter_map(|(c, to)| copper_path(board, &pad.net, &from, &to).map(|p| (c, p.length)))
             .min_by(|a, b| a.1.total_cmp(&b.1));
         out.push(DecouplingReport {
@@ -214,11 +164,7 @@ pub fn decoupling(
     // Several pads of one pin number (an exposed pad split in pieces) count once.
     out.dedup_by(|a, b| a.pin == b.pin);
     for k in 0..out.len() {
-        let shares: Vec<String> = out
-            .iter()
-            .filter(|o| o.pin != out[k].pin && o.cap.is_some() && o.cap == out[k].cap)
-            .map(|o| o.pin.clone())
-            .collect();
+        let shares: Vec<String> = out.iter().filter(|o| o.pin != out[k].pin && o.cap.is_some() && o.cap == out[k].cap).map(|o| o.pin.clone()).collect();
         out[k].shares_with = shares;
     }
     Ok(out)

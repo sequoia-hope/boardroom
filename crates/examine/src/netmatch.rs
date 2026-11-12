@@ -55,11 +55,7 @@ pub fn compare(netlist: &Netlist, board: &Board) -> NetMatch {
     }
     let (mut nets, mut same, mut apart) = (0, 0, Vec::new());
     for (name, net) in &netlist.nets {
-        let pads: BTreeSet<String> = net
-            .nodes
-            .iter()
-            .map(|n| format!("{}.{}", n.reference, n.pin))
-            .collect();
+        let pads: BTreeSet<String> = net.nodes.iter().map(|n| format!("{}.{}", n.reference, n.pin)).collect();
         if pads.len() < 2 {
             continue;
         }
@@ -86,21 +82,11 @@ pub fn compare(netlist: &Netlist, board: &Board) -> NetMatch {
             });
         }
     }
-    let share = if nets == 0 {
-        0.0
-    } else {
-        same as f64 / nets as f64
-    };
+    let share = if nets == 0 { 0.0 } else { same as f64 / nets as f64 };
     NetMatch {
         parts_both: on_board.intersection(&in_netlist).count(),
-        parts_only_on_board: on_board
-            .difference(&in_netlist)
-            .map(|s| s.to_string())
-            .collect(),
-        parts_only_in_netlist: in_netlist
-            .difference(&on_board)
-            .map(|s| s.to_string())
-            .collect(),
+        parts_only_on_board: on_board.difference(&in_netlist).map(|s| s.to_string()).collect(),
+        parts_only_in_netlist: in_netlist.difference(&on_board).map(|s| s.to_string()).collect(),
         nets,
         nets_same: same,
         nets_apart: apart,
@@ -136,20 +122,14 @@ mod tests {
 
     #[test]
     fn the_same_grouping_matches_whatever_the_nets_are_called() {
-        let m = compare(
-            &netlist("(node (ref R1) (pin 2)) (node (ref R2) (pin 1))"),
-            &Board::parse(BOARD).unwrap(),
-        );
+        let m = compare(&netlist("(node (ref R1) (pin 2)) (node (ref R2) (pin 1))"), &Board::parse(BOARD).unwrap());
         assert_eq!((m.nets, m.nets_same, m.matches), (2, 2, true));
         assert!(m.parts_only_on_board.is_empty() && m.parts_only_in_netlist.is_empty());
     }
 
     #[test]
     fn a_net_wired_otherwise_is_reported_with_its_pads() {
-        let m = compare(
-            &netlist("(node (ref R1) (pin 2)) (node (ref R3) (pin 1))"),
-            &Board::parse(BOARD).unwrap(),
-        );
+        let m = compare(&netlist("(node (ref R1) (pin 2)) (node (ref R3) (pin 1))"), &Board::parse(BOARD).unwrap());
         assert_eq!((m.nets, m.nets_same, m.matches), (2, 1, false));
         assert_eq!(m.nets_apart[0].missing, ["R3.1"]);
         assert_eq!(m.nets_apart[0].extra, ["R2.1"]);
