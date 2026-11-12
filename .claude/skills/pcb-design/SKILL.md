@@ -65,7 +65,7 @@ Detail for each phase lives in `references/`. Read the reference file for a phas
 | 2 | `references/schematic-style.md` |
 | 3 | `references/net-classes.md` |
 | 5 | `references/stackup-and-rules.md` |
-| 6 | `references/placement.md` |
+| 6 | `references/placement.md` (floorplan with Circuit Composer's `ccomp floorplan`) |
 | 7 | `references/routing.md` |
 | 8 | `references/simulation.md` |
 | 9 | `references/silkscreen-and-art.md` |

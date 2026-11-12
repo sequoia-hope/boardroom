@@ -18,6 +18,44 @@ Placement determines most of the board's quality. Good placement makes routing n
 
 **Follow the datasheet's layout guidelines** from each `parts/*.md`. If the datasheet shows a recommended layout, reproduce it.
 
+## Floorplanning with Circuit Composer
+
+Place with `ccomp floorplan` (Circuit Composer, `~/Software/circuit-composer`); its own skill,
+`circuit-composer`, has the details. It anneals every part's pose against wirelength, overlap,
+block cohesion, decoupler hints and the rules below, and reports whether they all hold (`ok`).
+Don't write a board-local placement script to work around something it can't express: write the
+need into `design/ccomp-requests.md` (what the board needs, what you'd ask for) and tell the
+user. Circuit Composer reads those requests.
+
+1. **Inputs.** The board's composition (`composed.json`, from `ccomp compose` or
+   `tools/compose_from_netlist.py`) and the KiCad board with every footprint on it. With a
+   project, `ccomp floorplan -C . -b BOARD` finds both from the board's `board.json`.
+2. **Write the spec (`floorplan.json`) from `brief.md`.** Each brief decision has a field:
+   - outline: `--outline-from-board` (Edge.Cuts), or `outline` / `outline_polygon`;
+   - mounting holes and connectors the mechanics fix: `fixed`, or lock them in KiCad (a locked
+     footprint stays put); edge connectors that only need an edge: `edges` with side and facing;
+   - bottom-side parts: `back`;
+   - the brief's block floorplan (§7): `regions`. A `must` region keeps its blocks' and parts'
+     courtyards inside a rectangle or polygon. A `never` region keeps them out, or keeps out
+     every moving part if it lists none, except what it `except`s (an isolation barrier with
+     its transformer straddling it). `side: "back"` binds only bottom parts (nothing under a
+     cooling plate). Coordinates are KiCad's board frame, y down, not a board-local origin;
+   - areas no part may cover (via fields, art, a hole's clearance): `keepouts`;
+   - aggressor/victim distances from the audits: `separations` between blocks;
+   - critical loops with fixed geometry (a regulator's hot loop, a half-bridge cell, a BGA's
+     decoupler field): `rigid` layouts. A regulator can be generated (`ccomp gen buck`). For
+     anything else, place the cluster once by its datasheet, review it, and lift it with
+     Circuit Composer's `tools/lift_layout.py BOARD --anchor U501 --parts ... -o DIR/layout.json`
+     (bottom-side members and their copper come too). The floorplanner then moves and turns it
+     as one, and `prepare_route.py` lays its copper, locked. Listing reviewed parts in `keep`
+     instead holds them where they are, unable to move.
+3. **Run it** with several `--seed`s (and `--placer analytic` for large boards). `ok` needs no
+   overlaps and no edge, separation or region misses; the misses are listed by part.
+   `--evaluate BOARD` scores a placement already on a board (a person's) on the same terms.
+4. **Apply** with Circuit Composer's `tools/apply_placement.py` (it runs KiCad's DRC), then do
+   the checks below and the visual review as for any placement. The floorplanner's metrics
+   have missed things before.
+
 ## Rules
 
 - **Never** place passives in a row, a grid, or any arrangement that is about tidiness rather than function. Every passive belongs to a pin.

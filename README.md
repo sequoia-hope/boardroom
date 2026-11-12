@@ -271,7 +271,9 @@ by `.github/workflows/pages.yml` from snapshots of the projects in `examples.tom
 | [`docs/shell-spec.md`](docs/shell-spec.md) | The Boardroom app, the project format, `status.json` v1, the vendored skill |
 | [`docs/demo-spec.md`](docs/demo-spec.md) | The whole workflow running on GitHub Pages |
 | [`docs/suite-spec.md`](docs/suite-spec.md) | Waffle Iron with Boardroom: linked projects, the shared outline, version tracking |
-| [`docs/monorepo-spec.md`](docs/monorepo-spec.md) | Merging Boardroom, Circuit Composer, pcbview and UltraRoute into one repo and one app, staged for Antigravity agents (draft) |
+| [`docs/kicad-extension-spec.md`](docs/kicad-extension-spec.md) | Boardroom for KiCad: a standalone package for KiCad users, selection both ways, routing into the open board (draft) |
+| [`docs/one-system-spec.md`](docs/one-system-spec.md) | **The migration under way:** Boardroom as one program with many crates (Projects, Compose, Route), the router rewritten here, no history import |
+| [`docs/monorepo-spec.md`](docs/monorepo-spec.md) | Superseded by `one-system-spec.md`; kept for its inventory of what existed |
 
 ## Updating pcbview and ultraroute
 
