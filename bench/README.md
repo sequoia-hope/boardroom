@@ -104,7 +104,12 @@ stops and says which is missing.
   filler never returns on a few: `truth.py` gives it files, no input and a time limit.
 - Look at the designer's board beside ours before quoting any number.
 
-Not yet done: the tiers were chosen on `processed` and need choosing again from full runs of the
-designers' boards (`pcbench.py tiers` now refuses to mix the two; only the gate tier is prepared
-from raw); the "sound" scoreboard; `pcbench.py run` with a router built here (there is none yet);
+The tiers are chosen on the designers' boards (2026-11-12, `pcbench.py tiers` over two full runs of
+the frozen router, `truth-full-a-9512c88` and `truth-full-b-9512c88`: 985 and 987 of the 1,574
+prepared boards clean; 981 clean in both, 583 in neither, 10 in one). Smoke 48 boards, focus 391
+(never clean), guard 240, noisy 10, gate 631 (focus and guard, about 8 core-hours). 20 of the
+corpus's 1,594 boards fail in pcbnew when prepared. The 314-board gate tier that the figures above
+were measured on is the old one, chosen on `processed`: they are not this gate tier's figures.
+
+Not yet done: the "sound" scoreboard; `pcbench.py run` with a router built here (there is none yet);
 `lab.py` has not been run from this directory.
