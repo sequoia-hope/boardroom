@@ -113,8 +113,8 @@ figcaption,.m{{color:#999;font-size:14px}}.bad{{color:#f88}}.none{{color:#777}}<
 <p><a href="../">← Review pages</a></p>
 <h1>Plan-then-draw prototype</h1>
 <p class="m">The new router's first two stages on the four smallest look boards. <b>The plan</b> (left): each layer's room is cut
-into triangles between the corners of the pads, holes and board edge; a triangle side between two obstacles is a gap, green to red
-by how full it is; each connection is a strand through the gaps it passes in order, pulled tight like a rubber band, and strands
+into triangles between the corners of the pads, holes and board edge; a triangle side between two obstacles is a gap, and one that is at
+least half full is drawn, amber to red at full; each connection is a strand through the gaps it passes in order, pulled tight like a rubber band, and strands
 never cross on a layer. <b>The plan drawn</b> (middle): each strand as the track with fewest bends, in 0/45/90, that crosses its
 gaps in their order and keeps its side of every obstacle and of the strands beside it; every wire is put to the exact checker as it
 is drawn and kept only if it passes. A dashed red line is a strand with no such path (or whose path the checker refused); a dashed yellow one a connection the plan has

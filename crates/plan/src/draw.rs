@@ -1,5 +1,5 @@
 //! The plan as a picture, one per layer: the board as a rubber-band sketch before any copper.
-//! Obstacles in grey, each gap a line coloured by how full it is (red at full), each strand a
+//! Obstacles in grey, each gap that is at least half full a line from amber to red at full, each strand a
 //! line through its crossings in its net's colour, what is left over as dashed red.
 
 use std::fmt::Write;
@@ -8,6 +8,9 @@ use board::Board;
 
 use crate::space::{What, P};
 use crate::Plan;
+
+/// A gap is drawn when its strands need at least this share of its room.
+const SHOWN: f64 = 0.5;
 
 const PALETTE: [&str; 10] = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#008080", "#9a6324", "#f032e6", "#808000", "#000075"];
 
@@ -57,19 +60,16 @@ pub fn layer(board: &Board, plan: &Plan, l: usize) -> String {
         if sides.len() < 2 || !sides.iter().all(|&t| sp.free(t)) {
             continue;
         }
-        // An empty edge to a via site no via took is only scaffolding: left out.
-        let scaffold = |v: usize| sp.vert_of[v].is_none_or(|o| sp.obstacles[o].what == What::Site);
-        if sheet.on[e].is_empty() && (scaffold(edge.v[0]) || scaffold(edge.v[1])) {
+        // Only a gap that is filling up is drawn: on an open board most triangle sides are
+        // long lines to the board's corners with a strand or two across them, and drawn they
+        // bury the strands.
+        let f = sheet.fill(board, e);
+        if f < SHOWN {
             continue;
         }
-        let f = sheet.fill(board, e);
-        let (colour, width) = if sheet.on[e].is_empty() {
-            ("#dcdcdc".to_string(), thin)
-        } else {
-            // Green when nearly empty, through amber, to red at full.
-            let t = f.clamp(0.0, 1.0);
-            (format!("rgb({:.0},{:.0},40)", 230.0 * (2.0 * t).min(1.0), 190.0 * (2.0 - 2.0 * t).min(1.0)), thin * 2.5)
-        };
+        // Amber at [`SHOWN`], to red at full.
+        let t = ((f - SHOWN) / (1.0 - SHOWN)).clamp(0.0, 1.0);
+        let (colour, width) = (format!("rgb(230,{:.0},40)", 170.0 * (1.0 - t)), thin * 2.5);
         let (a, b) = (sp.verts[edge.v[0]], sp.verts[edge.v[1]]);
         let _ = writeln!(s, "<path d='M{:.3} {:.3}L{:.3} {:.3}' stroke='{colour}' stroke-width='{width:.3}'/>", a[0], a[1], b[0], b[1]);
     }
