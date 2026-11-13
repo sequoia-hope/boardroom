@@ -21,7 +21,6 @@ fn main() {
     let started = std::time::Instant::now();
     let (plan, settled) = plan::settle(&board, &plan::plan(&board));
     let planned = started.elapsed().as_secs_f64();
-    let started = std::time::Instant::now();
     // WIRE_WATCH=LAYER:STRAND writes that strand's course as watch.svg.
     let watch = std::env::var("WIRE_WATCH").ok().and_then(|w| {
         let (l, s) = w.split_once(':')?;

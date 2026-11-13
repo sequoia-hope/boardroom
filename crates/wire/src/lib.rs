@@ -37,6 +37,8 @@ pub struct Undrawn {
     pub strand: usize,
     pub net: u32,
     pub why: String,
+    /// The path the checker refused, when one was found.
+    pub refused: Vec<P>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -220,12 +222,15 @@ impl Drawer<'_> {
                         for &p in &pts[1..pts.len() - 1] {
                             cons.push(Con { p, r, left: side, toward });
                         }
-                        // Where the other wire leaves the gap at a slant, its side is nearer
-                        // than its crossing point to a wire crossing beside it.
-                        let g = sub(next, x);
-                        let sn = cross(scale(g, 1.0 / len(g).max(1e-12)), along).abs();
-                        if sn > 1e-6 && r > 0.0 && own.is_none() {
-                            cons.push(Con { p: add(x, scale(along, r / sn)), r: 0.0, left: side, toward });
+                        // The wire crosses the gap itself no nearer the other than that: where
+                        // the other leaves the gap at a slant its side is nearer than its
+                        // crossing point, but only as far as that piece of it runs.
+                        if r > 0.0 && own.is_none() {
+                            let g = sub(next, x);
+                            let l = len(g).max(1e-12);
+                            let (cs, sn) = (dot(g, along) / l, (cross(g, along) / l).abs());
+                            let d = if cs > 1e-9 && sn > 1e-9 { (r / sn).min(l / cs).max(r) } else { r };
+                            cons.push(Con { p: add(x, scale(along, d.min(edge.len))), r: 0.0, left: side, toward });
                         }
                     }
                 }
@@ -296,7 +301,7 @@ impl Drawer<'_> {
         // the wire is free in the triangles they joined.
         let beside = |k: usize, o: usize| sheet.space.edges[c[k]].v.iter().any(|&v| sheet.space.vert_of[v] == Some(o));
         let lead = (1..=gaps).take_while(|&k| beside(k, from)).count();
-        let trail = (1..=gaps - lead).rev().take_while(|&k| k > lead && beside(k, to)).count();
+        let trail = (lead + 1..=gaps).rev().take_while(|&k| beside(k, to)).count();
         let last = gaps - trail;
         let n = last - lead + 1;
         let stage = |m: usize| m.saturating_sub(lead).min(n - 1);
@@ -395,7 +400,7 @@ pub fn draw_watching(board: &Board, plan: &Plan, watch: Option<(usize, usize)>) 
         for s in sheet.laid() {
             let strand = &sheet.strands[s];
             let Some((course, mut done)) = drawer.course(s) else {
-                drawing.undrawn.push(Undrawn { layer, strand: s, net: strand.net, why: "its gaps do not follow one another".to_string() });
+                drawing.undrawn.push(Undrawn { layer, strand: s, net: strand.net, why: "its gaps do not follow one another".to_string(), refused: Vec::new() });
                 continue;
             };
             let found = path::fewest_bends(&course);
@@ -417,7 +422,7 @@ pub fn draw_watching(board: &Board, plan: &Plan, watch: Option<(usize, usize)>) 
                         for id in ids {
                             work.remove(id);
                         }
-                        drawing.undrawn.push(Undrawn { layer, strand: s, net: strand.net, why: format!("the path found breaks a rule ({:?})", fault.rule) });
+                        drawing.undrawn.push(Undrawn { layer, strand: s, net: strand.net, why: format!("the path found breaks a rule ({:?})", fault.rule), refused: path.pts });
                         continue;
                     }
                     drawing.wires.push(Wire { layer, strand: s, net: strand.net, width: strand.width, pts: path.pts });
@@ -427,7 +432,7 @@ pub fn draw_watching(board: &Board, plan: &Plan, watch: Option<(usize, usize)>) 
                 Err(stuck) => {
                     let reached = stuck.reached;
                     let why = if reached == course.gaps.len() { "no way to end on the pad".to_string() } else { format!("no path in 0/45/90 past gap {} of {}", reached + 1, course.gaps.len()) };
-                    drawing.undrawn.push(Undrawn { layer, strand: s, net: strand.net, why });
+                    drawing.undrawn.push(Undrawn { layer, strand: s, net: strand.net, why, refused: Vec::new() });
                 }
             }
         }

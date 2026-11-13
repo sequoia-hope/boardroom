@@ -178,7 +178,12 @@ pub fn settle(board: &Board, plan: &Plan) -> (Plan, Settled) {
             there.sort_by(|a, b| a.0.total_cmp(&b.0));
             sheet.on[e] = there.into_iter().map(|(_, s, k)| (s, k)).collect();
         }
-        settled.overfull += (0..sheet.space.edges.len()).filter(|&e| sheet.need(board, e, None, None) > sheet.space.edges[e].len + EPS).count();
+        // A side of an obstacle is no gap: a strand that ends on a pad leaves by one.
+        let gap = |e: usize| {
+            let [a, b] = sheet.space.edges[e].v.map(|v| sheet.space.vert_of[v]);
+            a.is_none() || a != b
+        };
+        settled.overfull += (0..sheet.space.edges.len()).filter(|&e| gap(e) && sheet.need(board, e, None, None) > sheet.space.edges[e].len + EPS).count();
         sheets.push(sheet);
     }
     (Plan { sheets, planes: plan.planes.clone(), vias, left: plan.left.clone() }, settled)

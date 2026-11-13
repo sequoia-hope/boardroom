@@ -117,14 +117,15 @@ into triangles between the corners of the pads, holes and board edge; a triangle
 by how full it is; each connection is a strand through the gaps it passes in order, pulled tight like a rubber band, and strands
 never cross on a layer. <b>The plan drawn</b> (middle): each strand as the track with fewest bends, in 0/45/90, that crosses its
 gaps in their order and keeps its side of every obstacle and of the strands beside it; every wire is put to the exact checker as it
-is drawn and kept only if it passes. A dashed red line is a strand with no such path; a dashed yellow one a connection the plan has
+is drawn and kept only if it passes. A dashed red line is a strand with no such path (or whose path the checker refused); a dashed yellow one a connection the plan has
 no strand for. Nothing is mended afterwards.</p>
-<p class="m">Seen wrong so far. In the plan: a connection takes any way round, however long, before it takes a via; fine-pitch pads
-walled in by their neighbours' strands find no via site; ground and supply connections are planned as strands where the designer
-used a pour; the grid of via sites the planner searches with lets gaps hold more than their room, which shows once the unused sites
-are taken out. In the drawing: a strand between two that are already drawn often finds no path; a wire is held to the triangles of
-its strand and the ones beside them, which on a long thin triangle is less room than there is; the first wire of a bundle takes
-its own shape and the rest nest against it; wires are drawn in the plan's order, not the order that would suit them.</p>
+<p class="m">Seen wrong so far. In the plan: a connection takes any way round, however long, before it takes a via (the loops
+round the end of a pad row on the synthetic board, most of CAL430FR); fine-pitch pads walled in by their neighbours' strands find
+no via site; ground and supply connections are planned as strands where the designer used a pour. In the drawing: where the plan
+is direct the copper looks drawn by hand, and a bundle comes out nested at even pitch; a strand planned the long way round is drawn
+the long way round. A thin magenta line is a path the search found and the exact checker refused: the search holds a wire off the
+corners and wires beside its own gaps only, so near crowded pads it can pass too close to something it was never told of. Wires
+are drawn in the plan's order, each as late-turning as it may be, so the first of a bundle sets the shape for the rest.</p>
 {''.join(rows)}
 """
     OUT.mkdir(parents=True, exist_ok=True)

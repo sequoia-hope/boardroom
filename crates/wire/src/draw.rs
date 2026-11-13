@@ -1,5 +1,6 @@
 //! The drawing as a picture, one per layer: obstacles in grey, each wire at its width in its
-//! net's colour, the plan's vias as rings, a strand that was not drawn as a dashed red sketch,
+//! net's colour, the plan's vias as rings, a strand that was not drawn as a dashed red sketch
+//! (with the path the checker refused, if one was found, as a thin magenta line),
 //! and a red ring round each place the checker faults.
 
 use std::fmt::Write;
@@ -61,6 +62,9 @@ pub fn layer(board: &Board, plan: &Plan, drawing: &Drawing, l: usize, faults: &[
     }
     for u in drawing.undrawn.iter().filter(|u| u.layer == l) {
         let _ = writeln!(s, "<path d='{}' stroke='#d00' stroke-width='{:.3}' stroke-dasharray='{:.3} {:.3}'><title>{}: {}</title></path>", path(&sheet.sketch(board, u.strand), false), thin * 4.0, thin * 12.0, thin * 8.0, board.net_name(u.net), u.why);
+    }
+    for u in drawing.undrawn.iter().filter(|u| u.layer == l && !u.refused.is_empty()) {
+        let _ = writeln!(s, "<path d='{}' stroke='#f0f' stroke-width='{:.3}'><title>{}: {}</title></path>", path(&u.refused, false), thin * 2.0, board.net_name(u.net), u.why);
     }
     for left in &plan.left {
         let (Some(a), Some(b)) = (sp.ends.get(&plan::End::Item(left.from)), sp.ends.get(&plan::End::Item(left.to))) else { continue };
