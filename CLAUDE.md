@@ -10,6 +10,7 @@ This repository holds the Cargo workspace (`crates/`: `project`, a board project
 `server`, the HTTP server; `boardroom`, the one binary, whose commands are functions in
 `cli.rs`; `kicad`, the only reader and writer of KiCad files; `board`, the board model with the checker;
 `intent`, `recognise`, `library`, `interfaces` and `examine` (the judge, from Composer's verifier);
+`plan`, the new router's first stage, a prototype: each connection as a strand through the gaps between obstacles, before any copper;
 `scene`, plain drawing data and its mesh; `render`, a board as a scene, with the WebGL renderer in
 `crates/render/js`; `wasm`, the browser module, built by `web/scripts/wasm.sh`; `gtk`, the native
 window; `gpl/kicad-text`, the GPL text program that is run and never linked; `crates/boardroom/tests/layers.rs` enforces the spec's

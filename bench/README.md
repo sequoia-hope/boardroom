@@ -15,6 +15,7 @@ are what the `examine` crate grows from.
 | `refill_zones.py` | refill a board's zones through KiCad before DRC (our own fill is a preview) |
 | `lookset.py`, `lookset.json` | the designer's board beside ours, as pages to look at |
 | `scoreboard.py` | "like the designers": a `--source truth` run beside the designers' own boards, measured by `examine::designer::like` (angles in each neighbourhood's frame, track on the designers' planes, bundles, repeats) and `tidy.py` |
+| `prototype.py` | the plan-then-draw prototype (`crates/plan`) on the four small look boards: the plan as a rubber-band sketch beside the designer's board, per layer |
 | `pcbench_schematics.py` | survey and fetch the corpus boards' schematics and netlists |
 | `lab.py` | record an experiment in the lab |
 | `tidy.py`, `dfm.py`, `designer.py`, `netcheck.py` | the measures: tidiness, acute angles and slots, hot loops on a routed board, whether a designer routes a net within the rules |
@@ -89,9 +90,14 @@ stops and says which is missing.
 - **The designers' own boards mostly fail the judge** (`pcbench.py judge-truth --tier gate`): KiCad
   finds an error added by the routed copper on 225 of the 314 (edge clearance on 140, mask bridges
   on 67, starved thermals on 65, clearance on 55, hole clearance on 43, shorts on 35) and something
-  unconnected on 63. The rules are those KiCad wrote when it converted the old files (its defaults
-  where the file set none), which is probably why and has not been checked: until it is, "no new
-  error" asks more of a router than these rules asked of the designers.
+  unconnected on 63. Checked the same day: 310 of the 314 are KiCad 4 or 5 files, and on every
+  one the edge clearance (0.5 mm), hole clearance (0.25 mm), annular width (0.1 mm) and
+  two-spoke minimum are the defaults KiCad wrote when it converted them; those KiCads had no
+  such checks, nor the mask-bridge one. Only the clearance is the designer's (the file's own net
+  class). Leaving out the kinds their KiCad did not check, 75 of the designers' boards still
+  have an error (clearance on 55, shorts on 35, many of them against a footprint's own copper),
+  and the baseline is 252 of 314 clean, not 215: 35 of its failures are starved thermals alone.
+  The judge is unchanged (any new error fails); which count is the gate is the owner's to say.
 - The bare board's pours are filled (by KiCad, on the empty board): the frozen router reads planes
   from fills, and given outlines only it took none.
 - pcbnew hangs on some old boards when its output is a pipe or it has a console, and its zone

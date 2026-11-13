@@ -1,0 +1,16 @@
+[package]
+name = "plan"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The whole-board plan (docs/one-system-spec.md, docs/from-zero.md): before any copper, which
+# gaps between obstacles each connection passes, in what order, on which layer. A prototype.
+
+[dependencies]
+board = { path = "../board" }
+serde = { version = "1", features = ["derive"] }
+spade = "2.15"
+
+[dev-dependencies]
+serde_json = "1"
