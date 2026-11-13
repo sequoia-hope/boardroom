@@ -35,6 +35,18 @@ baselines (FreeRouting, PcbRouter, RL-MCTS; PCBench/Baselines/Results_all.csv).
                                              or a board gains an error type; with --exact, also
                                              when a board no deadline touched differs at all
     pcbench.py note RUN TEXT                 add a dated note to the run's run.json
+    pcbench.py judge-truth [--tier T | --only ID,...]
+                                             judge the designers' boards (truth.py prepare): the
+                                             bare board's errors, and what KiCad says of the
+                                             designer's own routing, whose unconnected count is
+                                             the board's floor
+
+Two sets of boards (`--source`, recorded in run.json; runs of different sources do not compare).
+`processed` is PCBench's cleaned board, stripped: no pours, and the pour nets to be routed as
+tracks. `truth` is the designer's board from the corpus's raw file with its tracks and vias
+removed and its pours kept (LAB/pcbench/truth/ID/bare.kicad_pcb): there a board succeeds when no
+more is unconnected than in the designer's own board (a pad the designer's pour does not reach is
+not the router's to connect) and it adds no error.
 
 A board succeeds when KiCad finds nothing unconnected after a zone refill and no DRC error that
 involves routed copper (a track, arc or via) of a type the bare board did not have as often: routed copper that breaks the board's own rules is a
@@ -114,7 +126,36 @@ def variants():
     return apply_variant.variants() if apply_variant.VARIANTS.exists() else {}
 
 
-def board_ids(only=None):
+# The two sets of boards: where each board's files are, and the file a router is given.
+SOURCES = {"processed": ("boards", "board.kicad_pcb"), "truth": ("truth", "bare.kicad_pcb")}
+
+
+def boards_dir(source):
+    return HOME / SOURCES[source][0]
+
+
+def source_of(run_dir, _seen={}):
+    """The set of boards a run was routed from (run.json; runs before 2026-11-12 are `processed`)."""
+    if run_dir not in _seen:
+        meta = run_dir / "run.json"
+        _seen[run_dir] = (json.loads(meta.read_text()) if meta.exists() else {}).get("source", "processed")
+    return _seen[run_dir]
+
+
+def floor_of(source, b):
+    """The unconnected count a route of this board is allowed: the designer's own on `truth`
+    (None when KiCad could not judge the designer's board), 0 on `processed`."""
+    if source != "truth":
+        return 0
+    f = boards_dir(source) / b / "designer.json"
+    return json.loads(f.read_text()).get("unconnected") if f.exists() else None
+
+
+def board_ids(only=None, source="processed"):
+    if source == "truth":
+        # Our variants are patches to `processed` boards: there are none of the designers' boards.
+        ids = sorted(d.name for d in boards_dir(source).iterdir() if (d / "bare.kicad_pcb").exists()) if boards_dir(source).is_dir() else []
+        return [b for b in ids if b in set(only.split(","))] if only else ids
     ids = [b for b in baselines() if (BENCH / "PCBs" / b / "processed.kicad_pcb").exists()]
     ids += sorted(k for k, v in variants().items() if (BENCH / "PCBs" / v["base"] / "processed.kicad_pcb").exists())
     if only:
@@ -287,6 +328,62 @@ def prepare_one(b):
     return b, info
 
 
+def judge_truth_one(b):
+    """KiCad's verdict on a designer's bare board (bare.json, as `prepare` writes it) and on the
+    designer's own routing (designer.json: unconnected, the floor; the errors its copper adds;
+    track and vias; the scores)."""
+    d = boards_dir("truth") / b
+    bare, designer = d / "bare.kicad_pcb", d / "designer.kicad_pcb"
+    info = {"id": b}
+    if (d / "bare.json").exists():
+        info = json.loads((d / "bare.json").read_text())
+    else:
+        try:
+            info["unconnected"], info["errors"], info["warnings"] = drc(bare, d, "bare")
+            info["judge"] = JUDGE
+        except RefereeError as e:
+            info["error"] = f"drc failed on the bare board: {e}"
+        (d / "bare.json").write_text(json.dumps(info, indent=1))
+    if "error" in info or (d / "designer.json").exists():
+        return b, info, json.loads((d / "designer.json").read_text()) if (d / "designer.json").exists() else None
+    res = {"id": b}
+    try:
+        # The designer's project file sits beside the bare board under its name.
+        res["unconnected"], errors, warnings = drc(designer, d, "designer")
+        res["new_errors"] = {t: n - info["errors"].get(t, 0) for t, n in errors.items() if n > info["errors"].get(t, 0)}
+        res["necks"] = warnings.get("neck", 0) - info["warnings"].get("neck", 0)
+        res["wirelength"], res["vias"] = lengths(designer)
+        res.update(acid_traps(designer))
+        res.update(tidiness(designer))
+        res["judge"] = JUDGE
+    except RefereeError as e:
+        res["referee_error"] = str(e)
+    (d / "designer.json").write_text(json.dumps(res, indent=1))
+    return b, info, res
+
+
+def judge_truth(a):
+    ids = board_ids(a.only, "truth")
+    if a.tier:
+        wanted = set(tier_ids(a.tier))
+        ids = [b for b in ids if b in wanted]
+    workers = int(os.environ.get("RESERVED_CORES", "4"))
+    bad = floors = unknown = dirty = 0
+    with concurrent.futures.ThreadPoolExecutor(workers) as pool:
+        for k, (b, info, res) in enumerate(pool.map(judge_truth_one, ids), 1):
+            if "error" in info:
+                bad += 1
+                print(f"[{k}/{len(ids)}] {b}: {info['error']}", flush=True)
+            elif res is None or "referee_error" in res:
+                unknown += 1
+                print(f"[{k}/{len(ids)}] {b}: the designer's board was not judged: {(res or {}).get('referee_error')}", flush=True)
+            else:
+                floors += res["unconnected"] > 0
+                dirty += bool(res["new_errors"])
+    print(f"{len(ids)} designers' boards: {bad} whose bare board KiCad could not judge, {unknown} whose routed board it could not; "
+          f"of the other {len(ids) - bad - unknown}, {floors} have something unconnected as the designer left them and {dirty} have errors the designer's copper adds")
+
+
 def lengths(pcb):
     """Track length in millimetres and via count of a board file."""
     text = pcb.read_text()
@@ -306,12 +403,14 @@ def route_one(b, run_dir, recipe, timeout, seed, router=ROUTER, clock="cpu"):
     if (d / "result.json").exists():
         return json.loads((d / "result.json").read_text())
     d.mkdir(parents=True, exist_ok=True)
-    src = HOME / "boards" / b
+    source = source_of(run_dir)
+    src = boards_dir(source) / b
+    given = src / SOURCES[source][1]
     out = d / "out.kicad_pcb"
     res = {"id": b}
     timing = d / "time.txt"
     # /usr/bin/time's user and system seconds are the CPU time `--cpu-clock` counts the timeout in.
-    args = ["/usr/bin/time", "-f", "%e %U %S %M", "-o", str(timing), str(router), "route", str(src / "board.kicad_pcb"), "-o", str(out), "--strip-all", *recipe.split(), "--seed", str(seed), "--uuid-seed", str(seed), "--threads", "1", "--timeout", str(timeout), *(["--cpu-clock"] if clock == "cpu" else [])]
+    args = ["/usr/bin/time", "-f", "%e %U %S %M", "-o", str(timing), str(router), "route", str(given), "-o", str(out), "--strip-all", *recipe.split(), "--seed", str(seed), "--uuid-seed", str(seed), "--threads", "1", "--timeout", str(timeout), *(["--cpu-clock"] if clock == "cpu" else [])]
     started = time.time()
     try:
         r = subprocess.run(CAP + args, capture_output=True, text=True, timeout=timeout * 3 + 300)
@@ -344,8 +443,8 @@ def route_one(b, run_dir, recipe, timeout, seed, router=ROUTER, clock="cpu"):
         res["success"] = False
     elif out.exists():
         for suffix in (".kicad_pro", ".kicad_dru"):
-            if (src / "board").with_suffix(suffix).exists():
-                shutil.copy((src / "board").with_suffix(suffix), out.with_suffix(suffix))
+            if given.with_suffix(suffix).exists():
+                shutil.copy(given.with_suffix(suffix), out.with_suffix(suffix))
         res["wirelength"], res["vias"] = lengths(out)
         try:
             drc(out, d, "out")
@@ -380,7 +479,8 @@ def score(res, run_dir, b):
         res["success"] = False
         return res
     d = run_dir / b
-    src = HOME / "boards" / b
+    source = source_of(run_dir)
+    src = boards_dir(source) / b
     report = d / "out.drc.json"
     if not report.exists() or "referee_error" in res:
         return res
@@ -389,7 +489,11 @@ def score(res, run_dir, b):
     res["new_errors"] = {t: n - bare_errors.get(t, 0) for t, n in errors.items() if n > bare_errors.get(t, 0)}
     res["new_warnings"] = {t: n - bare_warnings.get(t, 0) for t, n in warnings.items() if n > bare_warnings.get(t, 0)}
     res["necks"] = res["new_warnings"].get("neck", 0)
-    res["success"] = res["unconnected"] == 0 and not res["new_errors"]
+    floor = floor_of(source, b)
+    if source == "truth":
+        res["floor"] = floor
+    # No floor: KiCad could not judge the designer's board, so nothing says what is the router's.
+    res["success"] = floor is not None and res["unconnected"] <= floor and not res["new_errors"]
     return res
 
 
@@ -402,9 +506,9 @@ def rescore(a):
             f.write_text(json.dumps(res, indent=1))
 
 
-def rejudge_bare(b):
+def rejudge_bare(b, source="processed"):
     """The bare board judged again when an older judge saw it."""
-    d = HOME / "boards" / b
+    d = boards_dir(source) / b
     info = json.loads((d / "bare.json").read_text())
     # A bare board has no tracks, so no acid traps: judged for necks, it is judged enough.
     if "error" in info or info.get("judge", 1) >= 2:
@@ -448,7 +552,7 @@ def rejudge(a):
         for name in a.runs:
             run_dir = HOME / "runs" / name
             ids = sorted(f.parent.name for f in run_dir.glob("*/result.json"))
-            list(pool.map(rejudge_bare, ids))
+            list(pool.map(lambda b: rejudge_bare(b, source_of(run_dir)), ids))
             results = list(pool.map(lambda b: rejudge_one(run_dir, b), ids))
             meta = run_dir / "run.json"
             info = json.loads(meta.read_text())
@@ -475,7 +579,7 @@ def tidy_sum(results):
     sys.path.insert(0, str(HERE))
     from tidy import ratios
     held = [r["tidy"] for r in results if r.get("tidy")]
-    return ratios({k: sum(t.get(k, 0) for t in held) for k in TIDY_SUMS}) if held else None
+    return ratios({k: sum(t.get(k) or 0 for t in held) for k in TIDY_SUMS}) if held else None
 
 
 def tidy_line(results):
@@ -515,22 +619,22 @@ def board_timeouts(a):
 TIERS = Path(__file__).with_name("pcbench_tiers.json")
 
 
-def features(b):
+def features(b, source="processed"):
     """What a board is made of, for spreading a tier across kinds of board: copper layers,
     whether it has zones, and its size in pads."""
-    t = (HOME / "boards" / b / "board.kicad_pcb").read_text()
+    t = (boards_dir(source) / b / SOURCES[source][1]).read_text()
     m = re.search(r"\(layers\s*(.*?)\n\s*\)\n", t, re.S)
     cu = len(re.findall(r'\(\d+\s+"[^"]*\.Cu"\s+(?:signal|power|mixed|jumper)', m.group(1))) if m else 0
     pads = len(re.findall(r"\(pad\s", t))
     return {"cu": min(cu, 4), "zones": "(zone" in t, "pads": 0 if pads < 100 else 1 if pads < 400 else 2}
 
 
-def spread(ids, n, rng):
+def spread(ids, n, rng, source="processed"):
     """n of the boards, taken in turn from each kind of board (`features`), so a small tier still
     holds four-layer boards, boards with zones and big boards."""
     kinds = {}
     for b in sorted(ids):
-        kinds.setdefault(tuple(features(b).values()), []).append(b)
+        kinds.setdefault(tuple(features(b, source).values()), []).append(b)
     for k in kinds.values():
         rng.shuffle(k)
     out = []
@@ -560,6 +664,10 @@ def tiers(a):
     gate   focus and guard: the run to make before a change goes to the full corpus.
     """
     hist = {}
+    sources = {source_of(HOME / "runs" / name) for name in a.runs}
+    if len(sources) != 1:
+        sys.exit(f"tiers: the runs are of different sets of boards ({', '.join(sorted(sources))})")
+    source = sources.pop()
     for name in a.runs:
         for b, r in load(name)[0].items():
             hist.setdefault(b, []).append(r)
@@ -573,22 +681,22 @@ def tiers(a):
     last = {b: hist[b][-1] for b in ids}
     quick = [b for b in always if secs[b] < a.smoke_s and not touched(b)]
     quick_fail = sorted((b for b in never if not touched(b) and secs[b] < a.smoke_s * 2), key=lambda b: (last[b].get("unconnected") or 99, secs[b]))
-    smoke = spread(quick, a.smoke, rng) + quick_fail[: a.smoke // 5]
+    smoke = spread(quick, a.smoke, rng, source) + quick_fail[: a.smoke // 5]
     gaps = [b for b in never if not last[b].get("time_limited")]
     near = [b for b in never if last[b].get("time_limited") and (last[b].get("unconnected") or 99) <= a.near]
     marginal = [b for b in always if touched(b) or secs[b] > a.slow_s]
     steady = [b for b in always if b not in marginal]
-    picked = spread(marginal, a.marginal, rng)
-    guard = sorted(spread(steady, a.steady, rng) + picked)
+    picked = spread(marginal, a.marginal, rng, source)
+    guard = sorted(spread(steady, a.steady, rng, source) + picked)
     why = lambda bs: f"{len(bs)} boards, about {sum(secs[b] for b in bs) / 3600:.1f} core-hours"
     made = {
-        "smoke": {"boards": sorted(smoke), "why": f"clean in every run under {a.smoke_s:g} s untouched by a deadline, spread by kind; and the {len(smoke) - len(spread(quick, a.smoke, random.Random(a.seed)))} quickest failures the clock never stopped"},
+        "smoke": {"boards": sorted(smoke), "why": f"clean in every run under {a.smoke_s:g} s untouched by a deadline, spread by kind; and the {len(smoke) - len(spread(quick, a.smoke, random.Random(a.seed), source))} quickest failures the clock never stopped"},
         "focus": {"boards": sorted(gaps + near), "why": f"never clean: {len(gaps)} the clock did not stop (algorithm gaps), {len(near)} it did within {a.near} open"},
         "guard": {"boards": guard, "why": f"{len(guard) - len(picked)} of the {len(steady)} always clean untouched by a deadline, {len(picked)} of the {len(marginal)} clean but touched by one or over {a.slow_s:g} s"},
         "noisy": {"boards": sorted(flaky), "why": "clean in some runs, not in others"},
         "gate": ["focus", "guard"],
     }
-    TIERS.write_text(json.dumps({"made": time.strftime("%Y-%m-%d"), "from": a.runs, "tiers": made}, indent=1) + "\n")
+    Path(a.out or TIERS).write_text(json.dumps({"made": time.strftime("%Y-%m-%d"), "source": source, "from": a.runs, "tiers": made}, indent=1) + "\n")
     for name, t in made.items():
         bs = t["boards"] if isinstance(t, dict) else sorted({b for p in t for b in made[p]["boards"]})
         print(f"{name:6} {why(bs)}" + (f": {t['why']}" if isinstance(t, dict) else f": {' + '.join(t)}"))
@@ -609,7 +717,11 @@ def tier_ids(name):
 
 def chosen(a):
     """The prepared boards a run routes: --only, --tier and --sample narrow them."""
-    ids = [b for b in board_ids(a.only) if "error" not in json.loads((HOME / "boards" / b / "bare.json").read_text())] if (HOME / "boards").exists() else []
+    d = boards_dir(a.source)
+    judged = lambda b: (d / b / "bare.json").exists() and "error" not in json.loads((d / b / "bare.json").read_text())
+    ids = [b for b in board_ids(a.only, a.source) if judged(b)] if d.exists() else []
+    if a.source == "truth" and not ids:
+        sys.exit("no judged boards of the designers': truth.py prepare, then pcbench.py judge-truth")
     if a.tier:
         wanted = set(tier_ids(a.tier))
         ids = [b for b in ids if b in wanted]
@@ -641,9 +753,11 @@ def start(name, ids, a, router, workers, commit=True):
     meta = run_dir / "run.json"
     now = provenance(workers, router, commit)
     own = {b: t for b, t in board_timeouts(a).items() if b in ids}
-    info = {"recipe": a.recipe, "timeout": a.timeout, "clock": clock_of(a, router), "board_timeouts": own, "seed": a.seed, "boards": ids, "tier": a.tier, **now, "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "notes": [a.note] if a.note else []}
+    info = {"source": a.source, "recipe": a.recipe, "timeout": a.timeout, "clock": clock_of(a, router), "board_timeouts": own, "seed": a.seed, "boards": ids, "tier": a.tier, **now, "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "notes": [a.note] if a.note else []}
     if meta.exists():
         info = json.loads(meta.read_text())
+        if info.get("source", "processed") != a.source:
+            sys.exit(f"{name} was routed from the {info.get('source', 'processed')} boards, not {a.source}")
         differ = {k: (info.get(k), now[k]) for k in ("commit", "binary_sha256") if info.get(k) != now[k]}
         if differ:
             for k, (was, new) in differ.items():
@@ -882,6 +996,8 @@ def compare(a):
     passed = True
     for name in a.runs[1:]:
         new, meta = load(name)
+        if base_meta.get("source", "processed") != meta.get("source", "processed"):
+            sys.exit(f"{a.runs[0]} and {name} were routed from different sets of boards ({base_meta.get('source', 'processed')}, {meta.get('source', 'processed')}): they do not compare")
         common = sorted(set(base) & set(new))
         print(f"== {a.runs[0]} -> {name}: {len(common)} boards in both" + (f" ({len(base) - len(common)} only in {a.runs[0]}, {len(new) - len(common)} only in {name})" if len(common) != max(len(base), len(new)) else ""))
         clean = lambda rs: [i for i in common if rs[i].get("success")]
@@ -998,6 +1114,7 @@ def report(a):
             results[r["id"]] = r
         ids = sorted(results)
         n = len(ids)
+        source = source_of(run_dir)
         ours = [b for b in ids if results[b].get("success")]
         # Routed: nothing open and no new copper error, solder mask bridges aside; the
         # baselines' "success" likely asked no more than that.
@@ -1005,9 +1122,14 @@ def report(a):
         print(f"== {name}: {n} boards, ours {len(ours)} clean ({100 * len(ours) / max(n, 1):.1f}%), {len(routed)} routed ({100 * len(routed) / max(n, 1):.1f}%)")
         # Our variants (tools/pcbench_variants.json) have no baselines: compared on PCBench's boards only.
         held = [b for b in ids if b in base]
-        if len(held) < n:
+        if source == "truth":
+            # The published baselines routed `processed`, where the pour nets are tracks.
+            floors = [results[b].get("floor") for b in ids]
+            print(f"   the designers' boards (pours kept): the published baselines do not apply. Floor (unconnected in the designer's own board): over 0 on {sum(1 for f in floors if f)} boards, unknown on {sum(1 for f in floors if f is None)}")
+            held = []
+        elif len(held) < n:
             print(f"   {n - len(held)} variants of our own, not in the baselines: {', '.join(b for b in ids if b not in base)}")
-        for router in ["FreeRouting", "PcbRouter", "RL-MCTS"]:
+        for router in ["FreeRouting", "PcbRouter", "RL-MCTS"] if source != "truth" else []:
             theirs = [b for b in held if base[b][router][0]]
             both = [b for b in ours if b in base and base[b][router][0]]
             only_us = [b for b in ours if b in base and not base[b][router][0]]
@@ -1024,7 +1146,8 @@ def report(a):
             r = results[b]
             if r.get("success"):
                 continue
-            k = "referee failed" if "referee_error" in r else "router failed" if r.get("code") not in (0, None) or "unconnected" not in r else ("open and errors" if r["unconnected"] and r.get("new_errors") else "open" if r["unconnected"] else "new errors")
+            opened = r.get("unconnected", 0) > (r.get("floor") or 0)
+            k = "referee failed" if "referee_error" in r else "router failed" if r.get("code") not in (0, None) or "unconnected" not in r else "no floor" if source == "truth" and r.get("floor") is None else ("open and errors" if opened and r.get("new_errors") else "open" if opened else "new errors")
             kinds[k] = kinds.get(k, 0) + 1
         errs = {}
         for b in ids:
@@ -1056,8 +1179,12 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("prepare")
     s.add_argument("--only")
+    s = sub.add_parser("judge-truth")
+    s.add_argument("--tier")
+    s.add_argument("--only")
     s = sub.add_parser("run")
     s.add_argument("run")
+    s.add_argument("--source", choices=sorted(SOURCES), default="processed", help="the boards to route: PCBench's cleaned ones, or the designers' with their pours (truth.py prepare, pcbench.py judge-truth)")
     s.add_argument("--boxed-text", action="store_true", help="route even with a router that boxes its text (no kicad-text helper beside it)")
     s.add_argument("--recipe", default=RECIPE)
     s.add_argument("--timeout", type=float, default=120)
@@ -1078,6 +1205,7 @@ def main():
     s.add_argument("base", help="the run of --base-bin's routes")
     s.add_argument("new", help="the run of this checkout's router (ULTRAROUTE_BIN)")
     s.add_argument("--base-bin", required=True, help="the reference router binary")
+    s.add_argument("--source", choices=sorted(SOURCES), default="processed")
     s.add_argument("--wall-clock", action="store_true", help="--timeout in wall seconds (default: CPU seconds; both routers need --cpu-clock)")
     s.add_argument("--recipe", default=RECIPE)
     s.add_argument("--timeout", type=float, default=120)
@@ -1101,6 +1229,7 @@ def main():
     s.add_argument("--slow-s", type=float, default=60)
     s.add_argument("--steady", type=int, default=200, help="steady boards sampled into guard")
     s.add_argument("--marginal", type=int, default=40, help="clean boards a deadline touched sampled into guard")
+    s.add_argument("--out", help="write the tiers here, not over pcbench_tiers.json")
     s.add_argument("--seed", type=int, default=1)
     s = sub.add_parser("report")
     s.add_argument("runs", nargs="+")
@@ -1120,7 +1249,7 @@ def main():
     a = p.parse_args()
     if a.cmd == "compare" and len(a.runs) < 2:
         p.error("compare needs at least two runs")
-    {"prepare": prepare, "run": run, "ab": ab, "tiers": tiers, "report": report, "rescore": rescore, "rejudge": rejudge, "compare": compare, "note": note}[a.cmd](a)
+    {"prepare": prepare, "run": run, "ab": ab, "tiers": tiers, "report": report, "rescore": rescore, "rejudge": rejudge, "compare": compare, "note": note, "judge-truth": judge_truth}[a.cmd](a)
 
 
 if __name__ == "__main__":

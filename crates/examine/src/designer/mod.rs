@@ -10,6 +10,7 @@ pub mod bundles;
 pub mod draw;
 pub mod frames;
 pub mod layers;
+pub mod like;
 pub mod repeats;
 
 use board::pcb::geom::{self, P};
@@ -131,6 +132,70 @@ mod tests {
         );
         let straight = super::extract(&board(bus(4, 0.4, 0.0)));
         assert!(straight.frames.off_board_axes < 0.01 && straight.frames.turned < 0.01);
+    }
+
+    #[test]
+    fn a_turned_layer_runs_along_its_own_axis() {
+        // A bus turned 20 degrees on the front, the same turned a further 90 on the back.
+        let mut tracks = bus(4, 0.4, 20.0);
+        tracks.extend(bus(4, 0.4, 110.0).into_iter().map(|t| Track {
+            layer: "B.Cu".into(),
+            ..t
+        }));
+        let f = super::extract(&board(tracks)).frames;
+        assert_eq!(f.runs.len(), 2);
+        let (front, back) = (&f.runs[0], &f.runs[1]);
+        assert_eq!(
+            (front.layer.as_str(), back.layer.as_str()),
+            ("F.Cu", "B.Cu")
+        );
+        assert!(
+            front.axis_mm[0] > 79.0 && front.axis_mm[1] < 0.1,
+            "{front:?}"
+        );
+        assert!(back.axis_mm[1] > 79.0 && back.axis_mm[0] < 0.1, "{back:?}");
+        assert!(f.along_axis() > 0.99);
+        // Both directions on one layer: no layer keeps to an axis.
+        let mut mixed = bus(4, 0.4, 20.0);
+        mixed.extend(bus(4, 0.4, 110.0));
+        assert!(super::extract(&board(mixed)).frames.along_axis() < 0.51);
+    }
+
+    #[test]
+    fn ours_is_measured_in_the_designers_frame() {
+        let designer = board(bus(4, 0.4, 20.0));
+        // Ours on the board's axes: disciplined in its own frame, off the designer's.
+        let ours = board(bus(4, 0.4, 0.0));
+        let l = super::like::like(&designer, &ours);
+        assert!(l.designer.off_designer_frame_mm < 0.1);
+        assert!(l.designer.off_board_axes_mm > 79.0);
+        assert!(l.ours.off_own_frame_mm < 0.1);
+        assert!(l.ours.off_designer_frame_mm > 79.0, "{:?}", l.ours);
+        // Ours on the designer's grid, on the back: on it, though off the board's axes.
+        let same: Vec<Track> = bus(4, 0.4, 20.0)
+            .into_iter()
+            .map(|t| Track {
+                layer: "B.Cu".into(),
+                ..t
+            })
+            .collect();
+        let l = super::like::like(&designer, &board(same));
+        assert!(l.ours.off_designer_frame_mm < 0.1);
+    }
+
+    #[test]
+    fn track_on_the_designers_plane_is_counted() {
+        let mut designer = board(bus(4, 0.4, 0.0));
+        designer.fills.push(Fill {
+            net: "GND".into(),
+            layer: "B.Cu".into(),
+            polygon: vec![[1.0, 1.0], [39.0, 1.0], [39.0, 39.0], [0.0, 39.0]],
+        });
+        let mut ours = board(bus(4, 0.4, 0.0));
+        ours.tracks[3].layer = "B.Cu".into();
+        let l = super::like::like(&designer, &ours);
+        assert_eq!(l.plane_layers, ["B.Cu"]);
+        assert!(l.designer.on_planes_mm == 0.0 && (l.ours.on_planes_mm - 20.0).abs() < 1e-9);
     }
 
     #[test]

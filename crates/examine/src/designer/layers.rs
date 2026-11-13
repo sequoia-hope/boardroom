@@ -47,7 +47,8 @@ pub fn layers(board: &Board) -> Vec<LayerUse> {
         .iter()
         .map(|layer| {
             let on: Vec<_> = board.tracks.iter().filter(|t| &t.layer == layer).collect();
-            let track_mm: f64 = on.iter().map(|t| geom::dist(t.a, t.b)).sum();
+            // Folded from 0: an empty sum is -0.0, which prints as such.
+            let track_mm = on.iter().fold(0.0, |a, t| a + geom::dist(t.a, t.b));
             let mut by_net: BTreeMap<&str, f64> = BTreeMap::new();
             for f in board.fills.iter().filter(|f| &f.layer == layer) {
                 *by_net.entry(f.net.as_str()).or_default() += geom::area(&f.polygon);

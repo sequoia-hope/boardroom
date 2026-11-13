@@ -16,8 +16,11 @@ writes, under LAB/pcbench/truth/ID/:
 
     designer.kicad_pcb   the raw board saved by this KiCad, its zones refilled by KiCad (or, on
                          the few boards its filler never returns on, with the file's own fills)
-    bare.kicad_pcb       the same with every track and via removed and its zones kept, unfilled:
-                         what a router is given
+    bare.kicad_pcb       the same with every track and via removed and its zones kept, filled by
+                         KiCad as they lie on the empty board: what a router is given (a pour
+                         left unfilled is an outline only, and the frozen router's --auto-planes
+                         reads planes from the fills; unfilled on the few boards the filler
+                         never returns on)
     truth.json           what was found: zones (net, layers, area, priority), tracks and vias,
                          board area, how it differs from `processed`, or the error
 
@@ -210,12 +213,35 @@ def differs(group):
     return abs(group["mm_raw"] - group["mm_processed"]) > 0.01 * max(group["mm_raw"], group["mm_processed"], 1.0) or group["vias_raw"] != group["vias_processed"]
 
 
+def refill(pcb, log):
+    """Refills a board's zones in place with KiCad's filler: {layer: filled mm2}, or None when
+    the filler fails or does not return in REFILL_S (the file is then left as it was)."""
+    refilled = Path(str(pcb) + ".refilled")
+    try:
+        with open(log, "w") as sink:
+            subprocess.run([sys.executable, "-c", REFILL, str(pcb)], stdin=subprocess.DEVNULL, stdout=sink, stderr=subprocess.STDOUT, timeout=REFILL_S)
+        line = next((l for l in Path(log).read_text(errors="replace").splitlines() if l.startswith("TRUTH ")), None)
+        if line and refilled.exists():
+            refilled.replace(pcb)
+            fresh_uuids(pcb)
+            return json.loads(line[6:])
+    except subprocess.TimeoutExpired:
+        pass
+    finally:
+        refilled.unlink(missing_ok=True)
+    return None
+
+
 def prepare_one(job):
     b, redo = job
     out = paths.lab() / "pcbench" / "truth" / b
     record = out / "truth.json"
     if record.exists() and not redo:
         info = json.loads(record.read_text())
+        # An older record left the bare board's pours unfilled: fill them, without preparing again.
+        if "error" not in info and info["zones"] and "bare_filled" not in info:
+            info["bare_filled"] = refill(out / "bare.kicad_pcb", out / "refill.bare.log") is not None
+            record.write_text(json.dumps(info, indent=1))
         # An older record compared the files' text: compare again, without preparing again.
         if "error" not in info and (info.get("processed") or {}).get("by") != "pcbnew":
             info["processed"] = against_processed(b, info["zones"])
@@ -243,17 +269,12 @@ def prepare_one(job):
                 fresh_uuids(f)
             info["refilled"] = False
             if info["zones"]:
-                refilled = Path(str(designer) + ".refilled")
-                try:
-                    with open(out / "refill.log", "w") as sink:
-                        subprocess.run([sys.executable, "-c", REFILL, str(designer)], stdin=subprocess.DEVNULL, stdout=sink, stderr=subprocess.STDOUT, timeout=REFILL_S)
-                    line = next((l for l in (out / "refill.log").read_text(errors="replace").splitlines() if l.startswith("TRUTH ")), None)
-                    if line and refilled.exists():
-                        refilled.replace(designer)
-                        info["filled_mm2"], info["refilled"] = json.loads(line[6:]), True
-                except subprocess.TimeoutExpired:
-                    info["refill_error"] = f"KiCad's zone filler did not return in {REFILL_S} s; the file's own fills are kept"
-                refilled.unlink(missing_ok=True)
+                filled = refill(designer, out / "refill.log")
+                if filled is not None:
+                    info["filled_mm2"], info["refilled"] = filled, True
+                else:
+                    info["refill_error"] = f"KiCad's zone filler failed or did not return in {REFILL_S} s; the file's own fills are kept"
+                info["bare_filled"] = refill(bare, out / "refill.bare.log") is not None
             info["processed"] = against_processed(b, info["zones"])
     except subprocess.TimeoutExpired:
         info["error"] = "pcbnew took more than 900 s"
@@ -307,6 +328,7 @@ def summary(infos):
         "pour_net_copper_differs_in_processed": len(rerouted),
         "other_copper_differs_in_processed": len(other_changed),
         "not_refilled": sorted(i["id"] for i in poured if not i.get("refilled")),
+        "bare_not_filled": sorted(i["id"] for i in poured if not i.get("bare_filled")),
     }
 
 
@@ -323,6 +345,8 @@ def report(a):
     print(f"  `processed` differs from the designer on the other nets (same test): {s['other_copper_differs_in_processed']}")
     if s["not_refilled"]:
         print(f"  KiCad could not refill {len(s['not_refilled'])} (file's own fills kept): {', '.join(s['not_refilled'][:8])}")
+    if s["bare_not_filled"]:
+        print(f"  bare boards whose pours KiCad could not fill (given to a router unfilled): {len(s['bare_not_filled'])}: {', '.join(s['bare_not_filled'][:8])}")
     for i in infos:
         if "error" in i:
             print(f"  ERROR {i['id']}: {i['error']}")

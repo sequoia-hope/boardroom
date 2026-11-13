@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""The look set (docs/spec/structured-routing.md, S0): a page showing, for a dozen chosen boards,
-the designer's routing beside ours on every copper layer that carries tracks. It is the review by
-eye every stage gets; the scoreboard (tools/scoreboard.py) is the backstop.
+"""The look set: a page showing, for a dozen chosen boards, the designer's routing beside ours on
+every copper layer that carries tracks. It is the review by eye every stage gets; the scoreboard
+(scoreboard.py) is the backstop.
 
-    lookset.py OURS_RUN [--label NAME] [--designer RUN] [--set tools/lookset.json] [--only id,...]
+    lookset.py OURS_RUN [--label NAME] [--designer RUN] [--set lookset.json] [--only id,...]
 
-OURS_RUN and the designers' run are pcbench runs; boards the set gives as files are taken from
-those files whatever the run. Writes ultraroute-lab/planned/lookset/NAME/ (NAME defaults to the
+OURS_RUN is a pcbench run. When it routed the designers' boards (`--source truth`), the designer's
+side is the designer's own board (LAB/pcbench/truth/ID/designer.kicad_pcb); for an older run of
+PCBench's `processed` boards it is the stand-in run --designer, which is not the designers'
+routing on any poured net. Boards the set gives as files are taken from those files whatever the
+run. The figures are `examine::designer::like` (cargo build --release -p examine --example like):
+angles in each neighbourhood's frame. Writes ultraroute-lab/planned/lookset/NAME/ (NAME defaults to the
 run's name): index.html, and per board one SVG and PNG per layer and side. Routes nothing.
 """
 import argparse
@@ -26,6 +30,8 @@ import paths
 
 LAB = paths.lab()
 RUNS = LAB / "pcbench" / "runs"
+TRUTH = LAB / "pcbench" / "truth"
+LIKE = paths.REPO / "target" / "release" / "examples" / "like"
 WIDTH = 1500
 
 
@@ -52,6 +58,22 @@ def track_layers(pcb, bare):
     order = sorted(ids, key=lambda l: (l == pcbnew.B_Cu, l != pcbnew.F_Cu, l))
     vias = sum(t.GetClass() == "PCB_VIA" for t in b.GetTracks())
     return [b.GetLayerName(l) for l in order], vias
+
+
+def truth_board(bid):
+    """(the designer's own board, what the judge said of it)."""
+    d = TRUTH / bid
+    res = json.loads((d / "designer.json").read_text()) if (d / "designer.json").exists() else {}
+    res["success"] = None
+    return d / "designer.kicad_pcb", res
+
+
+def like_of(designer, ours):
+    """examine::designer::like of the two boards, or {} when it cannot be had."""
+    if not LIKE.exists() or not designer.exists() or not ours.exists():
+        return {}
+    r = subprocess.run([str(LIKE), str(designer), str(ours)], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=900)
+    return json.loads(r.stdout) if r.returncode == 0 else {}
 
 
 def tidy_of(pcb):
@@ -82,12 +104,13 @@ def one(board, a, out):
     d = out / bid
     d.mkdir(parents=True, exist_ok=True)
     if "pcbench" in board:
-        theirs, their_res = run_board(a.designer, board["pcbench"])
+        theirs, their_res = truth_board(board["pcbench"]) if a.truth else run_board(a.designer, board["pcbench"])
         ours, our_res = run_board(a.ours, board["pcbench"])
     else:
         theirs, their_res, ours, our_res = path_of(board["designer"]), {}, path_of(board["ours"]), {}
     sides = {"designer": (theirs, their_res), "ours": (ours, our_res)}
-    info = {"id": bid, "sides": {}, "layers": []}
+    like = like_of(theirs, ours)
+    info = {"id": bid, "sides": {}, "layers": [], "plane_layers": like.get("plane_layers")}
     names, drawn = [], {}
     for side, (pcb, res) in sides.items():
         if not pcb.exists():
@@ -101,6 +124,12 @@ def one(board, a, out):
         info["sides"][side] = {"board": str(pcb), "layers": layers, "vias": vias, "open": res.get("unconnected"),
                                "clean": res.get("success"), "off45": t.get("off45"), "bundled": t.get("bundled"),
                                "bus_bundled": t.get("bus_bundled"), "track_mm": t.get("track_mm"), "per_layer_mm": t.get("per_layer_mm")}
+        x = like.get(side)
+        if x and x["track_mm"] > 0:
+            share = lambda k: x[k] / x["track_mm"]
+            info["sides"][side].update({"on_planes_mm": x["on_planes_mm"] if like["plane_layers"] else None, "off_own_frame": share("off_own_frame_mm"),
+                                        "off_designer_frame": share("off_designer_frame_mm"), "in_bundles": share("bundled_mm"),
+                                        "along_axis": x["along_axis_mm"] / x["on_axes_mm"] if x["on_axes_mm"] else None})
     order = ["F.Cu"] + sorted(l for l in names if l not in ("F.Cu", "B.Cu")) + ["B.Cu"]
     for layer in [l for l in order if l in names]:
         row = {"layer": layer}
@@ -123,8 +152,11 @@ def page(out, a, boards, infos, run_info):
         cell = lambda side, k, f=str: "-" if k not in s.get(side, {}) or s[side][k] is None else f(s[side][k])
         rows = "".join(
             f"<tr><td>{label}</td><td>{cell('designer', k, f)}</td><td>{cell('ours', k, f)}</td></tr>"
-            for label, k, f in (("Off 45 degrees", "off45", pct), ("Beside another net", "bundled", pct), ("Bus members beside a sibling", "bus_bundled", pct),
-                                ("Vias", "vias", str), ("Track, mm", "track_mm", lambda v: f"{v:,.0f}"), ("Open connections", "open", str)))
+            for label, k, f in ((f"Track on the designer's plane layers ({', '.join(i.get('plane_layers') or [])}), mm", "on_planes_mm", lambda v: f"{v:,.0f}"),
+                                ("Off the grid of its own neighbourhood", "off_own_frame", pct), ("Off the grid the designer used there", "off_designer_frame", pct),
+                                ("Off the grid of the board's x and y (old score)", "off45", pct), ("In a bundle", "in_bundles", pct),
+                                ("Bus members beside a sibling", "bus_bundled", pct), ("Along its layer's axis", "along_axis", pct),
+                                ("Vias", "vias", str), ("Track, mm", "track_mm", lambda v: f"{v:,.0f}"), ("Unconnected (KiCad)", "open", str)))
         layers = ""
         for row in i["layers"]:
             imgs = "".join(
@@ -135,7 +167,7 @@ def page(out, a, boards, infos, run_info):
         parts.append(f'<section id="{e(b["id"])}"><h2>{e(b["title"])}</h2><p>{e(b["why"])}</p>{note}'
                      f'<table><tr><th></th><th>Designer</th><th>Ours</th></tr>{rows}</table>{layers}</section>')
     nav = " · ".join(f'<a href="#{e(b["id"])}">{e(b["title"])}</a>' for b in boards)
-    (out / "index.html").write_text(f"""<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><p><a href="../../">← Structured routing review</a></p><title>Look set: {e(a.label)}</title>
+    (out / "index.html").write_text(f"""<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><p><a href="../../">← Review pages</a></p><title>Look set: {e(a.label)}</title>
 <style>body{{font:15px/1.5 system-ui;margin:1.5rem auto;max-width:110rem;padding:0 1rem;background:#111;color:#ddd}}
 a{{color:#9cf}}table{{border-collapse:collapse;margin:.5rem 0}}td,th{{padding:.2rem .8rem;border-bottom:1px solid #333;text-align:right}}
 td:first-child{{text-align:left}}.pair{{display:grid;grid-template-columns:1fr 1fr;gap:1rem}}figure{{margin:0}}
@@ -143,7 +175,7 @@ figcaption{{text-transform:capitalize;color:#aaa}}img{{width:100%;background:#ff
 .note,.none{{color:#ca8}}@media(max-width:700px){{.pair{{grid-template-columns:1fr}}}}</style>
 <h1>Look set: {e(a.label)}</h1>
 <p>The designer's routing beside ours, one row per copper layer that carries tracks. Ours is pcbench run <code>{e(a.ours)}</code>
-(commit {e(str(run_info.get('commit')))}); the designers' is run <code>{e(a.designer)}</code>. Click a picture for its SVG.
+(router {e(Path(str(run_info.get('binary'))).parent.name)}, recipe {e(str(run_info.get('recipe')))}); the designer's is {"the designer's own board, from the corpus's raw file" if a.truth else f"run <code>{e(a.designer)}</code>, PCBench's processed board, which is not the designer's on any poured net"}. Click a picture for its SVG.
 Pours are not drawn, so the tracks under them show.</p><p>{nav}</p>{''.join(parts)}""")
 
 
@@ -163,6 +195,7 @@ def main():
     out = LAB / "planned" / "lookset" / a.label
     out.mkdir(parents=True, exist_ok=True)
     run_info = json.loads((RUNS / a.ours / "run.json").read_text())
+    a.truth = run_info.get("source") == "truth"
     with ThreadPoolExecutor(a.jobs) as pool:
         infos = list(pool.map(lambda b: one(b, a, out), boards))
     (out / "lookset.json").write_text(json.dumps({"ours": a.ours, "designer": a.designer, "boards": infos}, indent=1))

@@ -9,12 +9,12 @@ are what the `examine` crate grows from.
 | `truth.py` | **the designers' boards**: prepares each corpus board from its raw file (the designer's own copper and pours, refilled by KiCad) and the same board bare with its pours kept; counts how `processed` differs; draws both side by side |
 | `netlists.py` | which boards ship a netlist that is theirs: every fetched `.net` compared with the designer's board pad for pad (`examine::netmatch`) |
 | `extract.py` | **what the designers did**: plane layers, the frame of the routing per neighbourhood, bundles and repeats, read from the designer's board (`examine::designer`); `look` draws each over the look set, `count` totals a tier |
-| `pcbench.py` | prepare, run, report, compare, rejudge, tiers, ab over the PCBench corpus; judged by `kicad-cli` DRC after a KiCad refill |
+| `pcbench.py` | prepare, run, report, compare, rejudge, tiers, ab over the PCBench corpus; judged by `kicad-cli` DRC after a KiCad refill. `--source truth` routes the designers' boards (pours kept), after `judge-truth` has judged each designer's own board for its floor |
 | `pcbench_tiers.json`, `pcbench_timeouts.json`, `pcbench_variants.json`, `variants/`, `apply_variant.py` | the tiers (smoke, focus, gate, full), per-board time, our own patched boards |
 | `rulebench.py` | boards with rule files, judged the same way |
 | `refill_zones.py` | refill a board's zones through KiCad before DRC (our own fill is a preview) |
 | `lookset.py`, `lookset.json` | the designer's board beside ours, as pages to look at |
-| `scoreboard.py` | the scores of a run against the designers' |
+| `scoreboard.py` | "like the designers": a `--source truth` run beside the designers' own boards, measured by `examine::designer::like` (angles in each neighbourhood's frame, track on the designers' planes, bundles, repeats) and `tidy.py` |
 | `pcbench_schematics.py` | survey and fetch the corpus boards' schematics and netlists |
 | `lab.py` | record an experiment in the lab |
 | `tidy.py`, `dfm.py`, `designer.py`, `netcheck.py` | the measures: tidiness, acute angles and slots, hot loops on a routed board, whether a designer routes a net within the rules |
@@ -72,11 +72,33 @@ stops and says which is missing.
     raw-based board has them, so the gate and noisy lists need choosing again.
   - The frozen router takes `--strip-all` (removes tracks and vias, keeps zones) and
     `--auto-planes`, so it can run on `bare.kicad_pcb` as it is.
-- **Not yet fixed:** `tidy.py` measures direction in the board's x and y, so a board routed in a
-  turned frame scores as off-angle.
+- **Angles are measured in a frame.** `tidy.py` measures direction in the board's x and y, so a
+  board routed in a turned frame scores as off-angle; the scoreboard and the look set use
+  `examine::designer::like` instead (each neighbourhood's own 45-degree grid, and the designer's
+  grid there). A hexagonal lattice is not a 45-degree grid at any turn: motionhexa's designer
+  reads 89% off the board's axes and still 29% off its own frame.
+- **The honest baseline** (2026-11-12, run `truth-base-9512c88`: the frozen router `sqpad-9512c88`,
+  `--recipe default --auto-planes`, 120 CPU s, no escalation, the gate tier's 314 designers' boards;
+  pages `LAB/planned/scoreboard/truth-base-9512c88/` and `LAB/planned/lookset/truth-base-9512c88/`).
+  215 of 314 clean (52 open, 37 with new errors, 10 both; 44 boards gain `starved_thermal`). Summed
+  over the 314, designers against the router: track off its neighbourhood's grid 1.3% against 16.8%;
+  track on the 77 boards' layers the designer kept as planes 1.9 m against 13.3 m (`--auto-planes`
+  takes only inner layers at least 60% poured); in a bundle 33% against 23%; bus members beside a
+  sibling 27% against 8%; vias 17,345 against 12,762 (the designers stitch their pours); track
+  336 m against 303 m. Do not compare with the `processed` figures (273 or 274 of 315): other boards.
+- **The designers' own boards mostly fail the judge** (`pcbench.py judge-truth --tier gate`): KiCad
+  finds an error added by the routed copper on 225 of the 314 (edge clearance on 140, mask bridges
+  on 67, starved thermals on 65, clearance on 55, hole clearance on 43, shorts on 35) and something
+  unconnected on 63. The rules are those KiCad wrote when it converted the old files (its defaults
+  where the file set none), which is probably why and has not been checked: until it is, "no new
+  error" asks more of a router than these rules asked of the designers.
+- The bare board's pours are filled (by KiCad, on the empty board): the frozen router reads planes
+  from fills, and given outlines only it took none.
 - pcbnew hangs on some old boards when its output is a pipe or it has a console, and its zone
   filler never returns on a few: `truth.py` gives it files, no input and a time limit.
 - Look at the designer's board beside ours before quoting any number.
 
-Not yet run end to end from this directory: `pcbench.py run` with a router built here (there is
-none yet), `lookset.py`, `scoreboard.py`, `lab.py`.
+Not yet done: the tiers were chosen on `processed` and need choosing again from full runs of the
+designers' boards (`pcbench.py tiers` now refuses to mix the two; only the gate tier is prepared
+from raw); the "sound" scoreboard; `pcbench.py run` with a router built here (there is none yet);
+`lab.py` has not been run from this directory.

@@ -1,15 +1,23 @@
 #!/usr/bin/env python3
-"""The structured-routing scoreboard (docs/spec/structured-routing.md, section 1): the designers'
-own routing beside ours on the same boards, one row per measure.
+"""The "like the designers" scoreboard: the designers' own routing beside a run's on the same
+boards, one row per measure.
 
-    scoreboard.py OURS_RUN [--designer RUN] [--out DIR] [--jobs N]
+    scoreboard.py OURS_RUN [--out DIR] [--jobs N]
 
-Reads two pcbench runs (the designers' is the stand-in run `designer`, which writes each input
-board back unchanged), scores every routed board of OURS_RUN again with today's tools/tidy.py
-(older runs were judged before the layer and crossing scores existed), and counts the repairs the
-Write stage made from each board's log. Tidy scores are summed over the boards both runs wrote, so
-the two columns describe the same boards. Writes index.html and scoreboard.json to DIR (default
-ultraroute-lab/planned/scoreboard). Routes nothing and asks KiCad nothing.
+OURS_RUN is a pcbench run of the designers' boards (`pcbench.py run --source truth`); the other
+column is each board as its designer routed it (LAB/pcbench/truth/ID/designer.kicad_pcb, judged
+by `pcbench.py judge-truth`). A run of PCBench's `processed` boards is refused: what stood beside
+it as the designers' routing was FreeRouting's on every poured net (`bench/README.md`).
+
+The measures of direction, planes, bundles and repeats are `examine::designer::like` (built with
+`cargo build --release -p examine --example like`): angles are measured in each neighbourhood's
+frame, not the board's x and y. The rest are `tidy.py`'s and the judge's, read from the saved
+results. Sums run over the boards both sides wrote, clean or not, so the two columns describe the
+same boards. Writes index.html and scoreboard.json to DIR (default LAB/planned/scoreboard/RUN).
+Routes nothing and asks KiCad nothing.
+
+The second scoreboard, "sound" (coupling between roles, reference planes, loop areas, width
+against current), needs each net's role and is not built.
 """
 import argparse
 import html
@@ -23,83 +31,100 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import paths
+from tidy import ratios
 
 LAB = paths.lab()
 RUNS = LAB / "pcbench" / "runs"
+TRUTH = LAB / "pcbench" / "truth"
+TOOL = paths.REPO / "target" / "release" / "examples" / "like"
 
 REPAIR = re.compile(r"^(mended|bridged|split) (\d+) ", re.M)
+SUMS = ("track_mm", "vias", "on_planes_mm", "off_own_frame_mm", "off_designer_frame_mm", "off_board_axes_mm", "bundled_mm", "along_axis_mm", "on_axes_mm", "parts", "repeated")
 
 
-def tidy_of(pcb):
-    r = subprocess.run([sys.executable, str(HERE / "tidy.py"), str(pcb), "--json"], capture_output=True, text=True, timeout=900)
-    if r.returncode != 0:
-        return None
-    return json.loads(r.stdout.strip().splitlines()[-1])["tidy"]
+def like_of(designer, ours):
+    r = subprocess.run([str(TOOL), str(designer), str(ours)], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=900)
+    return json.loads(r.stdout) if r.returncode == 0 else None
 
 
 def board_of(run, bid):
+    """One board: the run's result, the designer's, and the two beside each other."""
     d = RUNS / run / bid
-    res = d / "result.json"
-    if not res.exists():
+    if not (d / "result.json").exists() or not (TRUTH / bid / "designer.json").exists():
         return None
-    out = json.loads(res.read_text())
-    pcb = d / "out.filled.kicad_pcb"
-    if not pcb.exists():
-        pcb = d / "out.kicad_pcb"
-    out["tidy"] = tidy_of(pcb) if pcb.exists() and out.get("code") == 0 else None
+    ours, theirs = json.loads((d / "result.json").read_text()), json.loads((TRUTH / bid / "designer.json").read_text())
+    out = d / "out.kicad_pcb"
+    if ours.get("code") != 0 or not out.exists() or "referee_error" in theirs:
+        return None
+    like = like_of(TRUTH / bid / "designer.kicad_pcb", out)
+    if like is None:
+        return None
     log = d / "log.txt"
-    out["repairs"] = sum(int(n) for _, n in REPAIR.findall(log.read_text(errors="replace"))) if log.exists() else None
-    return out
+    ours["repairs"] = sum(int(n) for _, n in REPAIR.findall(log.read_text(errors="replace"))) if log.exists() else None
+    # The designer's board against the bar a route is held to: nothing more unconnected than it
+    # has (true of itself) and no error its copper adds.
+    theirs["success"] = not theirs.get("new_errors")
+    return {"ours": ours, "designers": theirs, "like": like}
 
 
-def column(rows, many):
-    """One run's figures over its rows: `many` are the rows of 3+ track layers."""
-    from tidy import ratios
-    held = [r["tidy"] for r in rows if r.get("tidy")]
+def column(rows, side):
+    """One side's figures over the boards: `side` is "designers" or "ours"."""
+    like = [r["like"]["designer" if side == "designers" else "ours"] for r in rows]
+    res = [r[side] for r in rows]
+    s = {k: sum(x[k] for x in like) for k in SUMS}
+    deep = [x for x, r in zip(like, rows) if sum(1 for _, mm in r["like"]["designer"]["by_layer"] if mm > 0) >= 3]
+    planed = [x for x, r in zip(like, rows) if r["like"]["plane_layers"]]
+    held = [r["tidy"] for r in res if r.get("tidy")]
     keys = {k for t in held for k, v in t.items() if isinstance(v, (int, float))}
     t = ratios({k: sum(x.get(k) or 0 for x in held) for k in keys}) if held else {}
-    deep = [r["tidy"] for r in many if r.get("tidy")]
-    d = ratios({k: sum(x.get(k) or 0 for x in deep) for k in keys}) if deep else {}
-    add = lambda k: sum(r.get(k) or 0 for r in rows)
+    per = lambda x, y: x / y if y else None
+    add = lambda k: sum(r.get(k) or 0 for r in res)
     return {
         "boards": len(rows),
-        "clean": sum(bool(r.get("success")) for r in rows),
-        "off45": t.get("off45"),
-        "vias": add("vias"),
-        "bundled": t.get("bundled"),
+        "clean": sum(bool(r.get("success")) for r in res),
+        "on_planes_mm": round(sum(x["on_planes_mm"] for x in planed)),
+        "boards_with_planes": len(planed),
+        "off_own_frame": per(s["off_own_frame_mm"], s["track_mm"]),
+        "off_designer_frame": per(s["off_designer_frame_mm"], s["track_mm"]),
+        "off_board_axes": per(s["off_board_axes_mm"], s["track_mm"]),
+        "vias": s["vias"],
+        "bundled": per(s["bundled_mm"], s["track_mm"]),
         "bus_bundled": t.get("bus_bundled"),
-        "coherence_3plus": d.get("coherence"),
-        "same_axis_3plus": d.get("same_axis"),
+        "along_axis_3plus": per(sum(x["along_axis_mm"] for x in deep), sum(x["on_axes_mm"] for x in deep)),
         "boards_3plus": len(deep),
+        "repeated": per(s["repeated"], s["parts"]),
         "crossings_per_100mm": t.get("crossings_per_100mm"),
         "turns": t.get("turns"),
         "doglegs_per_m": t.get("doglegs_per_m"),
         "detour": t.get("detour"),
-        "track_mm": round(sum(x.get("track_mm") or 0 for x in held)),
-        "repairs_per_board": round(add("repairs") / len(rows), 1) if rows else None,
+        "track_mm": round(s["track_mm"]),
+        "repairs_per_board": round(add("repairs") / len(rows), 1) if rows and side == "ours" else None,
         "necks": add("necks"),
         "acute": add("acute"),
         "slots": add("slots"),
     }
 
 
-ROWS = [  # key, label, target, how to print
-    ("clean", "Boards clean (KiCad DRC, own rules)", "no board lost", "n"),
-    ("off45", "Off 45 degrees", "under 2%", "%"),
-    ("vias", "Vias", "no more than the designers'", "n"),
-    ("bundled", "Length beside another net", "10% or more", "%"),
-    ("bus_bundled", "Bus members beside a sibling", "25% or more", "%"),
-    ("coherence_3plus", "Along the layer's axis, boards with 3+ track layers", "60% or more", "%"),
-    ("same_axis_3plus", "Neighbouring layers on the same axis, 3+ track layers", "watch", "%"),
-    ("crossings_per_100mm", "Crossings of another layer's track, per 100 mm", "watch", "f"),
-    ("repairs_per_board", "Repairs at write (mends, bridges, splits), per board", "0", "f"),
-    ("necks", "Necks", "0", "n"),
-    ("acute", "Acute angles", "watch", "n"),
-    ("slots", "Same-net slots", "watch", "n"),
-    ("turns", "Turns per 10 mm", "watch", "f"),
-    ("doglegs_per_m", "Doglegs per metre", "watch", "f"),
-    ("detour", "Detour over the shortest tree", "watch", "f"),
-    ("track_mm", "Track length, mm", "allowed to rise", "n"),
+ROWS = [  # key, label, how it is measured, how to print
+    ("clean", "Boards clean: nothing unconnected beyond the designer's own, no error added by the routed copper", "KiCad DRC after a refill", "n"),
+    ("on_planes_mm", "Track on the layers the designer kept as planes, mm", "examine: a layer half poured with little track", "n"),
+    ("off_own_frame", "Off the 45-degree grid of its own neighbourhood", "examine, in the neighbourhood's frame", "%"),
+    ("off_designer_frame", "Off the grid the designer used there", "examine, in the designer's frame", "%"),
+    ("off_board_axes", "Off the grid of the board's x and y (the old score, blind to turned frames)", "examine", "%"),
+    ("vias", "Vias", "", "n"),
+    ("bundled", "Track in a bundle, beside another net's", "examine", "%"),
+    ("bus_bundled", "Bus members beside a sibling", "tidy.py", "%"),
+    ("along_axis_3plus", "Along its layer's axis, boards with track on 3+ layers", "examine, in the neighbourhood's frame", "%"),
+    ("repeated", "Parts of 3+ pads routed like another of their footprint", "examine", "%"),
+    ("crossings_per_100mm", "Crossings of another layer's track, per 100 mm", "tidy.py", "f"),
+    ("turns", "Turns per 10 mm", "tidy.py", "f"),
+    ("doglegs_per_m", "Doglegs per metre", "tidy.py", "f"),
+    ("detour", "Detour over the shortest tree", "tidy.py", "f"),
+    ("track_mm", "Track length, mm", "", "n"),
+    ("repairs_per_board", "Repairs at write (mends, bridges, splits), per board", "the router's log", "f"),
+    ("necks", "Necks", "KiCad, connection width", "n"),
+    ("acute", "Acute angles", "dfm.py", "n"),
+    ("slots", "Same-net slots", "dfm.py", "n"),
 ]
 
 
@@ -112,50 +137,60 @@ def show(v, how):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("ours")
-    ap.add_argument("--designer", default="designer")
-    ap.add_argument("--out", default=str(LAB / "planned" / "scoreboard"))
+    ap.add_argument("--out")
     ap.add_argument("--jobs", type=int, default=4)
     a = ap.parse_args()
+    if not TOOL.exists():
+        sys.exit(f"scoreboard: build {TOOL.relative_to(paths.REPO)} first: cargo build --release -p examine --example like")
     info = json.loads((RUNS / a.ours / "run.json").read_text())
+    if info.get("source") != "truth":
+        sys.exit(f"scoreboard: {a.ours} routed PCBench's processed boards, which are not the designers' (bench/README.md); route with --source truth")
     ids = sorted(p.name for p in (RUNS / a.ours).iterdir() if (p / "result.json").exists())
     with ThreadPoolExecutor(a.jobs) as pool:
-        ours = dict(zip(ids, pool.map(lambda i: board_of(a.ours, i), ids)))
-        theirs = dict(zip(ids, pool.map(lambda i: board_of(a.designer, i), ids)))
-    both = [i for i in ids if ours[i] and theirs[i] and ours[i].get("tidy") and theirs[i].get("tidy")]
-    deep = [i for i in both if theirs[i]["tidy"].get("track_layers", 0) >= 3]
-    cols = {
-        "designers": column([theirs[i] for i in both], [theirs[i] for i in deep]),
-        "ours": column([ours[i] for i in both], [ours[i] for i in deep]),
-    }
-    cols["designers"]["repairs_per_board"] = None  # nothing wrote their boards
-    all_ours = [ours[i] for i in ids if ours[i]]
+        boards = dict(zip(ids, pool.map(lambda i: board_of(a.ours, i), ids)))
+    both = [i for i in ids if boards[i]]
+    rows = [boards[i] for i in both]
+    cols = {side: column(rows, side) for side in ("designers", "ours")}
+    results = [json.loads((RUNS / a.ours / i / "result.json").read_text()) for i in ids]
     data = {
-        "ours_run": a.ours, "designer_run": a.designer, "commit": info.get("commit"), "tier": info.get("tier"),
-        "boards_in_run": len(ids), "clean_in_run": sum(bool(r.get("success")) for r in all_ours),
-        "boards_compared": len(both), "boards_3plus": len(deep), "columns": cols,
-        "boards": {i: {"ours": {k: ours[i].get(k) for k in ("success", "vias", "necks", "repairs", "tidy")},
-                       "designers": {k: theirs[i].get(k) for k in ("success", "vias", "necks", "tidy")}} for i in both},
+        "ours_run": a.ours, "commit": info.get("commit"), "binary": info.get("binary"), "recipe": info.get("recipe"), "tier": info.get("tier"),
+        "boards_in_run": len(ids), "clean_in_run": sum(bool(r.get("success")) for r in results),
+        "boards_compared": len(both), "columns": cols,
+        "boards": {i: {"ours": {k: boards[i]["ours"].get(k) for k in ("success", "unconnected", "floor", "new_errors", "necks", "repairs")},
+                       "designers": {k: boards[i]["designers"].get(k) for k in ("unconnected", "new_errors", "necks")},
+                       "like": boards[i]["like"]} for i in both},
     }
-    out = Path(a.out)
+    out = Path(a.out) if a.out else LAB / "planned" / "scoreboard" / a.ours
     out.mkdir(parents=True, exist_ok=True)
     (out / "scoreboard.json").write_text(json.dumps(data, indent=1))
     e = html.escape
-    rows = "".join(
-        f"<tr><td>{e(label)}</td><td>{e(target)}</td><td>{show(cols['designers'][k], how)}</td><td>{show(cols['ours'][k], how)}</td></tr>"
-        for k, label, target, how in ROWS)
-    (out / "index.html").write_text(f"""<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><p><a href="../">← Structured routing review</a></p><title>Structured routing scoreboard</title>
-<style>body{{font:15px/1.5 system-ui;margin:2rem auto;max-width:60rem;padding:0 1rem;background:#111;color:#ddd}}
-table{{border-collapse:collapse;width:100%}}td,th{{padding:.35rem .6rem;border-bottom:1px solid #333;text-align:left}}
-td:nth-child(n+3),th:nth-child(n+3){{text-align:right;font-variant-numeric:tabular-nums}}code{{color:#9cf}}a{{color:#9cf}}</style>
-<h1>Structured routing scoreboard</h1>
-<p>Run <code>{e(a.ours)}</code> (commit {e(str(info.get('commit')))}, tier {e(str(info.get('tier')))}): {data['clean_in_run']} of {len(ids)} boards clean.
-The table compares the {len(both)} boards that both this run and the designers' run <code>{e(a.designer)}</code> wrote,
-whether or not either is clean; {len(deep)} of them have tracks on three or more layers.</p>
-<table><tr><th>Measure</th><th>Target</th><th>Designers</th><th>Ours</th></tr>{rows}</table>
-<p>Not yet measured: any-angle share by cause, and the share of length at minimum clearance where more room exists.
-Targets are those of <code>docs/spec/structured-routing.md</code>, section 1. Per-board figures: <a href="scoreboard.json">scoreboard.json</a>.</p>
+    table = "".join(
+        f"<tr><td>{e(label)}</td><td>{show(cols['designers'][k], how)}</td><td>{show(cols['ours'][k], how)}</td><td class=how>{e(by)}</td></tr>"
+        for k, label, by, how in ROWS)
+    # The boards where ours strays furthest on the measures the old benchmark could not see.
+    planes = sorted((i for i in both if boards[i]["like"]["plane_layers"]), key=lambda i: -boards[i]["like"]["ours"]["on_planes_mm"])[:25]
+    plane_rows = "".join(
+        f"<tr><td>{e(i)}</td><td>{e(', '.join(boards[i]['like']['plane_layers']))}</td><td>{boards[i]['like']['designer']['on_planes_mm']:.0f}</td><td>{boards[i]['like']['ours']['on_planes_mm']:.0f}</td>"
+        f"<td>{boards[i]['like']['designer']['vias']}</td><td>{boards[i]['like']['ours']['vias']}</td><td>{'yes' if boards[i]['ours'].get('success') else 'no'}</td></tr>" for i in planes)
+    (out / "index.html").write_text(f"""<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Like the designers: {e(a.ours)}</title>
+<style>body{{font:16px/1.5 system-ui,sans-serif;margin:1rem auto;max-width:70rem;padding:0 1rem;color:#111;background:#fff}}
+table{{border-collapse:collapse;width:100%;margin:.5rem 0 1.5rem}}td,th{{padding:.3rem .6rem;border-bottom:1px solid #ddd;text-align:left;overflow-wrap:anywhere}}
+td:nth-child(2),td:nth-child(3),th:nth-child(2),th:nth-child(3){{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}}.how{{color:#666;font-size:.85rem}}
+.wide{{overflow-x:auto}}</style>
+<p><a href="../../">← Review pages</a></p>
+<h1>Like the designers: <code>{e(a.ours)}</code></h1>
+<p>The designers' own boards (from the corpus's raw files, pours and all) beside this run's routing of the same boards with the
+tracks and vias taken out and the pours kept. Router <code>{e(Path(str(info.get('binary'))).parent.name)}</code>, recipe <code>{e(str(info.get('recipe')))}</code>,
+tier {e(str(info.get('tier')))}: {data['clean_in_run']} of {len(ids)} boards clean. The table adds up the {len(both)} boards both sides wrote, clean or not.
+{cols['designers']['boards_with_planes']} of them have a layer the designer kept as a plane; {cols['designers']['boards_3plus']} have track on three or more layers.</p>
+<div class=wide><table><tr><th>Measure</th><th>Designers</th><th>Ours</th><th>Measured by</th></tr>{table}</table></div>
+<p>Look at the boards before quoting these: <a href="../../lookset/">the look sets</a>. Per-board figures: <a href="scoreboard.json">scoreboard.json</a>.
+The second scoreboard, "sound" (coupling between roles, reference planes, loop areas, width against current), needs each net's role and is not built.</p>
+<h2>Track on the designers' planes</h2>
+<p>The {len(planes)} boards where this run laid most track on a layer the designer kept as a plane.</p>
+<div class=wide><table><tr><th>Board</th><th>Designer's plane layers</th><th>Designer's track there, mm</th><th>Ours, mm</th><th>Designer's vias</th><th>Ours</th><th>Ours clean</th></tr>{plane_rows}</table></div>
 """)
-    print(f"{len(both)} boards compared ({len(deep)} with 3+ track layers); wrote {out}/index.html")
+    print(f"{len(both)} boards compared; wrote {out}/index.html")
     for k, label, _, how in ROWS:
         print(f"  {label}: designers {show(cols['designers'][k], how)}, ours {show(cols['ours'][k], how)}")
 
