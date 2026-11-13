@@ -1,0 +1,18 @@
+[package]
+name = "wire"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Copper as a drawing of the plan (docs/one-system-spec.md): each strand of `plan` as the track
+# with fewest bends in 0/45/90 that keeps its side of every obstacle and of the strands beside
+# it. A prototype.
+
+[dependencies]
+board = { path = "../board" }
+kicad = { path = "../kicad" }
+plan = { path = "../plan" }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

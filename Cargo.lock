@@ -2071,6 +2071,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wire"
+version = "0.1.0"
+dependencies = [
+ "board",
+ "kicad",
+ "plan",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

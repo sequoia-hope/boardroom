@@ -5,6 +5,7 @@
 //! vias, at sites on a grid that is part of every layer's triangulation.
 
 pub mod draw;
+pub mod settle;
 pub mod space;
 pub mod strands;
 pub mod ways;
@@ -12,6 +13,7 @@ pub mod ways;
 use board::{Board, ItemId, Kind};
 use serde::Serialize;
 
+pub use settle::{settle, Settled};
 pub use space::{End, Space};
 pub use strands::{Sheet, Strand};
 
@@ -86,7 +88,7 @@ struct Want {
 }
 
 /// The default via's radius and drill radius, nm.
-fn via_size(board: &Board) -> (i64, i64) {
+pub fn via_size(board: &Board) -> (i64, i64) {
     let class = board.rules.class_of("");
     let d = class.as_ref().map_or(0.0, |c| c.via_diameter).max(board.rules.min_via_diameter);
     let drill = class.as_ref().map_or(0.0, |c| c.via_drill).max(board.rules.min_via_drill);

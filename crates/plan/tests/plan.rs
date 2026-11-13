@@ -68,3 +68,26 @@ fn a_lifted_strand_leaves_no_crossing() {
         assert!(sheet.on.iter().all(Vec::is_empty));
     }
 }
+
+/// Settling the plan takes the unused via sites out of every layer and carries the strands
+/// over: those that come through are still nested chords in every triangle, and each is either
+/// carried or counted as lost.
+#[test]
+fn a_settled_plan_keeps_its_strands_nested() {
+    let (board, plan) = planned();
+    let (settled, what) = plan::settle(&board, &plan);
+    let before: usize = plan.sheets.iter().map(|s| s.laid().count()).sum();
+    let after: usize = settled.sheets.iter().map(|s| s.laid().count()).sum();
+    assert_eq!(after + what.lost, before);
+    assert!(after * 10 >= before * 9, "{} of {before} strands lost", what.lost);
+    for sheet in &settled.sheets {
+        assert!(sheet.space.sites.len() == settled.vias.len());
+        for (t, tri) in sheet.space.tris.iter().enumerate() {
+            if !sheet.space.free(t) {
+                continue;
+            }
+            let l = tri.e.map(|e| sheet.on[e].len());
+            assert!((l[0] + l[1] + l[2]) % 2 == 0 && l[0] <= l[1] + l[2] && l[1] <= l[0] + l[2] && l[2] <= l[0] + l[1], "triangle {t}: {l:?}");
+        }
+    }
+}
