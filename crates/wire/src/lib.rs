@@ -96,6 +96,20 @@ pub fn course(board: &Board, sheet: &Sheet, s: usize) -> Option<Course> {
         let edge = &space.edges[c[k]];
         let ends = edge.v.map(|v| space.verts[v]);
         let (lo, hi) = sheet.room(board, s, k)?;
+        // A pad's own wire turns at the pad's corner as it leaves the pad, and a turn takes
+        // room: where the strand nearest a corner is of the corner's own pad, its own width
+        // more, if the gap has the room.
+        let turn = |i: usize| {
+            let nearest = if i == 0 { sheet.on[c[k]].first() } else { sheet.on[c[k]].last() };
+            let Some(of) = nearest.map(|&(x, _)| &sheet.strands[x]) else { return 0.0 };
+            let Some(o) = space.vert_of[edge.v[i]] else { return 0.0 };
+            let pad = &space.obstacles[o];
+            if pad.what != What::Pad || pad.net == 0 {
+                return 0.0;
+            }
+            if pad.net == of.net { of.width / edge.len.max(1e-12) } else { 0.0 }
+        };
+        let (lo, hi) = if lo + turn(0) <= hi - turn(1) { (lo + turn(0), hi - turn(1)) } else { (lo, hi) };
         // Across the gap, into the triangle after it.
         let apex = space.tris[tris[k]?].v.iter().copied().find(|v| !edge.v.contains(v))?;
         let mut forward = left(sub(ends[1], ends[0]));
@@ -187,10 +201,10 @@ pub fn course(board: &Board, sheet: &Sheet, s: usize) -> Option<Course> {
         let d = turn.round().rem_euclid(8.0) as usize;
         vec![d, (d + 4) % 8]
     };
-    // Out of the pad by its end, and the wire's own width on, before it turns.
+    // As far as the pad's end, before it turns.
     let stub = |o: usize| {
         let poly = &space.obstacles[o].poly;
-        (0..poly.len()).map(|i| dot(sub(poly[(i + 1) % poly.len()], poly[i]), sub(poly[(i + 1) % poly.len()], poly[i])).sqrt()).fold(0.0, f64::max) / 2.0 + strand.width
+        (0..poly.len()).map(|i| dot(sub(poly[(i + 1) % poly.len()], poly[i]), sub(poly[(i + 1) % poly.len()], poly[i])).sqrt()).fold(0.0, f64::max) / 2.0
     };
     Some(Course {
         a,
@@ -199,6 +213,7 @@ pub fn course(board: &Board, sheet: &Sheet, s: usize) -> Option<Course> {
         stages,
         corners: Vec::new(),
         holds: holds.into_values().collect(),
+        beside: Vec::new(),
         walls,
         within,
         out: along(from),
@@ -228,15 +243,15 @@ fn learn_shape(board: &Board, sheet: &Sheet, s: usize, shape: &Shape, r: f64, co
     true
 }
 
-/// A wire already drawn, for the wire of strand `s` to keep from: its corners and pieces, on
-/// the side of the new wire the plan has the two strands in a gap they both cross (or, with no
-/// such gap, the side most of it lies on), no nearer than the two wires and the strands the
-/// plan has between them need.
-fn learn_wire(board: &Board, sheet: &Sheet, s: usize, other: &Wire, course: &mut Course) -> bool {
+/// How a wire already drawn lies to the wire of strand `s`: which side of the new wire it is
+/// on, as the plan has the two strands in a gap they both cross (or, with no such gap, the
+/// side most of it lies on), and how near the middles of the two may be: the two wires' and
+/// the room of the strands the plan has between them. None for a wire of the same net.
+fn neighbour(board: &Board, sheet: &Sheet, s: usize, course: &Course, other: &Wire, need: bool) -> Option<(bool, f64)> {
     let space = &sheet.space;
     let (me, it) = (&sheet.strands[s], &sheet.strands[other.strand]);
-    if me.net == it.net || course.walls.iter().any(|w| w.a == other.pts[0] && w.b == other.pts[1]) {
-        return false;
+    if me.net == it.net {
+        return None;
     }
     let clear = |a: u32, b: u32| if a == b { 0.0 } else { board.clearance(a, b) as f64 / 1e6 };
     // A gap both cross: which of its corners the other is towards, and what lies between.
@@ -262,11 +277,26 @@ fn learn_wire(board: &Board, sheet: &Sheet, s: usize, other: &Wire, course: &mut
         let towards = if its < mine { 0 } else { 1 };
         Some((dot(left(forward), sub(ends[towards], ends[1 - towards])) > 0.0, between + clear(sheet.strands[last].net, sheet.strands[on[hi].0].net)))
     });
-    let places = sheet.places(board);
-    let line: Vec<P> = std::iter::once(course.a).chain(me.crossings.iter().enumerate().map(|(k, &e)| sheet.point(e, places[s][k]))).chain([course.b]).collect();
-    let side_of = |at: P| line.windows(2).min_by(|x, y| chain::point_segment(at, x[0], x[1]).total_cmp(&chain::point_segment(at, y[0], y[1]))).is_some_and(|w| convex::cross(sub(w[1], w[0]), sub(at, w[0])) > 0.0);
-    let (side, between) = shared.unwrap_or_else(|| (other.pts.iter().filter(|&&p| side_of(p)).count() * 2 > other.pts.len(), clear(me.net, it.net)));
-    let r = me.width / 2.0 + between + other.width / 2.0;
+    let (side, between) = match shared {
+        Some(found) => found,
+        None if need => return None,
+        None => {
+            let places = sheet.places(board);
+            let line: Vec<P> = std::iter::once(course.a).chain(me.crossings.iter().enumerate().map(|(k, &e)| sheet.point(e, places[s][k]))).chain([course.b]).collect();
+            let side_of = |at: P| line.windows(2).min_by(|x, y| chain::point_segment(at, x[0], x[1]).total_cmp(&chain::point_segment(at, y[0], y[1]))).is_some_and(|w| convex::cross(sub(w[1], w[0]), sub(at, w[0])) > 0.0);
+            (other.pts.iter().filter(|&&p| side_of(p)).count() * 2 > other.pts.len(), clear(me.net, it.net))
+        }
+    };
+    Some((side, me.width / 2.0 + between + other.width / 2.0))
+}
+
+/// A wire already drawn that the new wire was faulted against, for it to keep from: its
+/// corners and pieces, on its side of the new wire, no nearer than the two may be.
+fn learn_wire(board: &Board, sheet: &Sheet, s: usize, other: &Wire, course: &mut Course) -> bool {
+    if course.walls.iter().any(|w| w.a == other.pts[0] && w.b == other.pts[1]) {
+        return false;
+    }
+    let Some((side, r)) = neighbour(board, sheet, s, course, other, false) else { return false };
     course.corners.extend(other.pts.iter().map(|&at| Corner { at, r, left: side }));
     course.walls.extend(other.pts.windows(2).map(|w| Wall { a: w[0], b: w[1], r }));
     true
@@ -335,12 +365,45 @@ pub fn draw_watching(board: &Board, plan: &Plan, watch: Option<(usize, usize)>) 
         vias.insert(id, v.site);
     }
     for (layer, sheet) in plan.sheets.iter().enumerate() {
-        for s in sheet.laid() {
+        // The order wires are drawn in: the plan's, but each strand's neighbours in its gaps
+        // straight after it, so that a bundle is drawn from one side across and each wire
+        // has one beside it to run along.
+        let laid: Vec<usize> = sheet.laid().collect();
+        let mut next_to: HashMap<usize, Vec<usize>> = HashMap::new();
+        for on in &sheet.on {
+            for pair in on.windows(2) {
+                next_to.entry(pair[0].0).or_default().push(pair[1].0);
+                next_to.entry(pair[1].0).or_default().push(pair[0].0);
+            }
+        }
+        let mut order: Vec<usize> = Vec::new();
+        let mut queued: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for &first in &laid {
+            let mut queue = std::collections::VecDeque::from([first]);
+            while let Some(s) = queue.pop_front() {
+                if !queued.insert(s) {
+                    continue;
+                }
+                order.push(s);
+                let mut beside: Vec<usize> = next_to.get(&s).cloned().unwrap_or_default();
+                beside.sort();
+                beside.dedup();
+                queue.extend(beside.into_iter().filter(|x| !queued.contains(x)));
+            }
+        }
+        for s in order {
             let strand = &sheet.strands[s];
             let Some(mut course) = course(board, sheet, s) else {
                 drawing.undrawn.push(Undrawn { layer, strand: s, net: strand.net, why: "its gaps do not follow one another".to_string(), refused: Vec::new(), gap: None });
                 continue;
             };
+            // The wires already drawn that the plan has in a gap with this one: their bends
+            // hold lines right beside them, for this wire to run along where it can.
+            for other in drawing.wires.iter().filter(|w| w.layer == layer) {
+                if let Some((side, r)) = neighbour(board, sheet, s, &course, other, true) {
+                    course.beside.extend(other.pts.windows(2).map(|w| (w[0], w[1], r, side)));
+                }
+            }
             let mut again = 0;
             loop {
                 // Along the pads' lengths if that can be; else any way out of them.

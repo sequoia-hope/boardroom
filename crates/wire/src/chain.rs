@@ -68,6 +68,11 @@ pub struct Course {
     /// Corners that hold lines and nothing more: those of the pads the wire ends on, which it
     /// need not keep from, at the distance the strands between leave it.
     pub holds: Vec<Corner>,
+    /// The pieces of wires already drawn that the plan has beside this one, each with the
+    /// nearest the middles of the two may be and whether it is on this wire's left: the line
+    /// along a piece at that distance is one the wire may take, and a piece on such a line
+    /// costs less ([`APART`]), so a wire runs beside its neighbour where it loses nothing by it.
+    pub beside: Vec<(P, P, f64, bool)>,
     pub walls: Vec<Wall>,
     /// Where a bend may be: inside one of these triangles. Empty for anywhere.
     pub within: Vec<[P; 3]>,
@@ -98,6 +103,10 @@ const TOL: f64 = 1e-6;
 const TRIED: usize = 60_000;
 /// What a bend costs, as length, mm.
 const BEND: f64 = 0.5;
+/// What a piece costs more, as a share of its length, when it is not on a line right beside a
+/// wire already drawn. People run tracks that go the same way side by side, as near as the
+/// rules let them; unless a net is told to keep clear of others, so does this.
+const APART: f64 = 0.02;
 /// A line is tried for a bend only where the wire has not gone more than this many gaps past
 /// the last corner that holds it.
 const NEAR: usize = 3;
@@ -292,42 +301,51 @@ pub fn chain(course: &Course, most: u32) -> Result<Path, usize> {
         let t = course.frame + std::f64::consts::TAU * k as f64 / TURNS as f64;
         [t.cos(), t.sin()]
     }).collect();
-    // The lines: each a direction, an offset to its left, and the stages whose corners hold
-    // it (every stage, for a line through an end or held by what the wire was told of since).
-    let mut lines: Vec<(usize, f64, usize, usize)> = Vec::new();
+    // The lines: each a direction, an offset to its left, the stages whose corners hold it
+    // (every stage, for a line through an end or held by what the wire was told of since),
+    // and whether it lies right beside a wire already drawn.
+    let mut lines: Vec<(usize, f64, usize, usize, bool)> = Vec::new();
     let mut known: HashMap<(usize, i64), usize> = HashMap::new();
-    let mut line = |d: usize, o: f64, stage: Option<usize>, lines: &mut Vec<(usize, f64, usize, usize)>| {
+    let mut put = |d: usize, o: f64, stage: Option<usize>, beside: bool, lines: &mut Vec<(usize, f64, usize, usize, bool)>| {
         let (lo, hi) = stage.map_or((0, usize::MAX), |s| (s, s));
         match known.get(&(d, (o * 1e7).round() as i64)) {
             Some(&k) => {
                 lines[k].2 = lines[k].2.min(lo);
                 lines[k].3 = lines[k].3.max(hi);
+                lines[k].4 |= beside;
             }
             None => {
                 known.insert((d, (o * 1e7).round() as i64), lines.len());
-                lines.push((d, o, lo, hi));
+                lines.push((d, o, lo, hi, beside));
             }
         }
     };
     for (d, &dir) in dirs.iter().enumerate() {
         // As near a corner as the wire may come, the corner on its side of the line.
         let held = |c: &Corner| dot(left(dir), c.at) + if c.left { -c.r } else { c.r };
-        line(d, dot(left(dir), course.a), None, &mut lines);
-        line(d, dot(left(dir), course.b), None, &mut lines);
+        put(d, dot(left(dir), course.a), None, false, &mut lines);
+        put(d, dot(left(dir), course.b), None, false, &mut lines);
         // Through where a piece told its direction may first turn, and last: so a wire in the
         // open, with no corner to hold it, can turn as soon as it is clear of its pad.
         for &k in &course.out {
-            line(d, dot(left(dir), add(course.a, scale(dirs[k % TURNS], course.stub[0]))), None, &mut lines);
+            put(d, dot(left(dir), add(course.a, scale(dirs[k % TURNS], course.stub[0]))), None, false, &mut lines);
         }
         for &k in &course.into {
-            line(d, dot(left(dir), sub(course.b, scale(dirs[k % TURNS], course.stub[1]))), None, &mut lines);
+            put(d, dot(left(dir), sub(course.b, scale(dirs[k % TURNS], course.stub[1]))), None, false, &mut lines);
         }
         for c in course.corners.iter().chain(&course.holds) {
-            line(d, held(c), None, &mut lines);
+            put(d, held(c), None, false, &mut lines);
+        }
+        // Along each piece of a neighbour, in the piece's own direction or against it.
+        for &(a, b, r, left) in &course.beside {
+            let along = sub(b, a);
+            if len(along) > 1e-9 && cross(dir, along).abs() < 1e-6 * len(along) {
+                put(d, held(&Corner { at: a, r, left }), None, true, &mut lines);
+            }
         }
         for (m, stage) in course.stages.iter().enumerate() {
             for c in &stage.corners {
-                line(d, held(c), Some(m), &mut lines);
+                put(d, held(c), Some(m), false, &mut lines);
             }
         }
     }
@@ -357,6 +375,7 @@ pub fn chain(course: &Course, most: u32) -> Result<Path, usize> {
     }
     // The cheapest chain found to the far end, and the state its last piece begins at.
     let mut done: Option<(f64, usize)> = None;
+    let mut found = false;
     let mut tried = 0;
     while let Some(Open { order, state: k }) = heap.pop() {
         if done.is_some_and(|d| d.0 <= order) || tried >= TRIED {
@@ -374,9 +393,19 @@ pub fn chain(course: &Course, most: u32) -> Result<Path, usize> {
         if through(line, course.b) && (course.into.is_empty() || course.into.contains(&d)) {
             let t = dot(dir, sub(course.b, at));
 
-            let stub = if course.into.is_empty() { -1e-9 } else { course.stub[1] };
-            if t >= stub && t <= far + 1e-9 && stage_at(t) == Some(course.gaps.len()) && done.is_none_or(|d| cost + t < d.0) {
-                done = Some((cost + t, k));
+            let stub = if course.into.is_empty() { -1e-9 } else { course.stub[1] - 1e-9 };
+            let whole = cost + t + if lines[line].4 { 0.0 } else { APART * t };
+            if t >= stub && t <= far + 1e-9 && stage_at(t) == Some(course.gaps.len()) && done.is_none_or(|d| whole < d.0) {
+                // The first chain to the far end was found by following the plan's line, which
+                // tells what is still to go only roughly. From here the search is for a
+                // cheaper chain, and goes by the least that can still be to go: everything
+                // that could not be cheaper is dropped.
+                if !found {
+                    found = true;
+                    let kept: Vec<Open> = heap.drain().map(|o| Open { order: states[o.state].cost + least(states[o.state].at, course.b), state: o.state }).filter(|o| o.order < whole).collect();
+                    heap.extend(kept);
+                }
+                done = Some((whole, k));
             }
         }
         if bends >= most {
@@ -387,7 +416,7 @@ pub fn chain(course: &Course, most: u32) -> Result<Path, usize> {
         } else if course.out.is_empty() {
             1e-6
         } else {
-            course.stub[0]
+            course.stub[0] - 1e-9
         };
         for turn in [1, TURNS - 1] {
             let d2 = (d + turn) % TURNS;
@@ -408,13 +437,14 @@ pub fn chain(course: &Course, most: u32) -> Result<Path, usize> {
                     continue;
                 }
                 let meet = add(at, scale(dir, t));
-                let cost = cost + t + BEND + ALONG * (dot(TILT, meet) - from).max(0.0);
+                let apart = if lines[line].4 { 0.0 } else { APART * t };
+                let cost = cost + t + apart + BEND + ALONG * (dot(TILT, meet) - from).max(0.0);
                 let key = (k2, (dot(dir2, meet) * 1e6).round() as i64, stage);
                 if best.get(&key).is_some_and(|&b| b <= cost) {
                     continue;
                 }
                 best.insert(key, cost);
-                heap.push(Open { order: cost + to_go(meet, stage), state: states.len() });
+                heap.push(Open { order: cost + if found { least(meet, course.b) } else { to_go(meet, stage) }, state: states.len() });
                 states.push(State { line: k2, at: meet, stage, cost, bends: bends + 1, parent: Some(k) });
             }
         }
