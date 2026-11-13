@@ -48,7 +48,7 @@ fn main() {
             }
         }
     }
-    let open = board::connectivity(&routed).airlines.len();
+    let open = board::connectivity_without_pours(&routed).airlines.len();
     let out = Path::new(&args[2]);
     std::fs::create_dir_all(out).unwrap();
     if let Some(svg) = watched {

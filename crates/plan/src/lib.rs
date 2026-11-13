@@ -155,12 +155,38 @@ fn place(board: &Board, sheets: &mut [Sheet], connection: usize, want: Want, way
     }
 }
 
-/// Whether the gaps round the via sites a way takes still hold their strands once every one
-/// of them is a via: the search tries each site alone, and two taken side by side narrow the
-/// gap between them from both ends.
+/// Whether the sheets, with a way placed in them, still hold their strands: every gap the way
+/// crosses (the search tries one crossing at a time, and a way that crosses a gap twice can
+/// fill it past its room) and every gap round a via site it takes (each site is tried alone,
+/// and two taken side by side narrow the gap between them from both ends).
 fn holds(board: &Board, sheets: &[Sheet], way: &ways::Way) -> bool {
+    let fits = |s: &Sheet, e: usize| {
+        let [a, b] = s.space.edges[e].v.map(|v| s.space.vert_of[v]);
+        // A side of an obstacle, or of a via site, is no gap.
+        (a.is_some() && a == b) || s.need(board, e, None, None) <= s.space.edges[e].len + strands::EPS
+    };
     let sites = way.legs.iter().flat_map(|l| [l.from, l.to]).filter_map(|e| if let End::Site(k) = e { Some(k) } else { None });
-    sites.into_iter().all(|k| sheets.iter().all(|s| s.space.sites[k].around.iter().all(|&e| s.need(board, e, None, None) <= s.space.edges[e].len + strands::EPS)))
+    way.legs.iter().all(|l| l.steps.iter().all(|&(e, _)| fits(&sheets[l.layer], e))) && sites.into_iter().all(|k| sheets.iter().all(|s| s.space.sites[k].around.iter().all(|&e| fits(s, e))))
+}
+
+/// Puts the vias of a way on `with`, a board that holds the vias placed before it, and says
+/// whether the exact checker passes each: a site was only ever tried alone, on the bare board,
+/// and two vias can together cut more of a pad's thermal spokes than one may.
+fn stand(with: &mut Board, sheets: &[Sheet], way: &ways::Way, net: u32) -> bool {
+    let (r, drill) = via_size(with);
+    let all = (1u64 << with.layers.len()) - 1;
+    let mut sites: Vec<usize> = way.legs.iter().flat_map(|l| [l.from, l.to]).filter_map(|e| if let End::Site(k) = e { Some(k) } else { None }).collect();
+    sites.sort();
+    sites.dedup();
+    let Some(sheet) = sheets.first() else { return true };
+    let mut fine = true;
+    for k in sites {
+        let c = sheet.space.obstacles[sheet.space.sites[k].obstacle].centre;
+        let at = board::Point::new((c[0] * 1e6).round() as i64, (c[1] * 1e6).round() as i64);
+        let id = with.insert(board::Item { kind: Kind::Via, net, layers: all, shape: board::Shape::Capsule { a: at, b: at, r }, hole: Some((at, drill)), locked: false, span: None });
+        fine &= board::check_item(with, id).is_empty();
+    }
+    fine
 }
 
 /// A way on one layer is taken without a thought for vias when it is no longer than this many
@@ -236,30 +262,37 @@ pub fn plan(board: &Board) -> Plan {
     // it saves put 19 vias on Shift-in 32, where the designer has none. And vias only as the
     // last thing tried made a connection take any way round, however long.)
     let (flat, with_vias) = (ways::Terms { dear: &dear, via: None }, ways::Terms { dear: &dear, via: Some(VIA) });
-    let mut airlines = board::connectivity(board).airlines;
+    // A pour joins nothing here: tracks laid across it can cut a pad off from the rest of it,
+    // so a pour's net is planned like any other and the pour fills in round what is drawn.
+    let mut airlines = board::connectivity_without_pours(board).airlines;
     airlines.sort_by(|a, b| a.from.distance(a.to).total_cmp(&b.from.distance(b.to)));
     let wants: Vec<Want> = airlines.iter().map(|a| Want { net: a.net, from: a.from_item, to: a.to_item }).collect();
     let mut left = Vec::new();
+    // The board with the vias placed so far on it.
+    let mut with = board.clone();
     for (c, (&want, line)) in wants.iter().zip(&airlines).enumerate() {
         // A way on one layer that is nearly direct is taken. A long way round is weighed
         // against the way with vias, each via counted as [`VIA`] of length.
         let w = width(board, want.net);
         let (from, to) = (End::Item(want.from), End::Item(want.to));
         let direct = DIRECT * line.from.distance(line.to) / 1e6 + SLACK;
-        let on_one = ways::find(board, &sheets, &flat, want.net, w, from, to);
+        // A way is one that still holds once it is in the sheets.
+        let sound = |way: &ways::Way, with: &Board| {
+            let mut tried = sheets.clone();
+            place(board, &mut tried, c, want, way);
+            holds(board, &tried, way) && stand(&mut with.clone(), &tried, way, want.net)
+        };
+        let on_one = ways::find(board, &sheets, &flat, want.net, w, from, to).filter(|way| sound(way, &with));
         let best = match on_one {
             Some(way) if way.cost <= direct => Some(way),
             on_one => {
-                let through = ways::find(board, &sheets, &with_vias, want.net, w, from, to).filter(|way| {
-                    let mut tried = sheets.clone();
-                    place(board, &mut tried, c, want, way);
-                    holds(board, &tried, way)
-                });
+                let through = ways::find(board, &sheets, &with_vias, want.net, w, from, to).filter(|way| sound(way, &with));
                 [on_one, through].into_iter().flatten().min_by(|a, b| a.cost.total_cmp(&b.cost))
             }
         };
         if let Some(way) = best {
             place(board, &mut sheets, c, want, &way);
+            stand(&mut with, &sheets, &way, want.net);
             continue;
         }
         if lay_by_lifting(board, &mut sheets, &flat, &wants, c) || lay_by_lifting(board, &mut sheets, &with_vias, &wants, c) {

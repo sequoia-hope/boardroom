@@ -52,7 +52,9 @@ fn no_gap_is_over_its_room() {
         for e in 0..sheet.space.edges.len() {
             let both_free = sheet.space.edges[e].t.iter().all(|t| t.is_some_and(|t| sheet.space.free(t)));
             if both_free && !sheet.space.scaffold(e) {
-                assert!(sheet.fill(&board, e) <= 1.0 + 1e-6, "edge {e} is {:.3} full", sheet.fill(&board, e));
+                let what = |v: usize| sheet.space.vert_of[v].map(|o| (sheet.space.obstacles[o].what, sheet.space.obstacles[o].net));
+                let [a, b] = sheet.space.edges[e].v;
+                assert!(sheet.fill(&board, e) <= 1.0 + 1e-6, "edge {e} is {:.3} full: {:.3} mm between {:?} and {:?}, strands of nets {:?}", sheet.fill(&board, e), sheet.space.edges[e].len, what(a), what(b), sheet.nets_on(e));
             }
         }
     }
