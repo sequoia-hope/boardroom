@@ -128,10 +128,19 @@ pub fn via_sites(board: &Board) -> Vec<Vec<space::P>> {
     sites
 }
 
-/// Lays a connection along the cheapest way there is for it, if there is one.
+/// Lays a connection along the cheapest way there is for it, on sheets the caller throws away
+/// when this fails: false with no way, or with one whose vias do not fit together.
 fn lay(board: &Board, sheets: &mut [Sheet], terms: &ways::Terms, connection: usize, want: Want) -> bool {
     let w = width(board, want.net);
     let Some(way) = ways::find(board, sheets, terms, want.net, w, End::Item(want.from), End::Item(want.to)) else { return false };
+    place(board, sheets, connection, want, &way);
+    // The caller lays on sheets it will throw away if this fails.
+    holds(board, sheets, &way)
+}
+
+/// Puts a way that was found on the sheets as they are into them.
+fn place(board: &Board, sheets: &mut [Sheet], connection: usize, want: Want, way: &ways::Way) {
+    let w = width(board, want.net);
     for leg in &way.legs {
         for end in [leg.from, leg.to] {
             if let End::Site(k) = end {
@@ -144,8 +153,20 @@ fn lay(board: &Board, sheets: &mut [Sheet], terms: &ways::Terms, connection: usi
     for leg in &way.legs {
         sheets[leg.layer].lay(want.net, connection, w, leg.from, leg.to, &leg.steps);
     }
-    true
 }
+
+/// Whether the gaps round the via sites a way takes still hold their strands once every one
+/// of them is a via: the search tries each site alone, and two taken side by side narrow the
+/// gap between them from both ends.
+fn holds(board: &Board, sheets: &[Sheet], way: &ways::Way) -> bool {
+    let sites = way.legs.iter().flat_map(|l| [l.from, l.to]).filter_map(|e| if let End::Site(k) = e { Some(k) } else { None });
+    sites.into_iter().all(|k| sheets.iter().all(|s| s.space.sites[k].around.iter().all(|&e| s.need(board, e, None, None) <= s.space.edges[e].len + strands::EPS)))
+}
+
+/// A way on one layer is taken without a thought for vias when it is no longer than this many
+/// times the straight line between its ends, plus [`SLACK`] mm.
+const DIRECT: f64 = 2.0;
+const SLACK: f64 = 4.0;
 
 /// Lifts every strand of a connection, and gives back the via sites it alone used.
 fn lift(sheets: &mut [Sheet], connection: usize) {
@@ -207,24 +228,41 @@ pub fn plan(board: &Board) -> Plan {
     let sites = via_sites(board);
     let mut sheets: Vec<Sheet> = (0..board.layers.len()).map(|l| Sheet::new(Space::new(board, l, &sites))).collect();
     let poured = poured(board);
-    let planes: Vec<usize> = if poured.iter().all(|s| *s >= 0.5) { Vec::new() } else { (0..poured.len()).filter(|&l| poured[l] >= 0.5).collect() };
+    // On two layers a poured side is still routed on: the designers do (159 of the gate
+    // tier's 253 two-layer boards have a side at least half poured).
+    let planes: Vec<usize> = if poured.len() <= 2 || poured.iter().all(|s| *s >= 0.5) { Vec::new() } else { (0..poured.len()).filter(|&l| poured[l] >= 0.5).collect() };
     let dear: Vec<f64> = (0..sheets.len()).map(|l| if planes.contains(&l) { ON_A_PLANE } else { 1.0 }).collect();
-    // A via is the last thing tried: first a way on one layer, then that with a connection
-    // lifted out of the way, and only then the same two with vias. (Tried 2026-11-12: one
-    // search that weighs a via against the detour it saves put 19 vias on Shift-in 32, where
-    // the designer has none, and left more of CAL430FR unplanned. The cost of this order is
-    // that a connection takes any way round, however long, before it takes a via.)
+    // (Tried 2026-11-12: one search for every connection that weighs a via against the detour
+    // it saves put 19 vias on Shift-in 32, where the designer has none. And vias only as the
+    // last thing tried made a connection take any way round, however long.)
     let (flat, with_vias) = (ways::Terms { dear: &dear, via: None }, ways::Terms { dear: &dear, via: Some(VIA) });
     let mut airlines = board::connectivity(board).airlines;
     airlines.sort_by(|a, b| a.from.distance(a.to).total_cmp(&b.from.distance(b.to)));
     let wants: Vec<Want> = airlines.iter().map(|a| Want { net: a.net, from: a.from_item, to: a.to_item }).collect();
     let mut left = Vec::new();
-    for (c, &want) in wants.iter().enumerate() {
-        if lay(board, &mut sheets, &flat, c, want)
-            || lay_by_lifting(board, &mut sheets, &flat, &wants, c)
-            || lay(board, &mut sheets, &with_vias, c, want)
-            || lay_by_lifting(board, &mut sheets, &with_vias, &wants, c)
-        {
+    for (c, (&want, line)) in wants.iter().zip(&airlines).enumerate() {
+        // A way on one layer that is nearly direct is taken. A long way round is weighed
+        // against the way with vias, each via counted as [`VIA`] of length.
+        let w = width(board, want.net);
+        let (from, to) = (End::Item(want.from), End::Item(want.to));
+        let direct = DIRECT * line.from.distance(line.to) / 1e6 + SLACK;
+        let on_one = ways::find(board, &sheets, &flat, want.net, w, from, to);
+        let best = match on_one {
+            Some(way) if way.cost <= direct => Some(way),
+            on_one => {
+                let through = ways::find(board, &sheets, &with_vias, want.net, w, from, to).filter(|way| {
+                    let mut tried = sheets.clone();
+                    place(board, &mut tried, c, want, way);
+                    holds(board, &tried, way)
+                });
+                [on_one, through].into_iter().flatten().min_by(|a, b| a.cost.total_cmp(&b.cost))
+            }
+        };
+        if let Some(way) = best {
+            place(board, &mut sheets, c, want, &way);
+            continue;
+        }
+        if lay_by_lifting(board, &mut sheets, &flat, &wants, c) || lay_by_lifting(board, &mut sheets, &with_vias, &wants, c) {
             continue;
         }
         let pads = board.item(want.from).zip(board.item(want.to)).is_some_and(|(f, t)| matches!(f.kind, Kind::Pad { .. }) && matches!(t.kind, Kind::Pad { .. }));
