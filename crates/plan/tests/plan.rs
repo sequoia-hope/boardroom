@@ -50,11 +50,8 @@ fn no_gap_is_over_its_room() {
     let (board, plan) = planned();
     for sheet in &plan.sheets {
         for e in 0..sheet.space.edges.len() {
-            let both_free = sheet.space.edges[e].t.iter().all(|t| t.is_some_and(|t| sheet.space.free(t)));
-            if both_free && !sheet.space.scaffold(e) {
-                let what = |v: usize| sheet.space.vert_of[v].map(|o| (sheet.space.obstacles[o].what, sheet.space.obstacles[o].net));
-                let [a, b] = sheet.space.edges[e].v;
-                assert!(sheet.fill(&board, e) <= 1.0 + 1e-6, "edge {e} is {:.3} full: {:.3} mm between {:?} and {:?}, strands of nets {:?}", sheet.fill(&board, e), sheet.space.edges[e].len, what(a), what(b), sheet.nets_on(e));
+            if sheet.space.gap(e) {
+                assert!(sheet.fill(&board, e) <= 1.0 + 1e-6, "edge {e} is {:.3} full", sheet.fill(&board, e));
             }
         }
     }
@@ -71,25 +68,17 @@ fn a_lifted_strand_leaves_no_crossing() {
     }
 }
 
-/// Settling the plan takes the unused via sites out of every layer and carries the strands
-/// over: those that come through are still nested chords in every triangle, and each is either
-/// carried or counted as lost.
+/// Every layer's triangles hold the plan's vias and no others, and every strand ends on a pad
+/// or on one of those vias.
 #[test]
-fn a_settled_plan_keeps_its_strands_nested() {
-    let (board, plan) = planned();
-    let (settled, what) = plan::settle(&board, &plan);
-    let before: usize = plan.sheets.iter().map(|s| s.laid().count()).sum();
-    let after: usize = settled.sheets.iter().map(|s| s.laid().count()).sum();
-    assert_eq!(after + what.lost, before);
-    assert!(after * 10 >= before * 9, "{} of {before} strands lost", what.lost);
-    for sheet in &settled.sheets {
-        assert!(sheet.space.sites.len() == settled.vias.len());
-        for (t, tri) in sheet.space.tris.iter().enumerate() {
-            if !sheet.space.free(t) {
-                continue;
+fn the_triangles_hold_the_vias_of_the_plan_and_no_others() {
+    let (_, plan) = planned();
+    for sheet in &plan.sheets {
+        assert_eq!(sheet.space.sites.len(), plan.vias.len());
+        for k in sheet.laid() {
+            for end in [sheet.strands[k].from, sheet.strands[k].to] {
+                assert!(sheet.space.ends.contains_key(&end), "strand {k} ends on {end:?}, which is not there");
             }
-            let l = tri.e.map(|e| sheet.on[e].len());
-            assert!((l[0] + l[1] + l[2]) % 2 == 0 && l[0] <= l[1] + l[2] && l[1] <= l[0] + l[2] && l[2] <= l[0] + l[1], "triangle {t}: {l:?}");
         }
     }
 }

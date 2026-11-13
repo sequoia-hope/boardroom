@@ -15,7 +15,7 @@ are what the `examine` crate grows from.
 | `refill_zones.py` | refill a board's zones through KiCad before DRC (our own fill is a preview) |
 | `lookset.py`, `lookset.json` | the designer's board beside ours, as pages to look at |
 | `scoreboard.py` | "like the designers": a `--source truth` run beside the designers' own boards, measured by `examine::designer::like` (angles in each neighbourhood's frame, track on the designers' planes, bundles, repeats) and `tidy.py` |
-| `prototype.py` | the plan-then-draw prototype (`crates/plan`, `crates/wire`) on the four small look boards: per layer the plan as a rubber-band sketch, the plan drawn as copper, and the designer's board, with KiCad's verdict on the drawn board |
+| `prototype.py` | the plan-then-draw prototype (`crates/plan`, `crates/wire`, by `wire::route`) on the look boards: per layer the plan as a rubber-band sketch, the plan drawn as copper, and the designer's board, with KiCad's verdict on the drawn board |
 | `pcbench_schematics.py` | survey and fetch the corpus boards' schematics and netlists |
 | `lab.py` | record an experiment in the lab |
 | `tidy.py`, `dfm.py`, `designer.py`, `netcheck.py` | the measures: tidiness, acute angles and slots, hot loops on a routed board, whether a designer routes a net within the rules |

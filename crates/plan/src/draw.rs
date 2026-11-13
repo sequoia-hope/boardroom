@@ -47,11 +47,15 @@ pub fn layer(board: &Board, plan: &Plan, l: usize) -> String {
         let (fill, stroke) = match o.what {
             What::Edge => ("none", "#000"),
             What::Pad => ("#c9c9c9", "#888"),
-            What::Site => continue,
             What::Copper => ("#e3d6b8", "#a89868"),
             What::Hole => ("#fff", "#555"),
             What::Keepout => ("#f6dede", "#c88"),
         };
+        if o.reach > 0.0 {
+            // A via of the plan: round, about its middle.
+            let _ = writeln!(s, "<circle cx='{:.3}' cy='{:.3}' r='{:.3}' fill='{fill}' stroke='{stroke}' stroke-width='{:.3}'/>", o.centre[0], o.centre[1], o.reach, thin * 2.0);
+            continue;
+        }
         let _ = writeln!(s, "<path d='{}' fill='{fill}' stroke='{stroke}' stroke-width='{:.3}'/>", path(&o.poly, true), thin * 2.0);
     }
     // Gaps: only edges with a free triangle on a side.

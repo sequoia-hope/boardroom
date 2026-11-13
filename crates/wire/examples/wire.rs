@@ -19,14 +19,20 @@ fn main() {
     let mut board = original.clone();
     plan::strip(&mut board);
     let started = std::time::Instant::now();
-    let (plan, settled) = plan::settle(&board, &plan::plan(&board));
-    let planned = started.elapsed().as_secs_f64();
-    // WIRE_WATCH=LAYER:STRAND writes that strand's course as watch.svg.
+    // WIRE_WATCH=LAYER:STRAND writes that strand's course as watch.svg, for the first plan.
     let watch = std::env::var("WIRE_WATCH").ok().and_then(|w| {
         let (l, s) = w.split_once(':')?;
         Some((l.parse().ok()?, s.parse().ok()?))
     });
-    let (drawing, watched) = wire::draw_watching(&board, &plan, watch);
+    let ((plan, drawing), watched) = match watch {
+        Some(_) => {
+            let plan = plan::plan(&board);
+            let (drawing, watched) = wire::draw_watching(&board, &plan, watch);
+            ((plan, drawing), watched)
+        }
+        None => (wire::route(&board), None),
+    };
+    let planned = started.elapsed().as_secs_f64();
     let drawn = started.elapsed().as_secs_f64();
     let (routed, new) = wire::onto(&board, &plan, &drawing);
     // What the checker faults that the new copper is part of.
@@ -78,6 +84,7 @@ fn main() {
             "layers": layers,
             "strands": plan.sheets.iter().map(|s| s.laid().count()).sum::<usize>(),
             "wires": drawing.wires.len(),
+            "as_planned": drawing.wires.iter().filter(|w| w.as_planned).count(),
             "undrawn": drawing.undrawn.len(),
             "why": drawing.undrawn.iter().fold(BTreeMap::new(), |mut m, u| {
                 let why = u.why.split(" past gap").next().unwrap_or("").to_string();
@@ -85,7 +92,6 @@ fn main() {
                 m
             }),
             "left": plan.left.len(),
-            "settled": settled,
             "vias": plan.vias.len(),
             "faults": rules,
             "open": open,

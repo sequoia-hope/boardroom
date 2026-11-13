@@ -46,7 +46,6 @@ pub fn layer(board: &Board, plan: &Plan, drawing: &Drawing, l: usize, faults: &[
         let (fill, stroke) = match o.what {
             What::Edge => ("none", "#000"),
             What::Pad => ("#c9c9c9", "#888"),
-            What::Site => continue,
             What::Copper => ("#e3d6b8", "#a89868"),
             What::Hole => ("#fff", "#555"),
             What::Keepout => ("#f6dede", "#c88"),
@@ -78,11 +77,11 @@ pub fn layer(board: &Board, plan: &Plan, drawing: &Drawing, l: usize, faults: &[
     s
 }
 
-/// One strand's course as SVG: obstacles, the region after each gap (thin blue), each gap
-/// (orange, numbered), what a line through it keeps from (a circle of that radius: green on
-/// the line's left, purple on its right), where the search got to (red), and the path if any.
-pub fn course(sheet: &plan::Sheet, course: &crate::path::Course, found: &Result<crate::path::Path, crate::path::Stuck>) -> String {
-    let all: Vec<P> = course.regions.iter().flatten().copied().collect();
+/// One strand's course as SVG: obstacles, where it may bend (thin blue), each corner it keeps
+/// from as a circle of that distance (green where the corner is on the wire's left, purple on
+/// its right), the sides it keeps from (orange), and the wire found (black).
+pub fn course(sheet: &plan::Sheet, course: &crate::chain::Course, found: Option<&crate::chain::Path>) -> String {
+    let all: Vec<P> = course.within.iter().flatten().copied().chain([course.a, course.b]).collect();
     let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
     for p in &all {
         for k in 0..2 {
@@ -98,37 +97,25 @@ pub fn course(sheet: &plan::Sheet, course: &crate::path::Course, found: &Result<
         lo[0] - m, lo[1] - m, lo[0] - m, lo[1] - m
     );
     for o in &sheet.space.obstacles {
-        if o.what == What::Site || o.what == What::Edge {
+        if o.what == What::Edge {
             continue;
         }
         let _ = writeln!(s, "<path d='{}' fill='#ddd' stroke='#999' stroke-width='{:.4}'/>", path(&o.poly, true), thin);
     }
-    for r in &course.regions {
-        let _ = writeln!(s, "<path d='{}' stroke='#8ad' stroke-width='{:.4}'/>", path(r, true), thin);
+    for t in &course.within {
+        let _ = writeln!(s, "<path d='{}' stroke='#8ad' stroke-width='{:.4}'/>", path(t, true), thin);
     }
-    let ring = |s: &mut String, c: &crate::path::Con| {
-        let _ = writeln!(s, "<circle cx='{:.4}' cy='{:.4}' r='{:.4}' stroke='{}' stroke-width='{:.4}'/>", c.p[0], c.p[1], c.r.max(thin * 3.0), if c.left { "#2a2" } else { "#a2a" }, thin * 1.5);
-    };
-    for (k, g) in course.gaps.iter().enumerate() {
-        let _ = writeln!(s, "<path d='{}' stroke='#f80' stroke-width='{:.4}'/>", path(&g.ends, false), thin * 2.0);
-        let mid = [(g.ends[0][0] + g.ends[1][0]) / 2.0, (g.ends[0][1] + g.ends[1][1]) / 2.0];
-        let _ = writeln!(s, "<text x='{:.3}' y='{:.3}' font-size='{:.3}' fill='#a50'>{}</text>", mid[0], mid[1], thin * 14.0, k + 1);
-        for c in &g.cons {
-            ring(&mut s, c);
-        }
+    for g in &course.gaps {
+        let _ = writeln!(s, "<path d='{}' stroke='#fa0' stroke-width='{:.4}'/>", path(&g.ends, false), thin);
     }
-    for c in course.starts.iter().chain(&course.ends) {
-        ring(&mut s, c);
+    for c in course.corners.iter().chain(course.stages.iter().flat_map(|s| &s.corners)) {
+        let _ = writeln!(s, "<circle cx='{:.4}' cy='{:.4}' r='{:.4}' stroke='{}' stroke-width='{:.4}'/>", c.at[0], c.at[1], c.r, if c.left { "#2a2" } else { "#a2a" }, thin * 1.5);
     }
-    match found {
-        Ok(p) => {
-            let _ = writeln!(s, "<path d='{}' stroke='#00c' stroke-width='{:.4}'/>", path(&p.pts, false), thin * 3.0);
-        }
-        Err(stuck) => {
-            for r in &stuck.reach {
-                let _ = writeln!(s, "<path d='{}' stroke='#e00' fill='#e00' fill-opacity='0.15' stroke-width='{:.4}'/>", path(r, true), thin * 2.0);
-            }
-        }
+    for wall in course.walls.iter().chain(course.stages.iter().flat_map(|s| &s.walls)) {
+        let _ = writeln!(s, "<path d='{}' stroke='#f80' stroke-width='{:.4}'/>", path(&[wall.a, wall.b], false), thin * 2.0);
+    }
+    if let Some(found) = found {
+        let _ = writeln!(s, "<path d='{}' stroke='#000' stroke-width='{:.4}'/>", path(&found.pts, false), thin * 3.0);
     }
     for p in [course.a, course.b] {
         let _ = writeln!(s, "<circle cx='{:.4}' cy='{:.4}' r='{:.4}' fill='#000'/>", p[0], p[1], thin * 4.0);

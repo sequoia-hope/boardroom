@@ -31,7 +31,24 @@ pub struct Sheet {
     /// For each edge, the strands that cross it in order from its first corner to its second,
     /// each with which of that strand's crossings this is.
     pub on: Vec<Vec<(usize, usize)>>,
+    /// Where the strands lie ([`Sheet::places`]), worked out when first asked for.
+    #[serde(skip)]
+    placed: std::sync::OnceLock<Vec<Vec<f64>>>,
 }
+
+/// A part of a free triangle, as its strands divide it: each strand cuts a corner off, so the
+/// parts are the bands between the strands round each corner and what is left in the middle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Region {
+    /// What touches all three sides.
+    Middle,
+    /// Round corner `corner` of the triangle (0 to 2): past `band` of its strands, short of
+    /// the next.
+    Band { corner: usize, band: usize },
+}
+
+/// A spot this near where a strand lies, mm, is on neither side of it.
+const BESIDE: f64 = 5.0 * crate::space::VIA_CORNER;
 
 /// Lengths this much over still fit: sums of rule values are not exact in floating point.
 pub const EPS: f64 = 1e-6;
@@ -39,7 +56,7 @@ pub const EPS: f64 = 1e-6;
 impl Sheet {
     pub fn new(space: Space) -> Sheet {
         let on = vec![Vec::new(); space.edges.len()];
-        Sheet { space, strands: Vec::new(), on }
+        Sheet { space, strands: Vec::new(), on, placed: Default::default() }
     }
 
     fn clear(board: &Board, a: u32, b: u32) -> f64 {
@@ -60,10 +77,10 @@ impl Sheet {
             let mut d = 0.0;
             let mut last: Option<u32> = None;
             for &(n, w) in others {
-                d += last.map_or(self.space.keep(board, corner, n, None), |l| Self::clear(board, l, n)) + w;
+                d += last.map_or(self.space.keep(board, corner, n), |l| Self::clear(board, l, n)) + w;
                 last = Some(n);
             }
-            d + last.map_or(self.space.keep(board, corner, me.0, None), |l| Self::clear(board, l, me.0)) + me.1 / 2.0
+            d + last.map_or(self.space.keep(board, corner, me.0), |l| Self::clear(board, l, me.0)) + me.1 / 2.0
         };
         let lo = side(e.v[0], &mut before.iter());
         let hi = e.len - side(e.v[1], &mut after.iter().rev());
@@ -117,8 +134,8 @@ impl Sheet {
     }
 
     /// What the strands on `edge` need between its corners, edge to edge: with one more of a
-    /// net and width `added` at a slot, and with a site taken to hold a `via` of a net.
-    pub fn need(&self, board: &Board, edge: usize, added: Option<(usize, u32, f64)>, via: Option<(usize, u32)>) -> f64 {
+    /// net and width `added` at a slot.
+    pub fn need(&self, board: &Board, edge: usize, added: Option<(usize, u32, f64)>) -> f64 {
         let e = &self.space.edges[edge];
         let mut nets = self.nets_on(edge);
         if let Some((slot, net, width)) = added {
@@ -126,13 +143,13 @@ impl Sheet {
         }
         let (Some(first), Some(last)) = (nets.first(), nets.last()) else { return 0.0 };
         let between: f64 = nets.windows(2).map(|w| Self::clear(board, w[0].0, w[1].0)).sum();
-        self.space.keep(board, e.v[0], first.0, via) + self.space.keep(board, e.v[1], last.0, via) + between + nets.iter().map(|n| n.1).sum::<f64>()
+        self.space.keep(board, e.v[0], first.0) + self.space.keep(board, e.v[1], last.0) + between + nets.iter().map(|n| n.1).sum::<f64>()
     }
 
     /// How full an edge is: what its strands need over its length (0 with none).
     pub fn fill(&self, board: &Board, edge: usize) -> f64 {
-        let len = self.space.edges[edge].len;
-        if len > 0.0 { self.need(board, edge, None, None) / len } else { 0.0 }
+        let len = self.space.width(edge);
+        if len > 0.0 { self.need(board, edge, None) / len } else { 0.0 }
     }
 
     /// How many strands cut each corner of triangle `t` off.
@@ -189,7 +206,7 @@ impl Sheet {
                 self.strands[s].width + Self::clear(board, self.strands[s].net, net)
             })
             .sum();
-        let need = self.space.keep(board, tri.v[c], net, None) + self.space.keep(board, wall.v[0], net, None).max(self.space.keep(board, wall.v[1], net, None)) + width + there;
+        let need = self.space.keep(board, tri.v[c], net) + self.space.keep(board, wall.v[0], net).max(self.space.keep(board, wall.v[1], net)) + width + there;
         need <= room + EPS
     }
 
@@ -205,6 +222,7 @@ impl Sheet {
             self.on[e].insert(s, (id, k));
         }
         self.strands.push(Strand { net, connection, from, to, width, crossings: steps.iter().map(|s| s.0).collect() });
+        self.placed = Default::default();
         id
     }
 
@@ -213,6 +231,7 @@ impl Sheet {
         for e in std::mem::take(&mut self.strands[strand].crossings) {
             self.on[e].retain(|x| x.0 != strand);
         }
+        self.placed = Default::default();
     }
 
     /// The strands that are laid.
@@ -220,14 +239,202 @@ impl Sheet {
         (0..self.strands.len()).filter(|&k| !self.strands[k].crossings.is_empty())
     }
 
-    /// Whether no strand is in or on the edge of a via site.
-    pub fn site_empty(&self, site: usize) -> bool {
-        self.space.sites[site].edges.iter().all(|&e| self.on[e].is_empty())
+    /// How far along the gap of its crossing `k` the middle of strand `s` may lie, as shares
+    /// of the gap from its first corner: from each corner it keeps that corner's distance and
+    /// the room of the strands between.
+    pub fn room(&self, board: &Board, s: usize, k: usize) -> Option<(f64, f64)> {
+        let strand = &self.strands[s];
+        let e = *strand.crossings.get(k)?;
+        let at = self.on[e].iter().position(|&x| x == (s, k))?;
+        let nets = self.nets_on(e);
+        Some(self.span(board, e, (strand.net, strand.width), &nets[..at], &nets[at + 1..]))
     }
 
-    /// Whether the strands that pass a site's corners would still fit with a via of `net` there.
-    pub fn site_fits(&self, board: &Board, site: usize, net: u32) -> bool {
-        self.space.sites[site].around.iter().all(|&e| self.on[e].is_empty() || self.need(board, e, None, Some((site, net))) <= self.space.edges[e].len + EPS)
+    /// Whether no gap holds more than its room, and the strands in every free triangle are
+    /// chords that each cut one corner off: no side holds more than the other two together,
+    /// and the three hold an even number.
+    pub fn sound(&self, board: &Board) -> bool {
+        let chords = self.space.tris.iter().enumerate().all(|(t, tri)| {
+            let l = tri.e.map(|e| self.on[e].len());
+            !self.space.free(t) || ((l[0] + l[1] + l[2]) % 2 == 0 && l[0] <= l[1] + l[2] && l[1] <= l[0] + l[2] && l[2] <= l[0] + l[1])
+        });
+        chords && (0..self.space.edges.len()).all(|e| self.on[e].is_empty() || !self.space.gap(e) || self.need(board, e, None) <= self.space.width(e) + EPS)
+    }
+
+    /// The point of `edge` a share `u` of the way from its first corner to its second.
+    pub fn point(&self, edge: usize, u: f64) -> P {
+        let e = &self.space.edges[edge];
+        lerp(self.space.verts[e.v[0]], self.space.verts[e.v[1]], u)
+    }
+
+    /// Where the strands lie: for each strand and each of its crossings, how far along the gap
+    /// it crosses, as a share from the gap's first corner. Each strand is pulled tight
+    /// ([`Sheet::sketch`]); where that leaves two in one gap out of their order, or nearer
+    /// than they may be, they are moved apart. This is where a strand is taken to be when a
+    /// via is put beside it, and the line it is followed along when the layer is triangulated
+    /// again: lines that keep their order in every gap never cross.
+    pub fn places(&self, board: &Board) -> &Vec<Vec<f64>> {
+        self.placed.get_or_init(|| {
+            let mut at: Vec<Vec<f64>> = self.strands.iter().map(|s| vec![0.5; s.crossings.len()]).collect();
+            let mut tight = vec![false; self.strands.len()];
+            for s in self.laid() {
+                let c = &self.strands[s].crossings;
+                let pts = self.sketch(board, s);
+                if pts.len() != c.len() + 2 {
+                    continue;
+                }
+                tight[s] = true;
+                for (k, &e) in c.iter().enumerate() {
+                    let edge = &self.space.edges[e];
+                    let (a, b) = (self.space.verts[edge.v[0]], self.space.verts[edge.v[1]]);
+                    let l2 = (b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2);
+                    at[s][k] = if l2 > 0.0 { ((pts[k + 1][0] - a[0]) * (b[0] - a[0]) + (pts[k + 1][1] - a[1]) * (b[1] - a[1])) / l2 } else { 0.5 };
+                }
+            }
+            for (e, on) in self.on.iter().enumerate() {
+                let n = on.len();
+                if n == 0 {
+                    continue;
+                }
+                let len = self.space.edges[e].len.max(1e-12);
+                // What two neighbours keep between their middles, as a share of the gap.
+                let apart = |i: usize| {
+                    let (a, b) = (&self.strands[on[i - 1].0], &self.strands[on[i].0]);
+                    ((a.width / 2.0 + Self::clear(board, a.net, b.net) + b.width / 2.0) / len).max(1e-9)
+                };
+                let mut y: Vec<f64> = on.iter().map(|&(s, k)| at[s][k]).collect();
+                for i in 1..n {
+                    y[i] = y[i].max(y[i - 1] + apart(i));
+                }
+                for i in (0..n - 1).rev() {
+                    y[i] = y[i].min(y[i + 1] - apart(i + 1));
+                }
+                // With no room for that, or a strand that could not be pulled tight: evenly.
+                let fine = on.iter().all(|&(s, _)| tight[s]) && y[0] > 0.0 && y[n - 1] < 1.0 && y.windows(2).all(|w| w[0] < w[1]);
+                for (i, &(s, k)) in on.iter().enumerate() {
+                    at[s][k] = if fine { y[i] } else { (i + 1) as f64 / (n + 1) as f64 };
+                }
+            }
+            at
+        })
+    }
+
+    /// How long the laid strands are in all, as they lie, mm.
+    pub fn length(&self, board: &Board) -> f64 {
+        let places = self.places(board);
+        let end = |e: End| self.space.ends.get(&e).map(|&o| self.space.obstacles[o].centre);
+        self.laid()
+            .map(|s| {
+                let strand = &self.strands[s];
+                let pts: Vec<P> = end(strand.from).into_iter().chain(strand.crossings.iter().enumerate().map(|(k, &e)| self.point(e, places[s][k]))).chain(end(strand.to)).collect();
+                pts.windows(2).map(|w| dist(w[0], w[1])).sum::<f64>()
+            })
+            .sum()
+    }
+
+    /// The part of triangle `t` a strand is in that has come into it through `edge` at `slot`.
+    pub fn region(&self, t: usize, edge: usize, slot: usize) -> Region {
+        let tri = &self.space.tris[t];
+        let i = tri.e.iter().position(|&e| e == edge).unwrap();
+        let (j, k) = ((i + 1) % 3, (i + 2) % 3);
+        let n = self.corners(t);
+        let p = self.counted_from(t, i, j, slot);
+        if p < n[j] {
+            Region::Band { corner: j, band: p }
+        } else if p > n[j] {
+            Region::Band { corner: k, band: self.on[edge].len() - p }
+        } else {
+            Region::Middle
+        }
+    }
+
+    /// The sides of triangle `t` a part of it touches, each with the slot there a strand
+    /// leaving the part by that side would take.
+    pub fn doors(&self, t: usize, region: Region) -> Vec<(usize, usize)> {
+        let tri = &self.space.tris[t];
+        match region {
+            Region::Band { corner, band } => [(corner + 1) % 3, (corner + 2) % 3].iter().map(|&side| (tri.e[side], self.counted_from(t, side, corner, band))).collect(),
+            Region::Middle => {
+                let n = self.corners(t);
+                (0..3).map(|side| (tri.e[side], self.counted_from(t, side, (side + 1) % 3, n[(side + 1) % 3]))).collect()
+            }
+        }
+    }
+
+    /// The strand that is `q` strands out from corner `c` of triangle `t`, and its crossing of
+    /// each of the two sides that meet there.
+    fn chord(&self, t: usize, c: usize, q: usize) -> [(usize, usize); 2] {
+        let tri = &self.space.tris[t];
+        [(c + 1) % 3, (c + 2) % 3].map(|side| {
+            let on = &self.on[tri.e[side]];
+            on[if self.space.edges[tri.e[side]].v[0] == tri.v[c] { q } else { on.len() - 1 - q }]
+        })
+    }
+
+    /// The part of triangle `t` the point `p` is in, as the strands lie ([`Sheet::places`]):
+    /// none when it is too near a strand to be on either side of it.
+    pub fn region_at(&self, board: &Board, t: usize, p: P) -> Option<Region> {
+        let tri = &self.space.tris[t];
+        let n = self.corners(t);
+        let places = self.places(board);
+        let mut found = Region::Middle;
+        let mut bands = 0;
+        for (c, &round) in n.iter().enumerate() {
+            let x = self.space.verts[tri.v[c]];
+            // The strands round this corner that the point is beyond.
+            let mut beyond = round;
+            for q in 0..round {
+                let [(s, k), (s2, k2)] = self.chord(t, c, q);
+                let (a, b) = (self.point(self.strands[s].crossings[k], places[s][k]), self.point(self.strands[s2].crossings[k2], places[s2][k2]));
+                let l = dist(a, b);
+                if l < 1e-12 {
+                    return None;
+                }
+                let side = |z: P| ((b[0] - a[0]) * (z[1] - a[1]) - (b[1] - a[1]) * (z[0] - a[0])) / l;
+                if side(p).abs() < BESIDE {
+                    return None;
+                }
+                if (side(p) > 0.0) == (side(x) > 0.0) {
+                    beyond = q;
+                    break;
+                }
+            }
+            if beyond < round {
+                bands += 1;
+                found = Region::Band { corner: c, band: beyond };
+            }
+        }
+        (bands <= 1).then_some(found)
+    }
+
+    /// Whether a via of `net` at `p`, in a part of triangle `t`, leaves the strands that pass
+    /// between it and each corner of the triangle their room: those are the strands round
+    /// that corner the via is beyond, and, where the via is in a band round another corner,
+    /// the strands of that corner that pass beyond the via.
+    pub fn via_fits(&self, board: &Board, t: usize, region: Region, p: P, net: u32) -> bool {
+        let tri = &self.space.tris[t];
+        let n = self.corners(t);
+        let of = |c: usize, q: usize| {
+            let s = &self.strands[self.chord(t, c, q)[0].0];
+            (s.net, s.width)
+        };
+        (0..3).all(|x| {
+            let inner = match region {
+                Region::Band { corner, band } if corner == x => band,
+                _ => n[x],
+            };
+            let mut nets: Vec<(u32, f64)> = (0..inner).map(|q| of(x, q)).collect();
+            if let Region::Band { corner, band } = region
+                && corner != x
+            {
+                nets.extend((band..n[corner]).rev().map(|q| of(corner, q)));
+            }
+            let (Some(first), Some(last)) = (nets.first(), nets.last()) else { return true };
+            let between: f64 = nets.windows(2).map(|w| Self::clear(board, w[0].0, w[1].0)).sum();
+            let via = if last.0 == net && net != 0 { 0.0 } else { board.clearance(last.0, net) as f64 / 1e6 + self.space.spots.radius };
+            let need = self.space.keep(board, tri.v[x], first.0) + between + nets.iter().map(|w| w.1).sum::<f64>() + via;
+            need <= dist(self.space.verts[tri.v[x]], p) + EPS
+        })
     }
 
     /// The strand as points: its ends' middles and where it crosses each edge, pulled as tight

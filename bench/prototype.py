@@ -26,12 +26,18 @@ import paths
 LAB = paths.lab()
 WIRE = paths.REPO / "target" / "release" / "examples" / "wire"
 OUT = LAB / "planned" / "prototype"
-# The boards the prototype starts on (router brief, section 7 item 5), and where each comes from.
+# The boards shown, and where each comes from: the four the prototype started on (router brief,
+# section 7 item 5), and boards of other kinds from the corpus.
 BOARDS = [
-    ("synthetic", "Synthetic bus board", "planned/bundles/synthetic_designer.kicad_pcb"),
-    ("ulpi", "ULPI Pmod", "pcbench/truth/ULPI-Pmod_ULPI-Pmod/bare.kicad_pcb"),
-    ("shift-in", "Shift-in 32 (HC165)", "pcbench/truth/Shift-in-32-HC165_shift-in/bare.kicad_pcb"),
-    ("cal430fr", "CAL430FR", "pcbench/truth/CAL430FR_CAL430F/bare.kicad_pcb"),
+    ("synthetic", "Synthetic bus board: two buses between pin rows", "planned/bundles/synthetic_designer.kicad_pcb"),
+    ("baofeng", "Baofeng interface: a small board of surface-mount parts", "pcbench/truth/Baofeng-Interface_BaofengInterface/bare.kicad_pcb"),
+    ("orangepi", "Orange Pi Zero node: 164 parts, headers and logic", "pcbench/truth/Hardware_Playground_orange_pi_zero_node/bare.kicad_pcb"),
+    ("piscium", "PISCIUM: a large through-hole board", "pcbench/truth/nichiden27_PISCIUM/bare.kicad_pcb"),
+    ("saw", "SAW filter board: four layers, radio", "pcbench/truth/radio_saw_dcc6c/bare.kicad_pcb"),
+    ("dps1200", "DPS-1200FB adapter: a power board", "pcbench/truth/DPS-1200FB_Adapter_Adapter/bare.kicad_pcb"),
+    ("shift-in", "Shift-in 32 (HC165): through-hole logic", "pcbench/truth/Shift-in-32-HC165_shift-in/bare.kicad_pcb"),
+    ("ulpi", "ULPI Pmod: a fine-pitch chip and two headers", "pcbench/truth/ULPI-Pmod_ULPI-Pmod/bare.kicad_pcb"),
+    ("cal430fr", "CAL430FR: a dense two-layer board", "pcbench/truth/CAL430FR_CAL430F/bare.kicad_pcb"),
 ]
 
 
@@ -82,7 +88,14 @@ def main():
             for kind in ("plan", "wire"):
                 svg = out / f"{kind}.{name}.svg"
                 cairosvg.svg2png(url=str(svg), write_to=str(svg.with_suffix(".png")), output_width=1800)
+            # The designer's board: the look set's picture of it, or one drawn here from the
+            # designer's own file beside the bare board.
             look = f"../lookset/{a.look}/{bid}/designer-{name}"
+            theirs = (LAB / board).parent / "designer.kicad_pcb"
+            if not (OUT / f"{look}.png").exists() and theirs.exists():
+                import lookset
+                if lookset.draw(theirs, name, out / f"designer-{name}"):
+                    look = f"{bid}/designer-{name}"
             designer = f"<a href='{e(look)}.svg'><img loading='lazy' src='{e(look)}.png'></a>" if (OUT / f"{look}.png").exists() else "<p class='none'>the designer drew no track here</p>"
             note = f"{layer['wires']} of {layer['strands']} strands drawn, {layer['bends']} bends" + (", a layer the designer poured" if layer["plane"] else "")
             pic = lambda kind: f"<a href='{e(bid)}/{kind}.{e(name)}.svg'><img loading='lazy' src='{e(bid)}/{kind}.{e(name)}.png'></a>"
@@ -91,11 +104,11 @@ def main():
                         f"<figure><figcaption>the designer's copper</figcaption>{designer}</figure></div>")
         why = "; ".join(f"{n}: {e(w)}" for w, n in c["why"].items())
         faults = ", ".join(f"{n} {e(t)}" for t, n in c["faults"].items()) or "none"
-        text = (f"<p>The plan: <b>{c['strands']}</b> strands with <b>{c['vias']}</b> vias, <b>{c['left']}</b> connections with no strand; "
-                f"{c['settled']['lost']} strands lost and {c['settled']['overfull']} gaps over their room once the unused via sites are taken out. "
-                f"The drawing: <b>{c['wires']}</b> strands drawn, <b>{c['undrawn']}</b> not" + (f" ({why})" if why else "")
+        text = (f"<p>The plan: <b>{c['strands']}</b> strands with <b>{c['vias']}</b> vias, <b>{c['left']}</b> connections with no strand. "
+                f"The drawing: <b>{c['wires']}</b> strands drawn" + (f" ({c['as_planned']} of them at the plan's own angles)" if c.get('as_planned') else "")
+                + f", <b>{c['undrawn']}</b> not" + (f" ({why})" if why else "")
                 + f". Our checker's faults in what was drawn: {faults}. Still open by our count: <b>{c['open']}</b>. "
-                f"{c['seconds']['plan']:.1f} s to plan, {c['seconds']['draw'] * 1000:.0f} ms to draw.</p>")
+                f"{c['seconds']['draw']:.1f} s in all.</p>")
         if not a.no_kicad:
             k = kicad(LAB / board, out)
             if isinstance(k, str):
@@ -112,20 +125,16 @@ def main():
 figcaption,.m{{color:#999;font-size:14px}}.bad{{color:#f88}}.none{{color:#777}}</style>
 <p><a href="../">← Review pages</a></p>
 <h1>Plan-then-draw prototype</h1>
-<p class="m">The new router's first two stages on the four smallest look boards. <b>The plan</b> (left): each layer's room is cut
-into triangles between the corners of the pads, holes and board edge; a triangle side between two obstacles is a gap, and one that is at
-least half full is drawn, amber to red at full; each connection is a strand through the gaps it passes in order, pulled tight like a rubber band, and strands
-never cross on a layer. <b>The plan drawn</b> (middle): each strand as the track with fewest bends, in 0/45/90, that crosses its
-gaps in their order and keeps its side of every obstacle and of the strands beside it; every wire is put to the exact checker as it
-is drawn and kept only if it passes. A dashed red line is a strand with no such path (or whose path the checker refused); a dashed yellow one a connection the plan has
-no strand for. Nothing is mended afterwards.</p>
-<p class="m">Seen wrong so far. In the plan: a connection takes any way round, however long, before it takes a via (the loops
-round the end of a pad row on the synthetic board, most of CAL430FR); fine-pitch pads walled in by their neighbours' strands find
-no via site; ground and supply connections are planned as strands where the designer used a pour. In the drawing: where the plan
-is direct the copper looks drawn by hand, and a bundle comes out nested at even pitch; a strand planned the long way round is drawn
-the long way round. A thin magenta line is a path the search found and the exact checker refused: the search holds a wire off the
-corners and wires beside its own gaps only, so near crowded pads it can pass too close to something it was never told of. Wires
-are drawn in the plan's order, each as late-turning as it may be, so the first of a bundle sets the shape for the rest.</p>
+<p class="m">The new router's two stages. <b>The plan</b> (left): each layer's room is cut into triangles between the corners of
+the pads, holes and board edge; a triangle side between two obstacles is a gap, and one that is at least half full is drawn, amber
+to red at full. Each connection is a strand through the gaps it passes in order, pulled tight like a rubber band; strands never
+cross on a layer, and a via is put in only where a connection wants one. A connection with no way has the connections in its way
+lifted and laid again. <b>The plan drawn</b> (middle): each strand, alone, as pieces in 0/45/90 that each pass an end of the wire or
+lie as near a corner as the wire may come to it, given the strands the plan has between; so wires that pass a corner together come
+out side by side at even pitch, whatever order they are drawn in. Every wire is put to the exact checker and kept only if it passes.
+Where a wire cannot be drawn, the gap it stuck in is counted as narrower and the board is planned again, a few times; the round
+that leaves fewest connections open is the one shown. A dashed red line is a strand still not drawn; a dashed yellow one a connection
+the plan has no strand for. <b>The designer's copper</b> (right) is the board as its designer routed it.</p>
 {''.join(rows)}
 """
     OUT.mkdir(parents=True, exist_ok=True)
