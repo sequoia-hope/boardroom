@@ -42,6 +42,10 @@ pub struct Way {
 /// via about to be left: the layer it is left on, [`VIA`], the spot, nothing.
 type Key = (usize, usize, usize, usize);
 
+/// What a bend in a way costs, as length, mm. A way that winds between pads is hard to draw
+/// and is not what anyone would lay: with this it is weighed against a via, or against
+/// lifting what is in the way, as more than its length.
+const TURN: f64 = 0.75;
 /// In a key's last place: the crossing is the last, onto the end.
 const GOAL: usize = usize::MAX;
 /// In a key's second place: the key is a via.
@@ -94,6 +98,8 @@ pub struct Terms<'a> {
     pub cross: Option<f64>,
     /// Spots no via is to be put at.
     pub ban: &'a [usize],
+    /// Connections whose strands the way may not go across, whatever `cross` says.
+    pub keep: &'a [usize],
 }
 
 /// Where a via of `net` at spot `c` would stand on each layer, the triangle and the part of
@@ -229,7 +235,7 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
                     let Some(&(other, _)) = k.and_then(|k| sheet.on[edge].get(k)) else { continue };
                     let other = &sheet.strands[other];
                     let (to_key, c) = ((l, edge, slot2, into), cost + cross);
-                    if other.net != net && best.get(&to_key).is_none_or(|b| c < b.cost && !through(&best, key, to_key)) {
+                    if other.net != net && !terms.keep.contains(&other.connection) && best.get(&to_key).is_none_or(|b| c < b.cost && !through(&best, key, to_key)) {
                         found.push((to_key, Seen { cost: c, prev: Some(key), at: here, bend_at: here, bend_cost: c, bend: Some(key), starts: false, over: Some(other.connection) }));
                     }
                 }
@@ -268,7 +274,7 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
                     (straight, bend_cost + terms.dear[l] * dist(bend_at, straight), bend, bend_at, bend_cost)
                 } else {
                     let there = sheet.crossing(board, e, s, me, here, goal);
-                    (there, cost + terms.dear[l] * dist(here, there), Some(key), here, cost)
+                    (there, cost + TURN + terms.dear[l] * dist(here, there), Some(key), here, cost + TURN)
                 };
                 // The end's own side is the last crossing; then the way ends at its middle.
                 let (to_key, c) = if ends { ((l, e, s, GOAL), c + terms.dear[l] * dist(there, goal)) } else { ((l, e, s, next), c) };

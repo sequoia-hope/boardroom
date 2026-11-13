@@ -169,7 +169,9 @@ pub fn course(board: &Board, sheet: &Sheet, s: usize) -> Option<Course> {
     }
     let mut walls = Vec::new();
     for o in space.obstacles.iter().filter(|o| o.what == What::Edge) {
-        let r = board.rules.min_copper_edge_clearance * 1e3 + strand.width / 2.0;
+        // A little over: a round cut-out is in the outline as chords, each a hair inside the
+        // curve the checker measures from.
+        let r = board.rules.min_copper_edge_clearance * 1e3 + strand.width / 2.0 + 0.02;
         walls.extend((0..o.poly.len()).map(|i| Wall { a: o.poly[i], b: o.poly[(i + 1) % o.poly.len()], r }));
     }
     // A bend may be anywhere in the box round the course, and a little way out of it: what
@@ -311,13 +313,28 @@ const OUT: f64 = 1.0;
 const AGAIN: usize = 4;
 
 /// The corners and sides of an obstacle, for a wire of strand `s` to keep from: each corner on
-/// the side of the wire it is on as the strand lies in the plan.
-fn learn(board: &Board, sheet: &Sheet, s: usize, o: usize, course: &mut Course) -> bool {
+/// the side of the wire it is on as the strand lies in the plan. Where the course already
+/// holds the wire from them and the checker still faulted it, by `short` mm, it is held that
+/// much further off: an obstacle's outline here is its shape made simpler, and may lie a
+/// little inside it.
+fn learn(board: &Board, sheet: &Sheet, s: usize, o: usize, short: f64, course: &mut Course) -> bool {
     let space = &sheet.space;
     let strand = &sheet.strands[s];
     let obstacle = &space.obstacles[o];
     if obstacle.net == strand.net && strand.net != 0 {
         return false;
+    }
+    let of: Vec<P> = space.verts.iter().enumerate().filter(|&(v, _)| space.vert_of[v] == Some(o)).map(|(_, &p)| p).collect();
+    let known = course.stages.iter().flat_map(|x| &x.corners).chain(&course.corners).any(|c| of.contains(&c.at));
+    if known && short > 0.0 && short < 0.05 {
+        let more = short + 0.002;
+        for c in course.stages.iter_mut().flat_map(|x| x.corners.iter_mut()).chain(course.corners.iter_mut()).filter(|c| of.contains(&c.at)) {
+            c.r += more;
+        }
+        for w in course.stages.iter_mut().flat_map(|x| x.walls.iter_mut()).chain(course.walls.iter_mut()).filter(|w| of.contains(&w.a) && of.contains(&w.b)) {
+            w.r += more;
+        }
+        return true;
     }
     // The strand as a line: its ends and where it lies in each gap.
     let places = sheet.places(board);
@@ -462,8 +479,9 @@ pub fn draw_watching(board: &Board, plan: &Plan, watch: Option<(usize, usize)>) 
                         Some(&site) => sheet.space.sites.get(site).map(|x| x.obstacle),
                         None => sheet.space.obstacles.iter().position(|x| x.item == Some(other)),
                     };
+                    let short = faults.iter().filter(|f| f.a == other || f.b == Some(other)).map(|f| (f.required as f64 - f.gap) / 1e6).fold(0.0, f64::max);
                     match o {
-                        Some(o) => learnt |= learn(board, sheet, s, o, &mut course),
+                        Some(o) => learnt |= learn(board, sheet, s, o, short, &mut course),
                         None => {
                             if let Some(item) = work.item(other).filter(|i| matches!(i.kind, Kind::Spoke { .. }) && i.on(layer)) {
                                 let need = faults.iter().filter(|f| f.a == other || f.b == Some(other)).map(|f| f.required).max().unwrap_or(0);
@@ -481,7 +499,19 @@ pub fn draw_watching(board: &Board, plan: &Plan, watch: Option<(usize, usize)>) 
                         let at = [(b.min.x + b.max.x) as f64 / 2e6, (b.min.y + b.max.y) as f64 / 2e6];
                         course.gaps.iter().min_by(|x, y| chain::point_segment(at, x.ends[0], x.ends[1]).total_cmp(&chain::point_segment(at, y.ends[0], y.ends[1]))).map(|g| g.ends)
                     });
-                    drawing.undrawn.push(Undrawn { layer, strand: s, net: strand.net, why: format!("{why} ({:?})", faults[0].rule), refused: path.pts, gap: stuck.or(near) });
+                    // What it was faulted against, in a word.
+                    let against = match faults.iter().flat_map(|f| [Some(f.a), f.b]).flatten().find(|id| !ids.contains(id)) {
+                        Some(id) if tracks.contains_key(&id) => "another wire",
+                        Some(id) if vias.contains_key(&id) => "a via",
+                        Some(id) => match work.item(id).map(|i| &i.kind) {
+                            Some(Kind::Pad { .. }) => "a pad",
+                            Some(Kind::Spoke { .. }) => "a pad's spoke to its pour",
+                            Some(Kind::Keepout { .. }) => "a keepout",
+                            _ => "copper",
+                        },
+                        None => "the board's edge",
+                    };
+                    drawing.undrawn.push(Undrawn { layer, strand: s, net: strand.net, why: format!("{why} ({:?} against {against}, {:.3} of {:.3} mm)", faults[0].rule, faults[0].gap / 1e6, faults[0].required as f64 / 1e6), refused: path.pts, gap: stuck.or(near) });
                     break;
                 }
             }
