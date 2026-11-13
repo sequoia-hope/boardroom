@@ -44,6 +44,7 @@ pub fn layer(board: &Board, plan: &Plan, l: usize) -> String {
         let (fill, stroke) = match o.what {
             What::Edge => ("none", "#000"),
             What::Pad => ("#c9c9c9", "#888"),
+            What::Site => continue,
             What::Copper => ("#e3d6b8", "#a89868"),
             What::Hole => ("#fff", "#555"),
             What::Keepout => ("#f6dede", "#c88"),
@@ -54,6 +55,11 @@ pub fn layer(board: &Board, plan: &Plan, l: usize) -> String {
     for (e, edge) in sp.edges.iter().enumerate() {
         let sides: Vec<usize> = edge.t.iter().flatten().copied().collect();
         if sides.len() < 2 || !sides.iter().all(|&t| sp.free(t)) {
+            continue;
+        }
+        // An empty edge to a via site no via took is only scaffolding: left out.
+        let scaffold = |v: usize| sp.vert_of[v].is_none_or(|o| sp.obstacles[o].what == What::Site);
+        if sheet.on[e].is_empty() && (scaffold(edge.v[0]) || scaffold(edge.v[1])) {
             continue;
         }
         let f = sheet.fill(board, e);
@@ -79,7 +85,7 @@ pub fn layer(board: &Board, plan: &Plan, l: usize) -> String {
         );
     }
     for left in &plan.left {
-        let (Some(a), Some(b)) = (sp.of_item.get(&left.from), sp.of_item.get(&left.to)) else { continue };
+        let (Some(a), Some(b)) = (sp.ends.get(&crate::End::Item(left.from)), sp.ends.get(&crate::End::Item(left.to))) else { continue };
         let (a, b) = (sp.obstacles[*a].centre, sp.obstacles[*b].centre);
         let _ = writeln!(s, "<path d='M{:.3} {:.3}L{:.3} {:.3}' stroke='#d00' stroke-width='{:.3}' stroke-dasharray='{:.3} {:.3}'><title>{}: {}</title></path>", a[0], a[1], b[0], b[1], thin * 4.0, thin * 12.0, thin * 8.0, board.net_name(left.net), left.why);
     }

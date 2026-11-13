@@ -63,7 +63,7 @@ def main():
             figs.append(f"<h3>{e(name)}</h3><div class='pair'><figure><figcaption>the plan: {e(note)}</figcaption><a href='{e(bid)}/plan.{e(name)}.svg'><img loading='lazy' src='{e(bid)}/plan.{e(name)}.png'></a></figure>"
                         f"<figure><figcaption>the designer's copper</figcaption>{designer}</figure></div>")
         why = "; ".join(f"{n}: {e(w)}" for w, n in counts["why"].items())
-        rows.append(f"<h2>{e(title)}</h2><p><b>{counts['planned']}</b> connections planned, <b>{counts['left']}</b> left"
+        rows.append(f"<h2>{e(title)}</h2><p><b>{counts['planned']}</b> strands planned with <b>{counts['vias']}</b> vias, <b>{counts['left']}</b> connections left"
                     + (f" ({why})" if why else "") + f". {counts['seconds'] * 1000:.0f} ms.</p>" + "".join(figs))
     page = f"""<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Plan-then-draw prototype</title>
@@ -75,8 +75,11 @@ figcaption,.m{{color:#999;font-size:14px}}.bad{{color:#f88}}.none{{color:#777}}<
 <p class="m">The new router's first stage on the four smallest look boards, before any copper exists. Each layer's room is cut into
 triangles between the corners of the pads, holes and board edge. A triangle side between two obstacles is a gap: grey when empty,
 green to red by how full it is. Each connection is a strand, a coloured line through the gaps it passes in order, pulled tight
-like a rubber band; strands never cross on a layer. Dashed red is a connection with no strand yet. There are no vias yet, so a
-connection that must cross another has no way; nothing here is drawn as tracks, and nothing is checked by KiCad.</p>
+like a rubber band; strands never cross on a layer. A grey disc that is not a pad is a via the plan put in, at one of a grid
+of sites. Dashed red is a connection with no strand yet. Nothing here is drawn as tracks, and nothing is checked by KiCad.</p>
+<p class="m">Seen wrong so far: a connection takes any way round, however long, before it takes a via; strands wobble between
+the unused via sites; fine-pitch pads walled in by their neighbours' strands find no via site near enough; ground and supply
+connections are planned as strands where the designer used a pour.</p>
 {''.join(rows)}
 """
     OUT.mkdir(parents=True, exist_ok=True)

@@ -1,16 +1,18 @@
 //! The whole-board plan: before any copper, which gaps between obstacles each connection passes,
 //! in what order, on which layer (docs/one-system-spec.md; the reasons are in UltraRoute's
-//! `from-zero.md`). A prototype: strands are laid one at a time, shortest connection first, each
-//! on one layer; there are no vias and nothing is taken up again yet.
+//! `from-zero.md`). A prototype: connections are laid one at a time, shortest first. One with
+//! no way has one other lifted out of its way and laid again after it; failing that it takes
+//! vias, at sites on a grid that is part of every layer's triangulation.
 
 pub mod draw;
 pub mod space;
 pub mod strands;
+pub mod ways;
 
 use board::{Board, ItemId, Kind};
 use serde::Serialize;
 
-pub use space::Space;
+pub use space::{End, Space};
 pub use strands::{Sheet, Strand};
 
 /// A connection the plan has no strand for, and why.
@@ -22,12 +24,21 @@ pub struct Left {
     pub why: String,
 }
 
+/// A via the plan put in: the site it took.
+#[derive(Debug, Clone, Serialize)]
+pub struct Via {
+    pub net: u32,
+    pub site: usize,
+    pub at: space::P,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Plan {
     /// One sheet per copper layer, in the board's order.
     pub sheets: Vec<Sheet>,
-    /// Layers a pour covers at least half of: strands go there only when they fit nowhere else.
+    /// Layers a pour covers at least half of, unless every layer is: strands there cost more.
     pub planes: Vec<usize>,
+    pub vias: Vec<Via>,
     pub left: Vec<Left>,
 }
 
@@ -63,6 +74,8 @@ pub fn width(board: &Board, net: u32) -> f64 {
 
 /// What a strand on a plane layer costs, as a multiple of its length.
 const ON_A_PLANE: f64 = 4.0;
+/// What a via costs, as length, mm: one is worth a detour this long.
+const VIA: f64 = 8.0;
 
 /// A connection to plan: a net between two pads.
 #[derive(Debug, Clone, Copy)]
@@ -72,47 +85,114 @@ struct Want {
     to: ItemId,
 }
 
-/// Lays a strand for `want` on the layer where it is cheapest, if it fits on any.
-fn lay(board: &Board, sheets: &mut [Sheet], planes: &[usize], want: Want) -> bool {
-    let w = width(board, want.net);
-    let ways = sheets.iter().enumerate().filter_map(|(l, s)| {
-        let way = s.find(board, want.net, w, want.from, want.to)?;
-        Some((way.cost * if planes.contains(&l) { ON_A_PLANE } else { 1.0 }, l, way))
-    });
-    match ways.min_by(|x, y| x.0.total_cmp(&y.0)) {
-        Some((_, l, way)) => {
-            sheets[l].lay(want.net, w, want.from, want.to, &way);
-            true
+/// The default via's radius and drill radius, nm.
+fn via_size(board: &Board) -> (i64, i64) {
+    let class = board.rules.class_of("");
+    let d = class.as_ref().map_or(0.0, |c| c.via_diameter).max(board.rules.min_via_diameter);
+    let drill = class.as_ref().map_or(0.0, |c| c.via_drill).max(board.rules.min_via_drill);
+    (board::nm(d) / 2, board::nm(drill) / 2)
+}
+
+/// Places a via could stand, as small polygons that hold one: a grid over the board, at a
+/// pitch that lets a track pass between two neighbours, each kept only where the exact checker
+/// lets a via of no net stand on the bare board.
+pub fn via_sites(board: &Board) -> Vec<Vec<space::P>> {
+    let (r, drill) = via_size(board);
+    let all = (1u64 << board.layers.len()) - 1;
+    // A board whose outline does not close: the box round everything on it.
+    let outer = board.outline.first();
+    let box_ = match outer {
+        Some(o) => board::BBox::of(o.iter().copied()),
+        None => board.items().filter_map(|(id, _)| board.bbox(id)).reduce(|a, b| a.union(b)).unwrap_or(board::BBox::of([board::Point::new(0, 0)])),
+    };
+    let pitch = 2 * r + 2 * board.clearance(0, 0) + board::nm(board.rules.min_track_width.max(width(board, 0) / 1e3));
+    let mut scratch = board.clone();
+    let mut sites = Vec::new();
+    let mut y = box_.min.y + pitch / 2;
+    while y < box_.max.y {
+        let mut x = box_.min.x + pitch / 2;
+        while x < box_.max.x {
+            let at = board::Point::new(x, y);
+            let shape = board::Shape::Capsule { a: at, b: at, r };
+            let id = scratch.insert(board::Item { kind: Kind::Via, net: 0, layers: all, shape: shape.clone(), hole: Some((at, drill)), locked: false, span: None });
+            if outer.is_none_or(|o| board::inside(at, o)) && board::check_item(&scratch, id).is_empty() {
+                sites.push(space::outline(&shape));
+            }
+            scratch.remove(id);
+            x += pitch;
         }
-        None => false,
+        y += pitch;
+    }
+    sites
+}
+
+/// Lays a connection along the cheapest way there is for it, if there is one.
+fn lay(board: &Board, sheets: &mut [Sheet], terms: &ways::Terms, connection: usize, want: Want) -> bool {
+    let w = width(board, want.net);
+    let Some(way) = ways::find(board, sheets, terms, want.net, w, End::Item(want.from), End::Item(want.to)) else { return false };
+    for leg in &way.legs {
+        for end in [leg.from, leg.to] {
+            if let End::Site(k) = end {
+                for sheet in sheets.iter_mut() {
+                    sheet.space.take_site(k, Some(want.net));
+                }
+            }
+        }
+    }
+    for leg in &way.legs {
+        sheets[leg.layer].lay(want.net, connection, w, leg.from, leg.to, &leg.steps);
+    }
+    true
+}
+
+/// Lifts every strand of a connection, and gives back the via sites it alone used.
+fn lift(sheets: &mut [Sheet], connection: usize) {
+    let mut sites = Vec::new();
+    for sheet in sheets.iter_mut() {
+        for k in sheet.laid().collect::<Vec<_>>() {
+            if sheet.strands[k].connection == connection {
+                sites.extend([sheet.strands[k].from, sheet.strands[k].to]);
+                sheet.lift(k);
+            }
+        }
+    }
+    for end in sites {
+        let End::Site(k) = end else { continue };
+        let used = sheets.iter().any(|s| s.laid().any(|x| s.strands[x].from == end || s.strands[x].to == end));
+        if !used {
+            for sheet in sheets.iter_mut() {
+                sheet.space.take_site(k, None);
+            }
+        }
     }
 }
 
-/// How many laid strands are lifted, one at a time, to let a connection through that found no
-/// way: a count, so the work is bounded whatever the board.
-const LIFTS: usize = 40;
+/// How many laid connections are lifted, one at a time, to let through a connection that found
+/// no way: a count, so the work is bounded whatever the board.
+const LIFTS: usize = 30;
 
-/// Lays `want` by lifting one strand that is in its way and laying that one again after it.
-/// The sheets are changed only if both then fit.
-fn lay_by_lifting(board: &Board, sheets: &mut Vec<Sheet>, planes: &[usize], want: Want) -> bool {
-    let middle = |sheets: &[Sheet], item: ItemId| sheets.iter().find_map(|s| s.space.of_item.get(&item).map(|&o| s.space.obstacles[o].centre));
+/// Lays `want` by lifting one connection that is in its way and laying that one again after
+/// it. The sheets are changed only if both then fit.
+fn lay_by_lifting(board: &Board, sheets: &mut Vec<Sheet>, terms: &ways::Terms, wants: &[Want], connection: usize) -> bool {
+    let want = wants[connection];
+    let middle = |sheets: &[Sheet], item: ItemId| sheets.iter().find_map(|s| s.space.ends.get(&End::Item(item)).map(|&o| s.space.obstacles[o].centre));
     let (Some(a), Some(b)) = (middle(sheets, want.from), middle(sheets, want.to)) else { return false };
-    // Nearest first: by how far the strand's ends are from this connection's.
-    let mut near: Vec<(f64, usize, usize)> = Vec::new();
-    for (l, sheet) in sheets.iter().enumerate() {
-        for k in sheet.laid() {
-            let s = &sheet.strands[k];
-            let (Some(p), Some(q)) = (middle(sheets, s.from), middle(sheets, s.to)) else { continue };
-            let d = (space::dist(a, p) + space::dist(b, q)).min(space::dist(a, q) + space::dist(b, p));
-            near.push((d, l, k));
-        }
-    }
+    // Nearest first: by how far the connection's ends are from this one's.
+    let mut laid: Vec<usize> = sheets.iter().flat_map(|s| s.laid().map(|k| s.strands[k].connection)).collect();
+    laid.sort();
+    laid.dedup();
+    let mut near: Vec<(f64, usize)> = laid
+        .iter()
+        .filter_map(|&c| {
+            let (p, q) = (middle(sheets, wants[c].from)?, middle(sheets, wants[c].to)?);
+            Some(((space::dist(a, p) + space::dist(b, q)).min(space::dist(a, q) + space::dist(b, p)), c))
+        })
+        .collect();
     near.sort_by(|x, y| x.0.total_cmp(&y.0));
-    for &(_, l, k) in near.iter().take(LIFTS) {
+    for &(_, c) in near.iter().take(LIFTS) {
         let mut tried = sheets.clone();
-        let lifted = Want { net: tried[l].strands[k].net, from: tried[l].strands[k].from, to: tried[l].strands[k].to };
-        tried[l].lift(k);
-        if lay(board, &mut tried, planes, want) && lay(board, &mut tried, planes, lifted) {
+        lift(&mut tried, c);
+        if lay(board, &mut tried, terms, connection, want) && lay(board, &mut tried, terms, c, wants[c]) {
             *sheets = tried;
             return true;
         }
@@ -122,21 +202,41 @@ fn lay_by_lifting(board: &Board, sheets: &mut Vec<Sheet>, planes: &[usize], want
 
 /// Plans every open connection of a stripped board.
 pub fn plan(board: &Board) -> Plan {
-    let mut sheets: Vec<Sheet> = (0..board.layers.len()).map(|l| Sheet::new(Space::new(board, l))).collect();
-    let planes: Vec<usize> = poured(board).iter().enumerate().filter(|(_, s)| **s >= 0.5).map(|(l, _)| l).collect();
+    let sites = via_sites(board);
+    let mut sheets: Vec<Sheet> = (0..board.layers.len()).map(|l| Sheet::new(Space::new(board, l, &sites))).collect();
+    let poured = poured(board);
+    let planes: Vec<usize> = if poured.iter().all(|s| *s >= 0.5) { Vec::new() } else { (0..poured.len()).filter(|&l| poured[l] >= 0.5).collect() };
+    let dear: Vec<f64> = (0..sheets.len()).map(|l| if planes.contains(&l) { ON_A_PLANE } else { 1.0 }).collect();
+    // A via is the last thing tried: first a way on one layer, then that with a connection
+    // lifted out of the way, and only then the same two with vias. (Tried 2026-11-12: one
+    // search that weighs a via against the detour it saves put 19 vias on Shift-in 32, where
+    // the designer has none, and left more of CAL430FR unplanned. The cost of this order is
+    // that a connection takes any way round, however long, before it takes a via.)
+    let (flat, with_vias) = (ways::Terms { dear: &dear, via: None }, ways::Terms { dear: &dear, via: Some(VIA) });
     let mut airlines = board::connectivity(board).airlines;
     airlines.sort_by(|a, b| a.from.distance(a.to).total_cmp(&b.from.distance(b.to)));
+    let wants: Vec<Want> = airlines.iter().map(|a| Want { net: a.net, from: a.from_item, to: a.to_item }).collect();
     let mut left = Vec::new();
-    for a in &airlines {
-        let want = Want { net: a.net, from: a.from_item, to: a.to_item };
-        if lay(board, &mut sheets, &planes, want) || lay_by_lifting(board, &mut sheets, &planes, want) {
+    for (c, &want) in wants.iter().enumerate() {
+        if lay(board, &mut sheets, &flat, c, want)
+            || lay_by_lifting(board, &mut sheets, &flat, &wants, c)
+            || lay(board, &mut sheets, &with_vias, c, want)
+            || lay_by_lifting(board, &mut sheets, &with_vias, &wants, c)
+        {
             continue;
         }
-        let (f, t) = (board.item(a.from_item), board.item(a.to_item));
-        let shared = f.zip(t).is_some_and(|(f, t)| f.layers & t.layers != 0);
-        let pads = f.zip(t).is_some_and(|(f, t)| matches!(f.kind, Kind::Pad { .. }) && matches!(t.kind, Kind::Pad { .. }));
-        let why = if !pads { "an end is not a pad" } else if !shared { "its pads share no layer: needs a via" } else { "no way through the room left on a layer both pads are on" };
-        left.push(Left { net: a.net, from: a.from_item, to: a.to_item, why: why.to_string() });
+        let pads = board.item(want.from).zip(board.item(want.to)).is_some_and(|(f, t)| matches!(f.kind, Kind::Pad { .. }) && matches!(t.kind, Kind::Pad { .. }));
+        let why = if pads { "no way through the room left, with vias or without" } else { "an end is not a pad" };
+        left.push(Left { net: want.net, from: want.from, to: want.to, why: why.to_string() });
     }
-    Plan { sheets, planes, left }
+    let mut vias = Vec::new();
+    if let Some(first) = sheets.first() {
+        for (k, site) in first.space.sites.iter().enumerate() {
+            let o = &first.space.obstacles[site.obstacle];
+            if o.what == space::What::Pad {
+                vias.push(Via { net: o.net, site: k, at: o.centre });
+            }
+        }
+    }
+    Plan { sheets, planes, vias, left }
 }

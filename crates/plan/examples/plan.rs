@@ -22,7 +22,7 @@ fn main() {
     std::fs::write(out.join("plan.json"), serde_json::to_string(&plan).unwrap()).unwrap();
     let mut layers = Vec::new();
     for (l, sheet) in plan.sheets.iter().enumerate() {
-        if sheet.space.of_item.is_empty() {
+        if !sheet.space.ends.keys().any(|e| matches!(e, plan::End::Item(_))) && sheet.laid().count() == 0 {
             continue;
         }
         std::fs::write(out.join(format!("plan.{}.svg", board.layers[l])), plan::draw::layer(&board, &plan, l)).unwrap();
@@ -32,5 +32,5 @@ fn main() {
     for l in &plan.left {
         *why.entry(l.why.clone()).or_insert(0) += 1;
     }
-    println!("{}", serde_json::json!({"layers": layers, "planned": plan.sheets.iter().map(|s| s.laid().count()).sum::<usize>(), "left": plan.left.len(), "why": why, "seconds": seconds}));
+    println!("{}", serde_json::json!({"layers": layers, "planned": plan.sheets.iter().map(|s| s.laid().count()).sum::<usize>(), "left": plan.left.len(), "vias": plan.vias.len(), "why": why, "seconds": seconds}));
 }

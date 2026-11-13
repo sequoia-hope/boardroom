@@ -41,9 +41,31 @@ pub fn inside(p: P, poly: &[P]) -> bool {
     odd
 }
 
+/// Where a strand may end: a pad or via of the board, or a via site the plan has taken.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+pub enum End {
+    Item(ItemId),
+    Site(usize),
+}
+
+/// A place a via could stand, the same on every layer: a small polygon in the triangulation
+/// that strands may cross until a via takes it.
+#[derive(Debug, Clone, Serialize)]
+pub struct Site {
+    pub obstacle: usize,
+    /// The triangles inside it, and the edges those have (its sides and what joins them).
+    pub tris: Vec<usize>,
+    pub edges: Vec<usize>,
+    /// The edges outside it that end on one of its corners: a via here narrows them.
+    pub around: Vec<usize>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum What {
+    /// A pad, or a via: a strand of its net may end on it.
     Pad,
+    /// A via site no via has taken: no obstacle yet.
+    Site,
     /// Copper that stays: locked tracks and vias, a block's pours, copper drawn on the layer.
     Copper,
     Hole,
@@ -68,7 +90,7 @@ pub struct Tri {
     pub v: [usize; 3],
     /// `e[i]` is the edge opposite `v[i]`.
     pub e: [usize; 3],
-    /// The obstacle this triangle lies in, if any.
+    /// The obstacle this triangle lies in, if any (a via site only once a via has taken it).
     pub inside: Option<usize>,
 }
 
@@ -89,9 +111,14 @@ pub struct Space {
     pub vert_of: Vec<Option<usize>>,
     pub tris: Vec<Tri>,
     pub edges: Vec<Edge>,
-    /// Each pad's obstacle, by item.
+    /// The obstacle of each thing a strand may end on.
     #[serde(skip)]
-    pub of_item: HashMap<ItemId, usize>,
+    pub ends: HashMap<End, usize>,
+    /// The via sites, in the plan's order: the same sites on every layer.
+    pub sites: Vec<Site>,
+    /// The site each triangle lies in, if any.
+    #[serde(skip)]
+    pub tri_site: Vec<Option<usize>>,
 }
 
 /// The outline of a shape as a polygon that holds all of it: a circle's is a 12-gon round it.
@@ -149,9 +176,9 @@ fn centre(poly: &[P]) -> P {
 impl Space {
     /// The room on `layer` of `board`, tracks and vias that are not locked left out (strip the
     /// board first: see [`crate::strip`]).
-    pub fn new(board: &Board, layer: usize) -> Space {
+    pub fn new(board: &Board, layer: usize, sites: &[Vec<P>]) -> Space {
         let mut obstacles = Vec::new();
-        let mut of_item = HashMap::new();
+        let mut ends = HashMap::new();
         let add = |what, net, item: Option<ItemId>, shape: &Shape, obstacles: &mut Vec<Obstacle>| {
             let poly = outline(shape);
             if poly.len() >= 3 {
@@ -160,11 +187,11 @@ impl Space {
         };
         for (id, item) in board.items() {
             match &item.kind {
-                Kind::Pad { .. } if item.on(layer) => {
-                    of_item.insert(id, obstacles.len());
+                Kind::Pad { .. } | Kind::Via if item.on(layer) => {
+                    ends.insert(End::Item(id), obstacles.len());
                     add(What::Pad, item.net, Some(id), &item.shape, &mut obstacles);
                 }
-                Kind::Track | Kind::Via if item.on(layer) => add(What::Copper, item.net, Some(id), &item.shape, &mut obstacles),
+                Kind::Track if item.on(layer) => add(What::Copper, item.net, Some(id), &item.shape, &mut obstacles),
                 Kind::Pour { .. } if item.on(layer) && !item.refilled() => add(What::Copper, item.net, Some(id), &item.shape, &mut obstacles),
                 Kind::Keepout { forbids, .. } if forbids.tracks && item.on(layer) => add(What::Keepout, 0, Some(id), &item.shape, &mut obstacles),
                 _ => {}
@@ -180,6 +207,11 @@ impl Space {
         let first_edge = obstacles.len();
         for l in &loops {
             obstacles.push(Obstacle { what: What::Edge, net: 0, item: None, centre: centre(l), poly: l.clone() });
+        }
+        let first_site = obstacles.len();
+        for (k, poly) in sites.iter().enumerate() {
+            ends.insert(End::Site(k), obstacles.len());
+            obstacles.push(Obstacle { what: What::Site, net: 0, item: None, centre: centre(poly), poly: poly.clone() });
         }
 
         // Corners, one vertex per place (to a nanometre), and each polygon's sides as constraints.
@@ -221,6 +253,7 @@ impl Space {
             })
             .collect();
         let mut tris = Vec::new();
+        let mut in_site: Vec<(usize, usize)> = Vec::new();
         for f in cdt.inner_faces() {
             let v = f.vertices().map(|v| v.index());
             // adjacent_edges()[i] runs from v[i] to v[i+1]: it is opposite v[i+2].
@@ -234,13 +267,65 @@ impl Space {
             } else {
                 obstacles[..first_edge].iter().position(|o| inside(c, &o.poly))
             };
+            if inside.is_none()
+                && let Some(k) = sites.iter().position(|poly| crate::space::inside(c, poly))
+            {
+                in_site.push((tris.len(), k));
+            }
             for &x in &e {
                 let slot = if edges[x].t[0].is_none() { 0 } else { 1 };
                 edges[x].t[slot] = Some(tris.len());
             }
             tris.push(Tri { v, e, inside });
         }
-        Space { layer, obstacles, verts, vert_of, tris, edges, of_item }
+        let vert_of: Vec<Option<usize>> = vert_of;
+        let mut site_list: Vec<Site> = (0..sites.len()).map(|k| Site { obstacle: first_site + k, tris: Vec::new(), edges: Vec::new(), around: Vec::new() }).collect();
+        for &(t, k) in &in_site {
+            site_list[k].tris.push(t);
+            for e in tris[t].e {
+                if !site_list[k].edges.contains(&e) {
+                    site_list[k].edges.push(e);
+                }
+            }
+        }
+        for (e, edge) in edges.iter().enumerate() {
+            for v in edge.v {
+                if let Some(o) = vert_of[v].filter(|&o| o >= first_site)
+                    && !site_list[o - first_site].edges.contains(&e)
+                    && !site_list[o - first_site].around.contains(&e)
+                {
+                    site_list[o - first_site].around.push(e);
+                }
+            }
+        }
+        let mut tri_site = vec![None; tris.len()];
+        for &(t, k) in &in_site {
+            tri_site[t] = Some(k);
+        }
+        Space { layer, obstacles, verts, vert_of, tris, edges, ends, sites: site_list, tri_site }
+    }
+
+    /// The site's triangles become a via of `net`, or (`None`) room again.
+    pub fn take_site(&mut self, site: usize, net: Option<u32>) {
+        let o = self.sites[site].obstacle;
+        self.obstacles[o].what = if net.is_some() { What::Pad } else { What::Site };
+        self.obstacles[o].net = net.unwrap_or(0);
+        for t in self.sites[site].tris.clone() {
+            self.tris[t].inside = net.map(|_| o);
+        }
+    }
+
+    /// Whether an edge is only scaffolding: both its corners on one via site that no via has
+    /// taken. It is no gap, and holds any number of strands.
+    pub fn scaffold(&self, e: usize) -> bool {
+        let [a, b] = self.edges[e].v.map(|v| self.vert_of[v]);
+        a == b && a.is_some_and(|o| self.obstacles[o].what == What::Site)
+    }
+
+    /// The middle of a triangle.
+    pub fn middle(&self, t: usize) -> P {
+        let [a, b, c] = self.tris[t].v.map(|v| self.verts[v]);
+        [(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0]
     }
 
     /// Whether a strand may be in this triangle at all.
@@ -248,12 +333,19 @@ impl Space {
         self.tris[t].inside.is_none()
     }
 
-    /// What copper of `net` must keep from the corner `v`, edge to edge, mm.
-    pub fn keep(&self, board: &Board, v: usize, net: u32) -> f64 {
-        let Some(o) = self.vert_of[v].map(|k| &self.obstacles[k]) else {
-            return board.clearance(net, 0) as f64 / 1e6;
-        };
+    /// What copper of `net` must keep from the corner `v`, edge to edge, mm. `via` is a site
+    /// taken to hold a via of a net, to try it before it does.
+    pub fn keep(&self, board: &Board, v: usize, net: u32, via: Option<(usize, u32)>) -> f64 {
+        // A corner where two obstacles' sides were found to cross is no object.
+        let Some(k) = self.vert_of[v] else { return 0.0 };
+        let o = &self.obstacles[k];
+        if let Some((site, of)) = via
+            && self.sites[site].obstacle == k
+        {
+            return if of == net && net != 0 { 0.0 } else { board.clearance(net, of) as f64 / 1e6 };
+        }
         match o.what {
+            What::Site => 0.0,
             What::Edge => board.rules.min_copper_edge_clearance * 1e3,
             What::Hole => board.rules.min_hole_clearance * 1e3,
             What::Keepout => 0.0,
