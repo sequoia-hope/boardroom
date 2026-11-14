@@ -152,6 +152,11 @@ pub struct Space {
     /// The spots in each triangle.
     #[serde(skip)]
     pub tri_spots: Vec<Vec<usize>>,
+    /// For each edge, the most room it has whatever its length: how far one of its corners is
+    /// from a side of an obstacle that starts at its other corner and leans over it
+    /// ([`Space::leant_on`]).
+    #[serde(skip)]
+    cap: Vec<f64>,
 }
 
 /// How far out from everything on it a board with no edge drawn at all is taken to reach, nm.
@@ -454,8 +459,28 @@ impl Space {
                 Edge { v: [a.index(), b.index()], t: [None, None], len: dist(verts[a.index()], verts[b.index()]) }
             })
             .collect();
+        // The obstacles whose boxes reach into each square millimetre, in their order: a
+        // triangle is inside the first obstacle that holds its middle, and there are thousands
+        // of each.
+        let cell = |p: P| ((p[0]).floor() as i64, (p[1]).floor() as i64);
+        let mut held: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+        for (k, o) in obstacles.iter().enumerate() {
+            if o.what == What::Edge || o.poly.is_empty() {
+                continue;
+            }
+            let lo = cell([o.poly.iter().map(|p| p[0]).fold(f64::MAX, f64::min), o.poly.iter().map(|p| p[1]).fold(f64::MAX, f64::min)]);
+            let hi = cell([o.poly.iter().map(|p| p[0]).fold(f64::MIN, f64::max), o.poly.iter().map(|p| p[1]).fold(f64::MIN, f64::max)]);
+            for x in lo.0..=hi.0 {
+                for y in lo.1..=hi.1 {
+                    held.entry((x, y)).or_default().push(k);
+                }
+            }
+        }
         let mut tris = Vec::new();
+        // The triangle each face of the triangulation is.
+        let mut tri_of: HashMap<usize, usize> = HashMap::new();
         for f in cdt.inner_faces() {
+            tri_of.insert(f.fix().index(), tris.len());
             let v = f.vertices().map(|v| v.index());
             // adjacent_edges()[i] runs from v[i] to v[i+1]: it is opposite v[i+2].
             let ae = f.adjacent_edges().map(|e| e.as_undirected().index());
@@ -466,7 +491,7 @@ impl Space {
             let inside = if off {
                 Some(first_edge)
             } else {
-                obstacles.iter().position(|o| o.what != What::Edge && inside(c, &o.poly))
+                held.get(&cell(c)).and_then(|of| of.iter().copied().find(|&k| inside(c, &obstacles[k].poly)))
             };
             for &x in &e {
                 let slot = if edges[x].t[0].is_none() { 0 } else { 1 };
@@ -475,28 +500,90 @@ impl Space {
             tris.push(Tri { v, e, inside });
         }
         let sites: Vec<Site> = (0..vias.len()).map(|k| Site { obstacle: first_site + k }).collect();
-        // Each spot in its triangle: by the triangles' boxes first, as there are many of both.
+        // Each spot in its triangle, found by walking the triangulation: there are many of both.
         let mut spot_tri = vec![None; spots.at.len()];
         let mut tri_spots = vec![Vec::new(); tris.len()];
-        let free: Vec<(usize, [P; 3])> = tris.iter().enumerate().filter(|(_, t)| t.inside.is_none()).map(|(k, t)| (k, t.v.map(|v| verts[v]))).collect();
         for (k, &p) in spots.at.iter().enumerate() {
             if vias.iter().any(|&(at, _)| dist(at, p) < spots.apart) {
                 continue;
             }
-            let within = free.iter().find(|(_, c)| {
-                (0..2).all(|i| p[i] >= c[0][i].min(c[1][i]).min(c[2][i]) && p[i] <= c[0][i].max(c[1][i]).max(c[2][i]))
-                    && (0..3).all(|i| {
-                        let (a, b, o) = (c[i], c[(i + 1) % 3], c[(i + 2) % 3]);
-                        let side = |q: P| (b[0] - a[0]) * (q[1] - a[1]) - (b[1] - a[1]) * (q[0] - a[0]);
-                        side(p) * side(o) > 0.0 && side(p).abs() >= SPOT_MARGIN * dist(a, b)
-                    })
+            let spade::PositionInTriangulation::OnFace(face) = cdt.locate(Point2::new(p[0], p[1])) else { continue };
+            let Some(&t) = tri_of.get(&face.index()) else { continue };
+            if tris[t].inside.is_some() {
+                continue;
+            }
+            let c = tris[t].v.map(|v| verts[v]);
+            let clear = (0..3).all(|i| {
+                let (a, b, o) = (c[i], c[(i + 1) % 3], c[(i + 2) % 3]);
+                let side = |q: P| (b[0] - a[0]) * (q[1] - a[1]) - (b[1] - a[1]) * (q[0] - a[0]);
+                side(p) * side(o) > 0.0 && side(p).abs() >= SPOT_MARGIN * dist(a, b)
             });
-            if let Some(&(t, _)) = within {
+            if clear {
                 spot_tri[k] = Some(t);
                 tri_spots[t].push(k);
             }
         }
-        Space { layer, obstacles, verts, vert_of, tris, edges, ends, sites, spots: spots.clone(), spot_tri, tri_spots }
+        let mut space = Space { layer, obstacles, verts, vert_of, tris, edges, ends, sites, spots: spots.clone(), spot_tri, tri_spots, cap: Vec::new() };
+        space.cap = (0..space.edges.len()).map(|e| space.leant_on(e)).collect();
+        space
+    }
+
+    /// The room of gap `e` where a side of an obstacle leans over it, mm. A gap is as long as
+    /// its two corners are apart; but where one of them is the end of a side that runs back
+    /// towards the other at less than a right angle, and nothing stands between, everything
+    /// that crosses the gap passes between that other corner and the side, and those are
+    /// nearer: a row of pads beside a long edge has a gap from each pad's corner to the far
+    /// end of the edge, each many times as long as the strip between the row and the edge is
+    /// wide.
+    fn leant_on(&self, e: usize) -> f64 {
+        let edge = &self.edges[e];
+        let mut room = f64::MAX;
+        if !self.gap(e) {
+            return room;
+        }
+        let cross = |o: P, a: P, b: P| (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+        for (a, b) in [(edge.v[0], edge.v[1]), (edge.v[1], edge.v[0])] {
+            let (pa, pb) = (self.verts[a], self.verts[b]);
+            for first in edge.t.iter().flatten().copied() {
+                // Round `b` from the gap, through the free triangles, as far as a side of an
+                // obstacle: the corners passed on the way.
+                let (mut t, mut from) = (first, a);
+                let mut passed: Vec<P> = Vec::new();
+                for _ in 0..self.tris.len() {
+                    if !self.free(t) {
+                        break;
+                    }
+                    let tri = &self.tris[t];
+                    let Some(i) = tri.v.iter().position(|&v| v == from) else { break };
+                    let Some(&x) = tri.v.iter().find(|&&v| v != from && v != b) else { break };
+                    let px = self.verts[x];
+                    // Turned a right angle from the gap, or more: nothing leans over it.
+                    if (px[0] - pb[0]) * (pa[0] - pb[0]) + (px[1] - pb[1]) * (pa[1] - pb[1]) <= 0.0 {
+                        break;
+                    }
+                    let side = tri.e[i];
+                    if !self.gap(side) {
+                        // The foot of the gap's other corner on this side, if it is on it.
+                        let l2 = dist(pb, px).powi(2);
+                        let along = ((pa[0] - pb[0]) * (px[0] - pb[0]) + (pa[1] - pb[1]) * (px[1] - pb[1])) / l2.max(1e-18);
+                        if along <= 1.0 {
+                            let foot = lerp(pb, px, along);
+                            // Nothing between: every corner passed is beyond the line from
+                            // the corner to its foot.
+                            let near = cross(pa, foot, pb);
+                            if passed.iter().all(|&q| cross(pa, foot, q) * near <= 1e-12) {
+                                room = room.min(dist(pa, foot));
+                            }
+                        }
+                        break;
+                    }
+                    passed.push(px);
+                    let Some(next) = self.edges[side].t.iter().flatten().copied().find(|&y| y != t) else { break };
+                    (t, from) = (next, x);
+                }
+            }
+        }
+        room
     }
 
     /// Whether an edge is a gap: not a side of an obstacle, which no strand passes along.
@@ -515,11 +602,12 @@ impl Space {
     /// square on are as near each other along it as they may be; wires at a slant to it take
     /// more of it each. So a gap that lies along none of the eight directions holds less than
     /// its length: its length as seen along the direction that crosses it most nearly square.
+    /// And no more than a side that leans over it leaves ([`Space::leant_on`]).
     pub fn width(&self, e: usize) -> f64 {
         let edge = &self.edges[e];
         let (a, b) = (self.verts[edge.v[0]], self.verts[edge.v[1]]);
         let (x, y) = ((b[0] - a[0]).abs(), (b[1] - a[1]).abs());
-        x.max(y).max((x + y) * std::f64::consts::FRAC_1_SQRT_2)
+        x.max(y).max((x + y) * std::f64::consts::FRAC_1_SQRT_2).min(self.cap.get(e).copied().unwrap_or(f64::MAX))
     }
 
     /// The plan's vias here: the middle and the net of each.

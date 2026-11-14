@@ -151,10 +151,7 @@ fn exact(board: &Board, sheets: &[Sheet], with: &mut Option<Board>, c: usize, ne
 /// Where a via of `net` at spot `c` would stand on one layer, as the strands lie: the triangle
 /// and the part of it.
 fn standing_on(board: &Board, s: &Sheet, c: usize, net: u32) -> Option<(usize, Region)> {
-    let t = s.space.spot_tri[c]?;
-    let p = s.space.spots.at[c];
-    let region = s.region_at(board, t, p)?;
-    (s.via_fits(board, t, region, p, net) && s.via_clear(board, t, p, net)).then_some((t, region))
+    s.stood(board, c, net)
 }
 
 /// Whether a via of `net` at spot `c` may stand in `region` of triangle `t` on layer `l`

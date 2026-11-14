@@ -38,6 +38,24 @@ pub struct Sheet {
     /// Where the strands lie ([`Sheet::places`]), worked out when first asked for.
     #[serde(skip)]
     placed: std::sync::OnceLock<Vec<Vec<f64>>>,
+    /// Where a via of a net would stand at a spot ([`Sheet::stood`]), for each asked about
+    /// since the strands last changed.
+    #[serde(skip)]
+    stood: Stood,
+}
+
+/// Where a via would stand: the triangle and the part of it.
+type Stand = Option<(usize, Region)>;
+
+/// What [`Sheet::stood`] has worked out, for each spot and net asked about. A copy of a sheet
+/// starts with none of it.
+#[derive(Debug, Default)]
+struct Stood(std::sync::Mutex<std::collections::HashMap<(usize, u32), Stand>>);
+
+impl Clone for Stood {
+    fn clone(&self) -> Stood {
+        Stood::default()
+    }
 }
 
 /// A part of a free triangle, as its strands divide it: each strand cuts a corner off, so the
@@ -65,7 +83,28 @@ const ROUND_A_VIA: f64 = 3.0;
 impl Sheet {
     pub fn new(space: Space) -> Sheet {
         let on = vec![Vec::new(); space.edges.len()];
-        Sheet { space, strands: Vec::new(), on, placed: Default::default() }
+        Sheet { space, strands: Vec::new(), on, placed: Default::default(), stood: Default::default() }
+    }
+
+    /// Where a via of `net` at spot `c` would stand here, as the strands lie: the triangle
+    /// and the part of it; none if it has no triangle, is too near a strand to be on one side
+    /// of it, or leaves the strands round it too little room. One search asks this of a spot
+    /// many times, and the searches for one connection ask it again while the strands stay as
+    /// they are: it is worked out once.
+    pub fn stood(&self, board: &Board, c: usize, net: u32) -> Option<(usize, Region)> {
+        if let Some(&known) = self.stood.0.lock().ok().and_then(|m| m.get(&(c, net)).copied()).as_ref() {
+            return known;
+        }
+        let stands = (|| {
+            let t = self.space.spot_tri[c]?;
+            let p = self.space.spots.at[c];
+            let region = self.region_at(board, t, p)?;
+            (self.via_fits(board, t, region, p, net) && self.via_clear(board, t, p, net)).then_some((t, region))
+        })();
+        if let Ok(mut m) = self.stood.0.lock() {
+            m.insert((c, net), stands);
+        }
+        stands
     }
 
     fn clear(board: &Board, a: u32, b: u32) -> f64 {
@@ -263,6 +302,7 @@ impl Sheet {
         }
         self.strands.push(Strand { net, connection, from, to, width, crossings: steps.iter().map(|s| s.0).collect() });
         self.placed = Default::default();
+        self.stood = Default::default();
         id
     }
 
@@ -272,6 +312,7 @@ impl Sheet {
             self.on[e].retain(|x| x.0 != strand);
         }
         self.placed = Default::default();
+        self.stood = Default::default();
     }
 
     /// The strands that are laid.
@@ -509,6 +550,8 @@ impl Sheet {
         // The free triangles in reach of the spot, from its own outwards: their strands as
         // lines, their corners, and the sides that are walls.
         let mut seen = vec![t];
+        let mut met: std::collections::HashSet<usize> = std::collections::HashSet::from([t]);
+        let mut cornered: std::collections::HashSet<usize> = std::collections::HashSet::new();
         let mut chords: Vec<(P, P, usize)> = Vec::new();
         let mut walls: Vec<(P, P)> = Vec::new();
         let mut corners: Vec<usize> = Vec::new();
@@ -523,7 +566,7 @@ impl Sheet {
                     let [(s, k), (s2, k2)] = self.chord(x, c, q);
                     chords.push((self.point(self.strands[s].crossings[k], places[s][k]), self.point(self.strands[s2].crossings[k2], places[s2][k2]), s));
                 }
-                if !corners.contains(&tri.v[c]) && !self.space.tris[t].v.contains(&tri.v[c]) {
+                if !self.space.tris[t].v.contains(&tri.v[c]) && cornered.insert(tri.v[c]) {
                     corners.push(tri.v[c]);
                 }
             }
@@ -534,7 +577,7 @@ impl Sheet {
                 }
                 match edge.t.iter().flatten().copied().find(|&y| y != x) {
                     Some(y) if self.space.free(y) => {
-                        if !seen.contains(&y) {
+                        if met.insert(y) {
                             seen.push(y);
                         }
                     }
@@ -557,16 +600,23 @@ impl Sheet {
             let (s, u) = ((w[0] * r[1] - w[1] * r[0]) / den, (w[0] * d[1] - w[1] * d[0]) / den);
             (s > 1e-9 && s < 1.0 - 1e-9 && (0.0..1.0).contains(&u)).then_some(s)
         };
+        // No strand farther from the spot than a corner is lies between the two: the strands
+        // nearest first, each with how near it comes.
+        let mut chords: Vec<(f64, P, P, usize)> = chords.into_iter().map(|(a, b, s)| (point_segment(p, a, b), a, b, s)).collect();
+        chords.sort_by(|a, b| a.0.total_cmp(&b.0));
         corners.iter().all(|&corner| {
             let x = v[corner];
             let d = dist(p, x);
-            if d > ROUND_A_VIA || walls.iter().any(|&(a, b)| cross(x, a, b).is_some()) {
+            if d > ROUND_A_VIA {
                 return true;
             }
             // The strands between, from the corner outwards: one that crosses the line twice
             // is not between the two.
             let mut between: Vec<(f64, usize, usize)> = Vec::new();
-            for &(a, b, s) in &chords {
+            for &(near, a, b, s) in &chords {
+                if near > d {
+                    break;
+                }
                 if let Some(at) = cross(x, a, b) {
                     match between.iter_mut().find(|k| k.1 == s) {
                         Some(k) => *k = (k.0.max(at), s, k.2 + 1),
@@ -579,7 +629,8 @@ impl Sheet {
             let nets: Vec<(u32, f64)> = between.iter().map(|k| (self.strands[k.1].net, self.strands[k.1].width)).collect();
             let (Some(first), Some(last)) = (nets.first(), nets.last()) else { return true };
             let via = if last.0 == net && net != 0 { 0.0 } else { board.clearance(last.0, net) as f64 / 1e6 + self.space.spots.radius };
-            self.space.keep(board, corner, first.0) + Self::stack(board, &nets) + via <= d + EPS
+            // A corner the spot cannot see, for a wall between, asks nothing.
+            self.space.keep(board, corner, first.0) + Self::stack(board, &nets) + via <= d + EPS || walls.iter().any(|&(a, b)| cross(x, a, b).is_some())
         })
     }
 

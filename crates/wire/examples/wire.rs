@@ -1,8 +1,9 @@
 //! `wire BOARD.kicad_pcb OUT_DIR`: strips the board, plans it, draws the plan as copper, checks
-//! the copper (and counts the pads a refill would leave short of thermal spokes), and writes `wires.json`, `routed.kicad_pcb`, one `plan.LAYER.svg` and one
+//! the copper (and counts the pads a refill would leave short of thermal spokes), and writes `wires.json`, `routed.kicad_pcb`, `bare.kicad_pcb` (the board stripped), one `plan.LAYER.svg` and one
 //! `wire.LAYER.svg` per layer that has pads, and a line of counts. `WIRE_WATCH=LAYER:STRAND` also
 //! writes `watch.svg`, that strand's course as the drawing saw it. `WIRE_POURS` tells each
-//! connection still open, with what its ends are, and what each pad of a poured net is joined to; `WIRE_TIMES` (in the library) tells each round's stages.
+//! connection still open, with what its ends are, and what each pad of a poured net is joined to; `WIRE_TIMES` (in the library) tells each round's stages;
+//! `WIRE_FIRST` (in the library) stops at the first plan and its drawing, with nothing laid again and no pours.
 //! Copper text is shaped by `kicad-text` where `ULTRAROUTE_TEXT_HELPER` names it (it is not
 //! beside an example); without it text is boxes, which cover pads its letters do not, and this
 //! says so.
@@ -106,6 +107,13 @@ fn main() {
     }
     std::fs::write(out.join("wires.json"), serde_json::to_string(&drawing).unwrap()).unwrap();
     std::fs::write(out.join("routed.kicad_pcb"), wire::write(&text, &original, &plan, &drawing)).unwrap();
+    // The board as the router was given it, for a judge to set the routed one beside.
+    let bare = kicad::write::Edit {
+        uuid_seed: Some(1),
+        remove: original.items().filter(|(_, i)| matches!(i.kind, board::Kind::Track | board::Kind::Via) && !i.locked).filter_map(|(_, i)| i.span).collect(),
+        ..Default::default()
+    };
+    std::fs::write(out.join("bare.kicad_pcb"), kicad::write::apply(&text, &bare)).unwrap();
     let mut layers = Vec::new();
     for (l, sheet) in plan.sheets.iter().enumerate() {
         if !sheet.space.ends.keys().any(|e| matches!(e, plan::End::Item(_))) && sheet.laid().count() == 0 {

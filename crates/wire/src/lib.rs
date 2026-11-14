@@ -742,6 +742,29 @@ pub fn open(board: &Board, plan: &Plan, drawing: &Drawing) -> usize {
     board::connectivity_poured(&with, &board::Pours::of(&with)).airlines.len()
 }
 
+/// What a round of [`settle`] came to, as one number: the wires drawn, the vias, the wires
+/// that stuck with where and along what path, the connections with no way, and what each
+/// connection has been told so far (how narrow it is laid, the gaps it is barred from): the
+/// next round starts from all of that, and from nothing else.
+fn outcome(plan: &Plan, drawing: &Drawing, stuck: &[(usize, plan::space::GapKey)]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let nm = |p: P| ((p[0] * 1e6).round() as i64, (p[1] * 1e6).round() as i64);
+    for w in &drawing.wires {
+        (w.layer, w.net, (w.width * 1e6).round() as i64, w.pts.iter().map(|&p| nm(p)).collect::<Vec<_>>()).hash(&mut h);
+    }
+    plan.vias.iter().map(|v| (nm(v.at), v.net)).collect::<Vec<_>>().hash(&mut h);
+    stuck.hash(&mut h);
+    for u in &drawing.undrawn {
+        u.refused.iter().map(|&p| nm(p)).collect::<Vec<_>>().hash(&mut h);
+    }
+    plan.left.iter().map(|l| l.connection).collect::<Vec<_>>().hash(&mut h);
+    for w in &plan.wants {
+        (w.narrow.map(f64::to_bits), &w.avoid).hash(&mut h);
+    }
+    h.finish()
+}
+
 /// Draws the plan, and while some strand cannot be drawn, lays its connection again narrower,
 /// or at its narrowest barred from the gap its wire stuck in, and draws again: the rest of
 /// the plan stays, so what was drawn stays drawn. A gap's length is the most it can hold; what
@@ -752,6 +775,9 @@ fn settle(board: &Board, plan: &mut Plan, memo: &mut chain::Memo, said: &dyn Fn(
     let mut best: Option<(usize, Plan, Drawing)> = None;
     // A round that only made wires narrower is not counted: a few of those.
     let (mut rounds, mut more) = (0, NARROWER);
+    // What the round before came to: a round that comes to the same has changed nothing, and
+    // the next would be the same again.
+    let mut before: Option<u64> = None;
     while rounds < ROUNDS {
         rounds += 1;
         // A stub nothing starts from is not drawn.
@@ -761,10 +787,11 @@ fn settle(board: &Board, plan: &mut Plan, memo: &mut chain::Memo, said: &dyn Fn(
         let open = plan.left.len() + drawing.undrawn.len();
         let stuck: Vec<(usize, plan::space::GapKey)> =
             drawing.undrawn.iter().filter_map(|u| Some((plan.sheets[u.layer].strands[u.strand].connection, u.gap.map(|g| plan::space::gap_key(g[0], g[1]))?))).collect();
+        let same = before.replace(outcome(plan, &drawing, &stuck)) == before;
         if best.as_ref().is_none_or(|b| open < b.0) {
             best = Some((open, plan.clone(), drawing));
         }
-        if open == 0 || stuck.is_empty() {
+        if open == 0 || stuck.is_empty() || same {
             break;
         }
         if plan::again(board, plan, &stuck) && more > 0 {
@@ -910,7 +937,7 @@ fn tied(board: &Board, plan: &Plan, mut drawing: Drawing, before: &[(ItemId, usi
 pub fn route(board: &Board) -> (Plan, Drawing) {
     let Some(plain) = route_with(board, false) else { return (plan::start(board), Drawing::default()) };
     let still = open(board, &plain.0, &plain.1);
-    if still == 0 {
+    if still == 0 || std::env::var("WIRE_FIRST").is_ok() {
         return plain;
     }
     match route_with(board, true) {
@@ -949,6 +976,14 @@ fn route_with(board: &Board, fan: bool) -> Option<(Plan, Drawing)> {
     };
     plan::add(board, &mut plan, wants);
     said("planned", &plan, None);
+    // WIRE_FIRST: the first plan and its drawing, with nothing laid again and no pours: what
+    // the plan lays that cannot be drawn.
+    if std::env::var("WIRE_FIRST").is_ok() {
+        plan::tidy(board, &mut plan);
+        let drawing = draw_with(board, &plan, None, &mut memo).0;
+        said("drawn", &plan, Some(&drawing));
+        return Some((plan, drawing));
+    }
     let mut drawing = settle(board, &mut plan, &mut memo, &said);
     if poured.is_empty() {
         return Some((plan, drawing));
