@@ -140,7 +140,9 @@ figcaption,.m{{color:#999;font-size:14px}}.bad{{color:#f88}}.none{{color:#777}}<
 <p class="m">The new router's two stages. <b>The plan</b> (left): each layer's room is cut into triangles between the corners of
 the pads, holes and board edge; a triangle side between two obstacles is a gap, and one that is at least half full is drawn, amber
 to red at full. Each connection is a strand through the gaps it passes in order, pulled tight like a rubber band; strands never
-cross on a layer, and a via is put in only where a connection wants one. A connection with no way has the connections in its way
+cross on a layer, and a via is put in only where a connection wants one. Two connections of one net that go the same way share
+one track and part where they part. A board that is not whole is planned again with each fine-pitch part's way out settled first:
+for each row of its pads a row of vias a little way out, one for each pad, in the pads' order. A connection with no way has the connections in its way
 lifted and laid again. <b>The plan drawn</b> (middle): each strand, alone, as pieces in 0/45/90 that each pass an end of the wire or
 lie as near a corner as the wire may come to it, given the strands the plan has between; so wires that pass a corner together come
 out side by side at even pitch. Every wire is put to the exact checker and kept only if it passes. Where a wire cannot be drawn, its

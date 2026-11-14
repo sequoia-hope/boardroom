@@ -667,12 +667,12 @@ const NARROWER: usize = 2;
 /// The connections a board's pours leave to make once `drawing` is on it, for the nets in
 /// `poured`: the pours are filled round the drawn copper, and what a piece of pour reaches it
 /// joins. Each is from pad to pad, and comes with the spots where a via would stand in pour
-/// its far end is joined to.
-fn left_by_pours(board: &Board, plan: &Plan, drawing: &Drawing, poured: &[u32]) -> Vec<plan::Want> {
+/// its far end is joined to. And how many connections are open in all, of any net.
+fn left_by_pours(board: &Board, plan: &Plan, drawing: &Drawing, poured: &[u32]) -> (Vec<plan::Want>, usize) {
     let (with, _) = onto(board, plan, drawing);
     let pours = board::Pours::of(&with);
     let joined = board::connectivity_poured(&with, &pours);
-    let Some(spots) = plan.sheets.first().map(|s| s.space.spots.clone()) else { return Vec::new() };
+    let Some(spots) = plan.sheets.first().map(|s| s.space.spots.clone()) else { return (Vec::new(), joined.airlines.len()) };
     let (r, _) = plan::via_size(board);
     // The cluster of copper each piece of pour is part of.
     let mut cluster_of: HashMap<usize, usize> = HashMap::new();
@@ -732,7 +732,7 @@ fn left_by_pours(board: &Board, plan: &Plan, drawing: &Drawing, poured: &[u32]) 
         wants.push(want);
     }
     wants.sort_by(|a, b| a.apart.total_cmp(&b.apart));
-    wants
+    (wants, joined.airlines.len())
 }
 
 /// How many connections are still open with `drawing` on the board and the pours filled round
@@ -903,9 +903,10 @@ fn tied(board: &Board, plan: &Plan, mut drawing: Drawing, before: &[(ItemId, usi
 /// pour in are laid another way, if that leaves no more open than before.
 ///
 /// A board that is not whole that way, and has parts whose pins stand nearer each other than
-/// vias may, is routed again with those parts fanned out first ([`plan::fan`]): a via beside
-/// each such pin, settled for a whole part before anything else is laid, and the connections
-/// then from via to via. The one with fewer connections open is kept.
+/// vias may, is routed again with those parts' ways out settled first ([`plan::escape`]): for
+/// each row of such a part's pads a row of vias a little way out, one for each pad in the
+/// pads' order, and the connections then from via to via. The one with fewer connections
+/// open is kept.
 pub fn route(board: &Board) -> (Plan, Drawing) {
     let Some(plain) = route_with(board, false) else { return (plan::start(board), Drawing::default()) };
     let still = open(board, &plain.0, &plain.1);
@@ -918,8 +919,8 @@ pub fn route(board: &Board) -> (Plan, Drawing) {
     }
 }
 
-/// [`route`] one way: with the fine-pitch parts fanned out first, or without. None where
-/// there is nothing to fan out.
+/// [`route`] one way: with the fine-pitch parts' ways out settled first, or without. None
+/// where there is no such part.
 fn route_with(board: &Board, fan: bool) -> Option<(Plan, Drawing)> {
     let mut poured: Vec<u32> = board.zone_areas.iter().filter(|z| !z.kept && z.net != 0).map(|z| z.net).collect();
     poured.sort_unstable();
@@ -933,16 +934,19 @@ fn route_with(board: &Board, fan: bool) -> Option<(Plan, Drawing)> {
             eprintln!("{:7.2} s  {what}: {} strands, {} vias, {} left{}", clock.elapsed().as_secs_f64(), plan.sheets.iter().map(|s| s.laid().count()).sum::<usize>(), plan.vias.len(), plan.left.len(), drawing.map_or(String::new(), |d| format!(", {} drawn, {} not", d.wires.len(), d.undrawn.len())));
         }
     };
-    let mut plan = plan::start_with(board, fan);
     let wants: Vec<plan::Want> = plan::wants(&lines).into_iter().filter(|w| !poured.contains(&w.net)).collect();
-    if fan {
-        let stubs = plan::fan(board, &plan, &wants);
+    let mut plan = if fan {
+        let (spots, stubs) = plan::escape(board, &wants);
         if stubs.is_empty() {
             return None;
         }
+        let mut plan = plan::start_from(board, spots);
         plan::add(board, &mut plan, stubs);
         said("fanned out", &plan, None);
-    }
+        plan
+    } else {
+        plan::start(board)
+    };
     plan::add(board, &mut plan, wants);
     said("planned", &plan, None);
     let mut drawing = settle(board, &mut plan, &mut memo, &said);
@@ -976,7 +980,8 @@ fn route_with(board: &Board, fan: bool) -> Option<(Plan, Drawing)> {
 
 /// Plans and draws what the pours leave apart, and then what they leave apart once that is
 /// drawn: a wire laid to join one pad can cut the pour another was joined by, or the pour a
-/// connection laid before it ends in.
+/// connection laid before it ends in. A round may leave more open than it found: the plan and
+/// the drawing are left as they were when fewest connections were open.
 fn pour(board: &Board, plan: &mut Plan, mut drawing: Drawing, poured: &[u32], memo: &mut chain::Memo, said: &dyn Fn(&str, &Plan, Option<&Drawing>)) -> Drawing {
     // The connection the plan has already for a pair of pads.
     let had = |plan: &Plan, w: &plan::Want| plan.wants.iter().position(|x| x.net == w.net && !x.stub && ((x.from, x.to) == (w.from, w.to) || (x.from, x.to) == (w.to, w.from)));
@@ -984,8 +989,14 @@ fn pour(board: &Board, plan: &mut Plan, mut drawing: Drawing, poured: &[u32], me
     let mut found = usize::MAX;
     // The connections laid again once already.
     let mut twice: Vec<usize> = Vec::new();
+    // The plan and drawing as they were when fewest connections were open: a round may leave
+    // more open than it found.
+    let mut best: Option<(usize, Plan, Drawing)> = None;
     for _ in 0..POURS {
-        let mut wants = left_by_pours(board, plan, &drawing, poured);
+        let (mut wants, open) = left_by_pours(board, plan, &drawing, poured);
+        if best.as_ref().is_none_or(|b| open < b.0) {
+            best = Some((open, plan.clone(), drawing.clone()));
+        }
         // A connection the plan has already, open all the same: it ended at a via in pour
         // that wires laid since have cut off. It is taken out, so that its own copper counts
         // for nothing, and laid again to where the pour reaches now.
@@ -995,15 +1006,22 @@ fn pour(board: &Board, plan: &mut Plan, mut drawing: Drawing, poured: &[u32], me
         if !again.is_empty() {
             plan::lift_out(board, plan, &again);
             drawing = draw_with(board, plan, None, memo).0;
-            wants = left_by_pours(board, plan, &drawing, poured);
+            wants = left_by_pours(board, plan, &drawing, poured).0;
         }
         let (renewed, rest): (Vec<plan::Want>, Vec<plan::Want>) = wants.into_iter().partition(|w| had(plan, w).is_some());
         let mut renewed: Vec<(usize, plan::Want)> = renewed.into_iter().filter_map(|w| had(plan, &w).map(|c| (c, w))).collect();
         renewed.sort_by_key(|r| r.0);
         renewed.dedup_by_key(|r| r.0);
-        said(&format!("poured, {} left by the pours and {} to lay again", rest.len(), renewed.len()), plan, None);
+        said(&format!("poured, {open} open: {} left by the pours and {} to lay again", rest.len(), renewed.len()), plan, None);
         if rest.is_empty() && renewed.is_empty() && again.is_empty() {
-            break;
+            // Nothing done since it was counted: it is the best, or as good.
+            return match best {
+                Some((fewest, kept, drawn)) if fewest < open => {
+                    *plan = kept;
+                    drawn
+                }
+                _ => drawing,
+            };
         }
         // One laid again before and open again: its wire moves the wires beside it, and those
         // cut the pour it ends in. It goes all the way to the pad.
@@ -1023,6 +1041,11 @@ fn pour(board: &Board, plan: &mut Plan, mut drawing: Drawing, poured: &[u32], me
         if stalled {
             break;
         }
+    }
+    if let Some((fewest, kept, drawn)) = best
+        && fewest < open(board, plan, &drawing)
+    {
+        (*plan, drawing) = (kept, drawn);
     }
     drawing
 }

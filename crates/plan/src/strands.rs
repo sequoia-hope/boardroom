@@ -3,6 +3,10 @@
 //! a chord that cuts one corner off, the chords round a corner are nested, and what is left in
 //! the middle touches all three sides. A new strand may go from one side to another only inside
 //! one such region; that is the whole of the bookkeeping.
+//!
+//! In a gap each strand has its width and keeps its clearance from the next. Two of one net
+//! beside each other take one track's room ([`Sheet::stack`]): drawn, they are one track that
+//! parts where the strands part, as a designer branches a track.
 
 use board::Board;
 use serde::Serialize;
@@ -68,6 +72,32 @@ impl Sheet {
         if a == b { 0.0 } else { board.clearance(a, b) as f64 / 1e6 }
     }
 
+    /// What strands that lie side by side take, from the first one's near edge to the last
+    /// one's far edge: each its width and each two neighbours their clearance. Neighbours of
+    /// one net lie on each other, as one track that parts where they part, and take the
+    /// wider one's width.
+    fn stack(board: &Board, nets: &[(u32, f64)]) -> f64 {
+        let mut total = 0.0;
+        let mut last: Option<(u32, f64)> = None;
+        for &(n, w) in nets {
+            match last {
+                Some((l, lw)) if l == n && n != 0 => {
+                    total += (w - lw).max(0.0);
+                    last = Some((n, w.max(lw)));
+                }
+                Some((l, _)) => {
+                    total += Self::clear(board, l, n) + w;
+                    last = Some((n, w));
+                }
+                None => {
+                    total += w;
+                    last = Some((n, w));
+                }
+            }
+        }
+        total
+    }
+
     pub fn nets_on(&self, edge: usize) -> Vec<(u32, f64)> {
         self.on[edge].iter().map(|&(s, _)| (self.strands[s].net, self.strands[s].width)).collect()
     }
@@ -78,14 +108,18 @@ impl Sheet {
     fn span(&self, board: &Board, edge: usize, me: (u32, f64), before: &[(u32, f64)], after: &[(u32, f64)]) -> (f64, f64) {
         let e = &self.space.edges[edge];
         let side = |corner: usize, others: &mut dyn Iterator<Item = &(u32, f64)>| {
-            // From the corner inwards: the corner's keep, then each strand and the gap after it.
-            let mut d = 0.0;
-            let mut last: Option<u32> = None;
-            for &(n, w) in others {
-                d += last.map_or(self.space.keep(board, corner, n), |l| Self::clear(board, l, n)) + w;
-                last = Some(n);
+            // From the corner inwards: the corner's keep, then the strands and the gaps between
+            // them ([`Sheet::stack`]).
+            let others: Vec<(u32, f64)> = others.copied().collect();
+            let Some(&(first, _)) = others.first() else { return self.space.keep(board, corner, me.0) + me.1 / 2.0 };
+            let d = self.space.keep(board, corner, first) + Self::stack(board, &others);
+            match others.last() {
+                // On the last of them, if it is of this one's net: middle on middle, or as
+                // near that as the wider of the two lets it be.
+                Some(&(l, lw)) if l == me.0 && l != 0 => d - lw + lw.max(me.1) / 2.0,
+                Some(&(l, _)) => d + Self::clear(board, l, me.0) + me.1 / 2.0,
+                None => d,
             }
-            d + last.map_or(self.space.keep(board, corner, me.0), |l| Self::clear(board, l, me.0)) + me.1 / 2.0
         };
         let lo = side(e.v[0], &mut before.iter());
         let hi = e.len - side(e.v[1], &mut after.iter().rev());
@@ -147,8 +181,7 @@ impl Sheet {
             nets.insert(slot, (net, width));
         }
         let (Some(first), Some(last)) = (nets.first(), nets.last()) else { return 0.0 };
-        let between: f64 = nets.windows(2).map(|w| Self::clear(board, w[0].0, w[1].0)).sum();
-        self.space.keep(board, e.v[0], first.0) + self.space.keep(board, e.v[1], last.0) + between + nets.iter().map(|n| n.1).sum::<f64>()
+        self.space.keep(board, e.v[0], first.0) + self.space.keep(board, e.v[1], last.0) + Self::stack(board, &nets)
     }
 
     /// How full an edge is: what its strands need over its length (0 with none).
@@ -205,13 +238,15 @@ impl Sheet {
         let side = tri.e[(c + 1) % 3];
         let n = self.corners(t)[c];
         let from_first = self.space.edges[side].v[0] == tri.v[c];
-        let there: f64 = (0..n)
+        // The strands round the corner already, from the corner out, and this one beyond them.
+        let all: Vec<(u32, f64)> = (0..n)
             .map(|q| {
                 let (s, _) = self.on[side][if from_first { q } else { self.on[side].len() - 1 - q }];
-                self.strands[s].width + Self::clear(board, self.strands[s].net, net)
+                (self.strands[s].net, self.strands[s].width)
             })
-            .sum();
-        let need = self.space.keep(board, tri.v[c], net) + self.space.keep(board, wall.v[0], net).max(self.space.keep(board, wall.v[1], net)) + width + there;
+            .chain([(net, width)])
+            .collect();
+        let need = self.space.keep(board, tri.v[c], net) + self.space.keep(board, wall.v[0], net).max(self.space.keep(board, wall.v[1], net)) + Self::stack(board, &all);
         need <= room + EPS
     }
 
@@ -307,7 +342,8 @@ impl Sheet {
                 // What two neighbours keep between their middles, as a share of the gap.
                 let apart = |i: usize| {
                     let (a, b) = (&self.strands[on[i - 1].0], &self.strands[on[i].0]);
-                    ((a.width / 2.0 + Self::clear(board, a.net, b.net) + b.width / 2.0) / len).max(1e-9)
+                    // Two of one net may lie on each other; they keep their order all the same.
+                    if a.net == b.net && a.net != 0 { 1e-9 } else { ((a.width / 2.0 + Self::clear(board, a.net, b.net) + b.width / 2.0) / len).max(1e-9) }
                 };
                 let mut y: Vec<f64> = on.iter().map(|&(s, k)| at[s][k]).collect();
                 for i in 1..n {
@@ -456,9 +492,8 @@ impl Sheet {
                 nets.extend((band..n[corner]).rev().map(|q| of(corner, q)));
             }
             let (Some(first), Some(last)) = (nets.first(), nets.last()) else { return true };
-            let between: f64 = nets.windows(2).map(|w| Self::clear(board, w[0].0, w[1].0)).sum();
             let via = if last.0 == net && net != 0 { 0.0 } else { board.clearance(last.0, net) as f64 / 1e6 + self.space.spots.radius };
-            let need = self.space.keep(board, tri.v[x], first.0) + between + nets.iter().map(|w| w.1).sum::<f64>() + via;
+            let need = self.space.keep(board, tri.v[x], first.0) + Self::stack(board, &nets) + via;
             need <= dist(self.space.verts[tri.v[x]], p) + EPS
         })
     }
@@ -543,9 +578,8 @@ impl Sheet {
             between.sort_by(|a, b| b.0.total_cmp(&a.0));
             let nets: Vec<(u32, f64)> = between.iter().map(|k| (self.strands[k.1].net, self.strands[k.1].width)).collect();
             let (Some(first), Some(last)) = (nets.first(), nets.last()) else { return true };
-            let gaps: f64 = nets.windows(2).map(|w| Self::clear(board, w[0].0, w[1].0)).sum();
             let via = if last.0 == net && net != 0 { 0.0 } else { board.clearance(last.0, net) as f64 / 1e6 + self.space.spots.radius };
-            self.space.keep(board, corner, first.0) + gaps + nets.iter().map(|w| w.1).sum::<f64>() + via <= d + EPS
+            self.space.keep(board, corner, first.0) + Self::stack(board, &nets) + via <= d + EPS
         })
     }
 

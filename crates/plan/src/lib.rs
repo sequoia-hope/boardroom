@@ -11,7 +11,8 @@
 //! again narrower, or at its narrowest barred from the gap it stuck in ([`again`]), the rest of
 //! the plan left as it is. A connection ends on its pad or on any pad already joined to it
 //! ([`Plan::joined`]), and is as wide as its net's class asks unless it has no way at that
-//! width ([`wide`]).
+//! width ([`wide`]). A part whose pads stand nearer each other than vias may can have its way
+//! out settled for the whole part before anything else is laid ([`escape`]).
 
 pub mod carry;
 pub mod draw;
@@ -597,13 +598,15 @@ pub fn wants(airlines: &[board::Airline]) -> Vec<Want> {
 
 /// A plan with nothing in it yet: the board's layers cut into triangles.
 pub fn start(board: &Board) -> Plan {
-    start_with(board, false)
+    start_from(board, via_spots(board, false))
 }
 
-/// [`start`], with the spots for vias as near each other as two vias may stand where `tight`:
-/// what a fan-out needs, at the price of more places to try.
-pub fn start_with(board: &Board, tight: bool) -> Plan {
-    let spots = Arc::new(via_spots(board, tight));
+/// How far from its pad a stub's via may stand, mm.
+const FAN_REACH: f64 = 4.0;
+
+/// A plan with nothing in it yet, with `spots` for its vias.
+pub fn start_from(board: &Board, spots: Spots) -> Plan {
+    let spots = Arc::new(spots);
     let sheets: Vec<Sheet> = (0..board.layers.len()).map(|l| Sheet::new(Space::new(board, l, &[], &spots))).collect();
     let poured = poured(board);
     // On two layers a poured side is still routed on: the designers do (159 of the gate
@@ -612,19 +615,104 @@ pub fn start_with(board: &Board, tight: bool) -> Plan {
     Plan { sheets, planes, vias: Vec::new(), left: Vec::new(), wants: Vec::new(), joined: Arc::new(joined(board)) }
 }
 
-/// How far from its pad a stub's via may stand, mm.
-const FAN_REACH: f64 = 4.0;
+/// How far off the line through a row's pads one of them may stand, mm.
+const IN_LINE: f64 = 0.05;
+/// How much nearer the part, or farther from it, a row of vias is tried where not all of it
+/// fits at the distance its fan asks for, mm.
+const OUT_STEPS: [f64; 11] = [-0.1, -0.2, -0.3, -0.45, -0.6, -0.8, 0.15, 0.3, 0.5, 0.8, 1.1];
 
-/// A stub for each pad that `wants` start or end at and that stands nearer a pad beside it,
-/// on its own part, than two vias may stand: such a part's pins cannot each have a via
-/// straight in front of them, so where each one's via goes is settled for all of them before
-/// anything else is laid, part by part and round each part in order. The designers do the
-/// same: a via beside every pin of a fine-pitch chip, and the rest of the way on another
-/// layer.
-pub fn fan(board: &Board, plan: &Plan, wants: &[Want]) -> Vec<Want> {
-    let Some(spots) = plan.sheets.first().map(|s| s.space.spots.clone()) else { return Vec::new() };
+/// The places for the vias of one row of a part's pads: the pads that have a connection, in
+/// their order along the row, each with where its via may stand (none where no via may).
+fn slots(board: &Board, apart: f64, radius: f64, row: &[(ItemId, space::P)], middle: space::P, scratch: &mut Board) -> Vec<(ItemId, Option<space::P>)> {
+    let (first, last) = (row[0].1, row[row.len() - 1].1);
+    let len = space::dist(first, last).max(1e-9);
+    let along = [(last[0] - first[0]) / len, (last[1] - first[1]) / len];
+    let t: Vec<f64> = row.iter().map(|p| (p.1[0] - first[0]) * along[0] + (p.1[1] - first[1]) * along[1]).collect();
+    // As near its own pad as each can be with all of them a via's pitch apart: with `k` pitches
+    // taken off the `k`th, the places must not come down, and the nearest such to the pads'
+    // own are their means over each run that would (pool adjacent violators).
+    let pitch = apart + 8.0 * space::VIA_CORNER;
+    let mut runs: Vec<(f64, usize)> = Vec::new();
+    for (k, &at) in t.iter().enumerate() {
+        runs.push((at - k as f64 * pitch, 1));
+        while runs.len() >= 2 && runs[runs.len() - 2].0 > runs[runs.len() - 1].0 {
+            let (b, a) = (runs.pop().unwrap_or((0.0, 0)), runs.pop().unwrap_or((0.0, 0)));
+            runs.push(((a.0 * a.1 as f64 + b.0 * b.1 as f64) / (a.1 + b.1) as f64, a.1 + b.1));
+        }
+    }
+    let places: Vec<f64> = runs.iter().flat_map(|&(y, n)| std::iter::repeat_n(y, n)).enumerate().map(|(k, y)| y + k as f64 * pitch).collect();
+    let most = places.iter().zip(&t).map(|(s, t)| (s - t).abs()).fold(0.0, f64::max);
+    // Out from the row far enough for the farthest stub to come across at 45 degrees and
+    // straighten before its via.
+    let clearance = board.clearance(0, 0) as f64 / 1e6;
+    let out = most + radius + clearance + width(board, 0);
+    let reach = |pad: ItemId, dir: space::P| {
+        let Some(item) = board.item(pad) else { return 0.0 };
+        let b = item.shape.bbox();
+        let c = [(b.min.x + b.max.x) as f64 / 2e6, (b.min.y + b.max.y) as f64 / 2e6];
+        let far = |p: board::Point| (p.x as f64 / 1e6 - c[0]) * dir[0] + (p.y as f64 / 1e6 - c[1]) * dir[1];
+        match &item.shape {
+            board::Shape::Polygon(points) => points.iter().map(|p| far(*p)).fold(0.0, f64::max),
+            board::Shape::Capsule { a, b, r } => far(*a).max(far(*b)) + *r as f64 / 1e6,
+        }
+    };
+    let bounds = space::bounds(board);
+    let stand = |scratch: &mut Board, dir: space::P| -> Vec<Option<space::P>> {
+        let tip = row.iter().map(|p| reach(p.0, dir)).fold(0.0, f64::max);
+        let mut at = |out: f64| -> Vec<Option<space::P>> {
+            places
+                .iter()
+                .map(|&s| {
+                    let p = [first[0] + along[0] * s + dir[0] * (tip + out), first[1] + along[1] * s + dir[1] * (tip + out)];
+                    let q = board::Point::new((p[0] * 1e6).round() as i64, (p[1] * 1e6).round() as i64);
+                    let id = scratch.insert(via_item(board, p, 0));
+                    let fits = bounds.first().is_none_or(|o| board::inside(q, o)) && board::check_item(scratch, id).is_empty();
+                    scratch.remove(id);
+                    fits.then_some(p)
+                })
+                .collect()
+        };
+        // Where something stands in the row's way: a little nearer the part, or farther, as
+        // most of its vias fit. Never so near that a via could not clear the pads.
+        let least = radius + clearance;
+        let mut best = at(out);
+        for step in OUT_STEPS {
+            if best.iter().all(|p| p.is_some()) {
+                break;
+            }
+            let tried = at((out + step).max(least));
+            if tried.iter().flatten().count() > best.iter().flatten().count() {
+                best = tried;
+            }
+        }
+        best
+    };
+    // Away from the part's middle; for a part that is one row, the side with more room.
+    let normal = [-along[1], along[0]];
+    let side = (first[0] - middle[0]) * normal[0] + (first[1] - middle[1]) * normal[1];
+    let stood = if side.abs() > IN_LINE {
+        stand(scratch, if side > 0.0 { normal } else { [-normal[0], -normal[1]] })
+    } else {
+        let (a, b) = (stand(scratch, normal), stand(scratch, [-normal[0], -normal[1]]));
+        if a.iter().flatten().count() >= b.iter().flatten().count() { a } else { b }
+    };
+    row.iter().map(|p| p.0).zip(stood).collect()
+}
+
+/// The way out of each part whose pads stand nearer each other than two vias may, settled for
+/// the whole part: the spots a plan's vias may stand at, and a stub for each such pad that
+/// `wants` start or end at.
+///
+/// The pads of such a part that stand in a row have their vias in a row too, a little way
+/// out from the part: one place for each pad that has a connection, in the pads' order, a
+/// via's pitch apart and each as near straight out from its own pad as that lets it be, so
+/// that the stubs fan out and none crosses another. No other via may stand between the two
+/// rows. A stub that is not used is taken out again ([`tidy`]), and its pad's wire then has
+/// the place its via would have had to pass through. A pad that stands in no row, or whose
+/// own place cannot be reached, has its via wherever one fits within [`FAN_REACH`].
+pub fn escape(board: &Board, wants: &[Want]) -> (Spots, Vec<Want>) {
+    let mut spots = via_spots(board, true);
     let mid = |id: ItemId| board.bbox(id).map(|b| [(b.min.x + b.max.x) as f64 / 2e6, (b.min.y + b.max.y) as f64 / 2e6]);
-    // Pads on one layer only, by part.
     let part = |id: ItemId| match board.item(id) {
         Some(board::Item { kind: Kind::Pad { footprint, .. }, layers, .. }) if layers.count_ones() == 1 => Some((*footprint, *layers)),
         _ => None,
@@ -633,6 +721,64 @@ pub fn fan(board: &Board, plan: &Plan, wants: &[Want]) -> Vec<Want> {
     let mut ends: Vec<(ItemId, u32)> = wants.iter().filter(|w| !w.stub).flat_map(|w| [(w.from, w.net), (w.to, w.net)]).collect();
     ends.sort_unstable();
     ends.dedup();
+    let mut parts: Vec<(usize, u64)> = pads.iter().map(|p| p.1).collect();
+    parts.sort_unstable();
+    parts.dedup();
+    let mut scratch = board.clone();
+    // Each pad's own place, and the ground between each row and its places.
+    let mut own: std::collections::HashMap<ItemId, space::P> = std::collections::HashMap::new();
+    let mut fans: Vec<Vec<space::P>> = Vec::new();
+    for of in parts {
+        let mine: Vec<(ItemId, space::P)> = pads.iter().filter(|p| p.1 == of).map(|p| (p.0, p.2)).collect();
+        let n = mine.len() as f64;
+        let middle = mine.iter().fold([0.0, 0.0], |c, p| [c[0] + p.1[0] / n, c[1] + p.1[1] / n]);
+        // The pads that stand near each other, in the groups they make.
+        let mut group: Vec<usize> = (0..mine.len()).collect();
+        for i in 0..mine.len() {
+            for j in 0..i {
+                if space::dist(mine[i].1, mine[j].1) < spots.apart {
+                    let (a, b) = (group[i], group[j]);
+                    group.iter_mut().filter(|g| **g == a).for_each(|g| *g = b);
+                }
+            }
+        }
+        let mut groups: Vec<usize> = group.clone();
+        groups.sort_unstable();
+        groups.dedup();
+        for g in groups {
+            let mut row: Vec<(ItemId, space::P)> = (0..mine.len()).filter(|&i| group[i] == g).map(|i| mine[i]).collect();
+            if row.len() < 2 {
+                continue;
+            }
+            // In a row: all on the line through the two farthest apart.
+            row.sort_by(|a, b| a.1[0].total_cmp(&b.1[0]).then(a.1[1].total_cmp(&b.1[1])));
+            let (a, b) = (row[0].1, row[row.len() - 1].1);
+            let len = space::dist(a, b).max(1e-9);
+            let off = |p: space::P| ((p[0] - a[0]) * (b[1] - a[1]) - (p[1] - a[1]) * (b[0] - a[0])).abs() / len;
+            if row.iter().any(|p| off(p.1) > IN_LINE) {
+                continue;
+            }
+            let along = |p: space::P| (p[0] - a[0]) * (b[0] - a[0]) + (p[1] - a[1]) * (b[1] - a[1]);
+            row.sort_by(|x, y| along(x.1).total_cmp(&along(y.1)));
+            let wanted: Vec<(ItemId, space::P)> = row.iter().copied().filter(|p| ends.iter().any(|e| e.0 == p.0)).collect();
+            if wanted.is_empty() {
+                continue;
+            }
+            let stood = slots(board, spots.apart, spots.radius, &wanted, middle, &mut scratch);
+            let places: Vec<space::P> = stood.iter().filter_map(|s| s.1).collect();
+            if let (Some(&first), Some(&last)) = (places.first(), places.last()) {
+                fans.push(vec![a, b, last, first]);
+            }
+            own.extend(stood.into_iter().filter_map(|(pad, at)| Some((pad, at?))));
+        }
+    }
+    // No other via among a row's stubs, nor nearer one of its places than two vias may be.
+    let apart = spots.apart;
+    let near_fan = |p: space::P| {
+        fans.iter().any(|f| space::inside(p, f) || (0..f.len()).any(|i| space::point_segment(p, f[i], f[(i + 1) % f.len()]) < apart))
+    };
+    spots.at.retain(|&p| !near_fan(p));
+    let others = spots.at.len();
     let mut stubs: Vec<((usize, u64), f64, Want)> = Vec::new();
     for (pad, net) in ends {
         let (Some(of), Some(at)) = (part(pad), mid(pad)) else { continue };
@@ -640,15 +786,20 @@ pub fn fan(board: &Board, plan: &Plan, wants: &[Want]) -> Vec<Want> {
         if beside >= spots.apart {
             continue;
         }
-        // Round the part from its middle: pads beside each other come one after the other.
         let n = pads.iter().filter(|p| p.1 == of).count() as f64;
         let centre = pads.iter().filter(|p| p.1 == of).fold([0.0, 0.0], |c, p| [c[0] + p.2[0] / n, c[1] + p.2[1] / n]);
         let turn = (at[1] - centre[1]).atan2(at[0] - centre[0]);
-        let into: Vec<usize> = (0..spots.at.len()).filter(|&c| space::dist(spots.at[c], at) <= FAN_REACH).collect();
+        // Its own place first; the others within reach are for a pad that has none, or whose
+        // own turns out not to be reached.
+        let mut into: Vec<usize> = (0..others).filter(|&c| space::dist(spots.at[c], at) <= FAN_REACH).collect();
+        if let Some(&place) = own.get(&pad) {
+            spots.at.push(place);
+            into.insert(0, spots.at.len() - 1);
+        }
         stubs.push((of, turn, Want { net, from: pad, to: pad, apart: 0.0, into, avoid: Vec::new(), stub: true, narrow: None }));
     }
     stubs.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
-    stubs.into_iter().map(|s| s.2).collect()
+    (spots, stubs.into_iter().map(|s| s.2).collect())
 }
 
 /// Takes out every stub that no connection starts from: a via with a track to it and nothing

@@ -10,8 +10,8 @@ This repository holds the Cargo workspace (`crates/`: `project`, a board project
 `server`, the HTTP server; `boardroom`, the one binary, whose commands are functions in
 `cli.rs`; `kicad`, the only reader and writer of KiCad files; `board`, the board model with the checker;
 `intent`, `recognise`, `library`, `interfaces` and `examine` (the judge, from Composer's verifier);
-`plan`, the new router's first stage, a prototype: each connection as a strand through the gaps between obstacles, before any copper;
-`wire`, its second: each strand drawn alone as 0/45/90 pieces held by the corners it passes, kept only if the checker passes it, a connection that cannot be drawn laid again narrower and then another way, a poured net left to its pour (and a connection the pours leave open again laid again), a pad the wires leave too few thermal spokes given one drawn by hand or those wires laid another way, and a board that is not whole routed again with a via beside every pin of its fine-pitch parts first (`wire::route`);
+`plan`, the new router's first stage, a prototype: each connection as a strand through the gaps between obstacles, before any copper, two of one net beside each other as one track;
+`wire`, its second: each strand drawn alone as 0/45/90 pieces held by the corners it passes, kept only if the checker passes it, a connection that cannot be drawn laid again narrower and then another way, a poured net left to its pour (and a connection the pours leave open again laid again), a pad the wires leave too few thermal spokes given one drawn by hand or those wires laid another way, and a board that is not whole routed again with each fine-pitch part's way out settled first, a row of vias for each row of its pads (`wire::route`);
 `scene`, plain drawing data and its mesh; `render`, a board as a scene, with the WebGL renderer in
 `crates/render/js`; `wasm`, the browser module, built by `web/scripts/wasm.sh`; `gtk`, the native
 window; `gpl/kicad-text`, the GPL text program that is run and never linked; `crates/boardroom/tests/layers.rs` enforces the spec's

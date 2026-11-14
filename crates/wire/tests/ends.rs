@@ -126,3 +126,20 @@ fn a_wire_that_may_not_reach_its_pads_middle_stops_where_it_comes_onto_the_pad()
     let top = drawing.wires[0].pts.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
     assert!((top - 10.0).abs() < 1e-6, "{:?}", drawing.wires[0].pts);
 }
+
+/// A wall of other nets' pads across the board with a door 0.75 mm wide, a pad on one side and two
+/// of its net on the other: the door has room for one track, not for two side by side. The
+/// two connections go through it as one track and part beyond it, as a designer branches a
+/// track (a connector's pin that goes to two places, CAL430FR's P2).
+#[test]
+fn two_connections_of_one_net_go_through_a_narrow_gap_as_one_track() {
+    let wall = [pad(10.0, 4.8125, 0.6, 9.625, "B"), pad(10.0, 15.1875, 0.6, 9.625, "C")].concat();
+    let board = board(&[wall, pad(5.0, 10.0, 1.0, 1.0, "A"), pad(13.0, 2.0, 1.0, 1.0, "A"), pad(13.0, 18.0, 1.0, 1.0, "A")].concat(), 0.25);
+    let (plan, drawing) = whole(&board);
+    assert_eq!(drawing.wires.len(), 2);
+    assert!(plan.vias.is_empty(), "neither goes under the wall");
+    assert!(plan.wants.iter().all(|w| w.narrow.is_none()), "both at their class's width");
+    for wire in &drawing.wires {
+        assert!(wire.pts.windows(2).any(|w| (w[0][0] - 10.0) * (w[1][0] - 10.0) <= 0.0), "through the door: {:?}", wire.pts);
+    }
+}
