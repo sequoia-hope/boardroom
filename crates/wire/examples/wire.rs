@@ -3,6 +3,9 @@
 //! `wire.LAYER.svg` per layer that has pads, and a line of counts. `WIRE_WATCH=LAYER:STRAND` also
 //! writes `watch.svg`, that strand's course as the drawing saw it. `WIRE_POURS` tells what each
 //! pad of a poured net is joined to; `WIRE_TIMES` (in the library) tells each round's stages.
+//! Copper text is shaped by `kicad-text` where `ULTRAROUTE_TEXT_HELPER` names it (it is not
+//! beside an example); without it text is boxes, which cover pads its letters do not, and this
+//! says so.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -17,6 +20,10 @@ fn main() {
         eprintln!("{e}");
         std::process::exit(1)
     });
+    // Copper text taken as boxes covers pads its letters do not: say so.
+    if let Some(note) = original.text_note.as_deref().filter(|n| n.contains("as boxes")) {
+        eprintln!("{note}");
+    }
     let mut board = original.clone();
     plan::strip(&mut board);
     let started = std::time::Instant::now();

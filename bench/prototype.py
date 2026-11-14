@@ -4,7 +4,7 @@ rubber-band sketch (crates/plan), the plan drawn as copper (crates/wire), and th
 
     prototype.py [--only id,...] [--look RUN] [--no-kicad]
 
-Needs `cargo build --release -p wire --example wire`. The designer's pictures are the look set's
+Needs `cargo build --release -p wire --example wire` and `cargo build --release -p kicad-text`. The designer's pictures are the look set's
 (lookset.py RUN, by default the baseline's). Writes LAB/planned/prototype/: index.html and, per
 board, wires.json, routed.kicad_pcb, one plan.LAYER and wire.LAYER picture per layer, and KiCad's
 verdict on the routed board (after a refill) beside its verdict on the bare one.
@@ -12,6 +12,7 @@ verdict on the routed board (after a refill) beside its verdict on the bare one.
 import argparse
 import html
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -38,7 +39,14 @@ BOARDS = [
     ("shift-in", "Shift-in 32 (HC165): through-hole logic", "pcbench/truth/Shift-in-32-HC165_shift-in/bare.kicad_pcb"),
     ("ulpi", "ULPI Pmod: a fine-pitch chip and two headers", "pcbench/truth/ULPI-Pmod_ULPI-Pmod/bare.kicad_pcb"),
     ("cal430fr", "CAL430FR: a dense two-layer board", "pcbench/truth/CAL430FR_CAL430F/bare.kicad_pcb"),
+    ("kiwisdr", "KiwiSDR antenna board: radio, its tracks 1 mm wide by default", "pcbench/truth/KiwiSDR_PCB_ant/bare.kicad_pcb"),
+    ("phone-rtty", "Phone RTTY interface: through-hole, with labels in copper", "pcbench/truth/phone_rtty_interface_phone_rtty_rev_b/bare.kicad_pcb"),
+    ("domotics", "Domotics power supply: through-hole power, pins of several pads", "pcbench/truth/domotics_power-supply/bare.kicad_pcb"),
+    ("induction", "Induction hob temperature sensor: 9 mm across and crowded", "pcbench/truth/induction-hob_temperature-sensor/bare.kicad_pcb"),
 ]
+# Copper text is shaped by the text helper, built beside the examples' directory; without it a
+# label is a box that covers the pads beside its letters.
+TEXT = paths.REPO / "target" / "release" / "kicad-text"
 
 
 def kicad(src, out):
@@ -76,7 +84,10 @@ def main():
         if only and bid not in only:
             continue
         out = OUT / bid
-        r = subprocess.run([WIRE, LAB / board, out], capture_output=True, text=True)
+        env = dict(os.environ)
+        if TEXT.exists():
+            env.setdefault("ULTRAROUTE_TEXT_HELPER", str(TEXT))
+        r = subprocess.run([WIRE, LAB / board, out], capture_output=True, text=True, env=env)
         if r.returncode != 0:
             rows.append(f"<h2>{e(title)}</h2><p class='bad'>the prototype failed: {e(r.stderr.strip()[-400:])}</p>")
             continue
@@ -132,7 +143,9 @@ cross on a layer, and a via is put in only where a connection wants one. A conne
 lifted and laid again. <b>The plan drawn</b> (middle): each strand, alone, as pieces in 0/45/90 that each pass an end of the wire or
 lie as near a corner as the wire may come to it, given the strands the plan has between; so wires that pass a corner together come
 out side by side at even pitch. Every wire is put to the exact checker and kept only if it passes. Where a wire cannot be drawn, its
-connection alone is planned again, barred from the gap it stuck in, and the rest stays as drawn. <b>A net with a pour is left to its
+connection alone is planned again, narrower if the rules let it be and then barred from the gap it stuck in, and the rest stays as
+drawn. A track is as wide as its net's class asks unless that width has no way: then it is halved, down to the least the board's
+rules allow. <b>A net with a pour is left to its
 pour</b>: the other nets are planned and drawn first, the pours are filled round them (pale, in the net's colour), and only what a pour
 leaves apart is planned, to the nearest pad or to a via standing in the pour. A dashed red line is a strand still not drawn; a dashed
 yellow one a connection the plan has no strand for. <b>The designer's copper</b> (right) is the board as its designer routed it.</p>

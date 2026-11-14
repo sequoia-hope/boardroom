@@ -466,6 +466,12 @@ impl Space {
         a.is_none() || a != b
     }
 
+    /// Whether there is room on both sides of an edge: a strand that crosses it is passing
+    /// between two things, not coming onto the one it ends on.
+    pub fn passed(&self, e: usize) -> bool {
+        self.edges[e].t.iter().all(|t| t.is_some_and(|t| self.free(t)))
+    }
+
     /// The room across a gap for wires in the eight directions, mm. Wires that cross a gap
     /// square on are as near each other along it as they may be; wires at a slant to it take
     /// more of it each. So a gap that lies along none of the eight directions holds less than

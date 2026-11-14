@@ -257,13 +257,15 @@ impl Sheet {
 
     /// Whether no gap holds more than its room, and the strands in every free triangle are
     /// chords that each cut one corner off: no side holds more than the other two together,
-    /// and the three hold an even number.
+    /// and the three hold an even number. A side of the thing a strand ends on is no gap,
+    /// whoever its corners belong to: where two pads of one net stand in one place, each
+    /// one's sides run between the other's corners.
     pub fn sound(&self, board: &Board) -> bool {
         let chords = self.space.tris.iter().enumerate().all(|(t, tri)| {
             let l = tri.e.map(|e| self.on[e].len());
             !self.space.free(t) || ((l[0] + l[1] + l[2]) % 2 == 0 && l[0] <= l[1] + l[2] && l[1] <= l[0] + l[2] && l[2] <= l[0] + l[1])
         });
-        chords && (0..self.space.edges.len()).all(|e| self.on[e].is_empty() || !self.space.gap(e) || self.need(board, e, None) <= self.space.width(e) + EPS)
+        chords && (0..self.space.edges.len()).all(|e| self.on[e].is_empty() || !self.space.gap(e) || !self.space.passed(e) || self.need(board, e, None) <= self.space.width(e) + EPS)
     }
 
     /// The point of `edge` a share `u` of the way from its first corner to its second.

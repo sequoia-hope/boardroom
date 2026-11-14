@@ -50,7 +50,8 @@ fn no_gap_is_over_its_room() {
     let (board, plan) = planned();
     for sheet in &plan.sheets {
         for e in 0..sheet.space.edges.len() {
-            if sheet.space.gap(e) {
+            // A side of the pad a strand ends on is no gap, whoever its corners belong to.
+            if sheet.space.gap(e) && sheet.space.passed(e) {
                 assert!(sheet.fill(&board, e) <= 1.0 + 1e-6, "edge {e} is {:.3} full", sheet.fill(&board, e));
             }
         }

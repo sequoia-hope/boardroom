@@ -576,6 +576,9 @@ fn draw_with(board: &Board, plan: &Plan, watch: Option<(usize, usize)>, memo: &m
 
 /// How many times the connections that could not be drawn are laid again.
 const ROUNDS: usize = 8;
+/// How many more rounds there may be in which a wire was made narrower: a track's width is
+/// halved at most twice (`plan`'s `NARROWEST`).
+const NARROWER: usize = 2;
 
 /// The connections a board's pours leave to make once `drawing` is on it, for the nets in
 /// `poured`: the pours are filled round the drawn copper, and what a piece of pour reaches it
@@ -639,14 +642,20 @@ pub fn open(board: &Board, plan: &Plan, drawing: &Drawing) -> usize {
     board::connectivity_poured(&with, &board::Pours::of(&with)).airlines.len()
 }
 
-/// Draws the plan, and while some strand cannot be drawn, lays its connection again barred
-/// from the gap its wire stuck in, and draws again: the rest of the plan stays, so what was
-/// drawn stays drawn. A gap's length is the most it can hold; what it does hold depends on
+/// Draws the plan, and while some strand cannot be drawn, lays its connection again narrower,
+/// or at its narrowest barred from the gap its wire stuck in, and draws again: the rest of
+/// the plan stays, so what was drawn stays drawn. A gap's length is the most it can hold; what
+/// it does hold depends on
 /// what stands round it, and drawing is what finds that out. The plan is left as it was
 /// when fewest of its connections were open.
 fn settle(board: &Board, plan: &mut Plan, memo: &mut chain::Memo, said: &dyn Fn(&str, &Plan, Option<&Drawing>)) -> Drawing {
     let mut best: Option<(usize, Plan, Drawing)> = None;
-    for _ in 0..ROUNDS {
+    // A round that only made wires narrower is not counted: a few of those.
+    let (mut rounds, mut more) = (0, NARROWER);
+    while rounds < ROUNDS {
+        rounds += 1;
+        // A stub nothing starts from is not drawn.
+        plan::tidy(board, plan);
         let drawing = draw_with(board, plan, None, memo).0;
         said("drawn", plan, Some(&drawing));
         let open = plan.left.len() + drawing.undrawn.len();
@@ -658,7 +667,10 @@ fn settle(board: &Board, plan: &mut Plan, memo: &mut chain::Memo, said: &dyn Fn(
         if open == 0 || stuck.is_empty() {
             break;
         }
-        plan::again(board, plan, &stuck);
+        if plan::again(board, plan, &stuck) && more > 0 {
+            more -= 1;
+            rounds -= 1;
+        }
         said("laid again", plan, None);
     }
     let (_, kept, drawing) = best.unwrap_or_else(|| (0, plan.clone(), Drawing::default()));
@@ -671,7 +683,33 @@ fn settle(board: &Board, plan: &mut Plan, memo: &mut chain::Memo, said: &dyn Fn(
 /// A net with a pour is left to its pour: the other nets are planned and drawn first, the
 /// pours are filled round them, and only what the pours then leave apart is planned, each such
 /// connection to the nearest pad of the other part or to a via standing in its pour.
+///
+/// A board that is not whole that way, and has parts whose pins stand nearer each other than
+/// vias may, is routed again with those parts fanned out first ([`plan::fan`]): a via beside
+/// each such pin, settled for a whole part before anything else is laid, and the connections
+/// then from via to via. The one with fewer connections open is kept.
 pub fn route(board: &Board) -> (Plan, Drawing) {
+    // (For trying things: WIRE_FAN=0 never fans out, WIRE_FAN=1 always does.)
+    let forced = std::env::var("WIRE_FAN").ok();
+    if forced.as_deref() == Some("1")
+        && let Some(fanned) = route_with(board, true)
+    {
+        return fanned;
+    }
+    let Some(plain) = route_with(board, false) else { return (plan::start(board), Drawing::default()) };
+    let still = open(board, &plain.0, &plain.1);
+    if still == 0 || forced.is_some() {
+        return plain;
+    }
+    match route_with(board, true) {
+        Some(fanned) if open(board, &fanned.0, &fanned.1) < still => fanned,
+        _ => plain,
+    }
+}
+
+/// [`route`] one way: with the fine-pitch parts fanned out first, or without. None where
+/// there is nothing to fan out.
+fn route_with(board: &Board, fan: bool) -> Option<(Plan, Drawing)> {
     let mut poured: Vec<u32> = board.zone_areas.iter().filter(|z| !z.kept && z.net != 0).map(|z| z.net).collect();
     poured.sort_unstable();
     poured.dedup();
@@ -684,8 +722,17 @@ pub fn route(board: &Board) -> (Plan, Drawing) {
             eprintln!("{:7.2} s  {what}: {} strands, {} vias, {} left{}", clock.elapsed().as_secs_f64(), plan.sheets.iter().map(|s| s.laid().count()).sum::<usize>(), plan.vias.len(), plan.left.len(), drawing.map_or(String::new(), |d| format!(", {} drawn, {} not", d.wires.len(), d.undrawn.len())));
         }
     };
-    let mut plan = plan::start(board);
-    plan::add(board, &mut plan, plan::wants(&lines).into_iter().filter(|w| !poured.contains(&w.net)).collect());
+    let mut plan = plan::start_with(board, fan);
+    let wants: Vec<plan::Want> = plan::wants(&lines).into_iter().filter(|w| !poured.contains(&w.net)).collect();
+    if fan {
+        let stubs = plan::fan(board, &plan, &wants);
+        if stubs.is_empty() {
+            return None;
+        }
+        plan::add(board, &mut plan, stubs);
+        said("fanned out", &plan, None);
+    }
+    plan::add(board, &mut plan, wants);
     said("planned", &plan, None);
     let mut drawing = settle(board, &mut plan, &mut memo, &said);
     // What the pours leave apart, and then what they leave apart once that is drawn: a wire
@@ -704,7 +751,7 @@ pub fn route(board: &Board) -> (Plan, Drawing) {
         said("planned", &plan, None);
         drawing = settle(board, &mut plan, &mut memo, &said);
     }
-    (plan, drawing)
+    Some((plan, drawing))
 }
 
 /// How many times the pours are filled to see what they leave apart.

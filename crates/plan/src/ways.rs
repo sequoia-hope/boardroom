@@ -74,6 +74,8 @@ struct Seen {
     /// For a via: the strand it stands just past on the layer it was come to on, and the
     /// crossing that strand's line past it starts from.
     push: Option<(usize, usize, usize)>,
+    /// The end the way left from, on its first crossing, or came to, on its last.
+    end: Option<End>,
 }
 
 #[derive(PartialEq)]
@@ -177,10 +179,15 @@ fn standing_past(board: &Board, sheets: &[Sheet], with: &mut Option<Board>, c: u
 /// The cheapest way for a strand of `net` from `from` to `to`. A way's cost is its length pulled
 /// tight: straight from its last bend for as long as the straight line stays inside every gap
 /// crossed since.
-pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64, from: End, to: End) -> Option<Way> {
+pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64, from: &[End], to: &[End]) -> Option<Way> {
     let me = (net, width);
     let middle = |e: End| sheets.iter().find_map(|s| s.space.ends.get(&e).map(|&o| s.space.obstacles[o].centre));
-    let goal = middle(to)?;
+    let goals: Vec<(End, P)> = to.iter().map(|&e| Some((e, middle(e)?))).collect::<Option<_>>()?;
+    // What the way heads for: the first of its ends, or, with none (a way that ends at a via
+    // it puts in), where it starts.
+    let goal = goals.first().map(|g| g.1).or_else(|| from.iter().find_map(|&e| middle(e)))?;
+    // The least there is still to go from a place: to the nearest of its ends.
+    let left = |p: P| goals.iter().map(|g| dist(p, g.1)).fold(f64::MAX, f64::min).min(if goals.is_empty() { 0.0 } else { f64::MAX });
     let spots = sheets.first()?.space.spots.clone();
     let mut best: HashMap<Key, Seen> = HashMap::new();
     let mut heap = BinaryHeap::new();
@@ -199,8 +206,8 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
     };
     let cheapest = if terms.into.is_empty() || terms.via.is_none() { terms.dear.iter().copied().fold(f64::MAX, f64::min) } else { 0.0 };
     // The first crossings of the leg that leaves `from`, on each layer it is on.
-    for (l, sheet) in sheets.iter().enumerate() {
-        let Some(&o) = sheet.space.ends.get(&from) else { continue };
+    for (l, sheet, src) in sheets.iter().enumerate().flat_map(|(l, sheet)| from.iter().map(move |&src| (l, sheet, src))) {
+        let Some(&o) = sheet.space.ends.get(&src) else { continue };
         let start = sheet.space.obstacles[o].centre;
         for (e, edge) in sheet.space.edges.iter().enumerate() {
             let (Some(x), Some(y)) = (edge.t[0], edge.t[1]) else { continue };
@@ -211,8 +218,8 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
                         let c = terms.dear[l] * dist(start, at);
                         let key = (l, e, slot, outer);
                         if best.get(&key).is_none_or(|b| c < b.cost) {
-                            best.insert(key, Seen { cost: c, prev: None, at, bend_at: start, bend_cost: 0.0, bend: None, starts: true, over: None, about: None, push: None });
-                            heap.push(Open { order: c + cheapest * dist(at, goal), cost: c, key });
+                            best.insert(key, Seen { cost: c, prev: None, at, bend_at: start, bend_cost: 0.0, bend: None, starts: true, over: None, about: None, push: None, end: Some(src) });
+                            heap.push(Open { order: c + cheapest * left(at), cost: c, key });
                         }
                     }
                 }
@@ -225,15 +232,15 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
         if terms.into.contains(&c) {
             let (key, cost) = ((l, VIA, c, GOAL), cost + terms.drop);
             if best.get(&key).is_none_or(|b| cost < b.cost) {
-                best.insert(key, Seen { cost, prev: Some(prev), at: p, bend_at: p, bend_cost: cost, bend: None, starts: false, over: None, about: None, push });
+                best.insert(key, Seen { cost, prev: Some(prev), at: p, bend_at: p, bend_cost: cost, bend: None, starts: false, over: None, about: None, push, end: None });
                 heap.push(Open { order: cost, cost, key });
             }
         }
         for m in (0..sheets.len()).filter(|&m| m != l) {
             let (key, cost) = ((m, VIA, c, 0), cost + via);
             if best.get(&key).is_none_or(|b| cost < b.cost && !through(best, prev, key)) {
-                best.insert(key, Seen { cost, prev: Some(prev), at: p, bend_at: p, bend_cost: cost, bend: None, starts: false, over: None, about: None, push });
-                heap.push(Open { order: cost + cheapest * dist(p, goal), cost, key });
+                best.insert(key, Seen { cost, prev: Some(prev), at: p, bend_at: p, bend_cost: cost, bend: None, starts: false, over: None, about: None, push, end: None });
+                heap.push(Open { order: cost + cheapest * left(p), cost, key });
             }
         }
     };
@@ -243,7 +250,7 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
         }
         let (l, edge, slot, into) = key;
         if into == GOAL {
-            let (legs, over, pushes) = legs(&best, key, from, to);
+            let (legs, over, pushes) = legs(&best, key)?;
             return Some(Way { legs, cost, over, pushes });
         }
         let sheet = &sheets[l];
@@ -256,15 +263,16 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
             let Some((t, region)) = standing_on(board, sheet, slot, net) else { continue };
             for (e, s) in sheet.doors(t, region) {
                 let Some(next) = sheet.space.edges[e].t.iter().flatten().copied().find(|&x| x != t) else { continue };
-                let ends = sheet.space.ends.get(&to).is_some_and(|&o| sheet.space.tris[next].inside == Some(o));
+                let end = goals.iter().find(|g| sheet.space.ends.get(&g.0).is_some_and(|&o| sheet.space.tris[next].inside == Some(o))).copied();
+                let ends = end.is_some();
                 if !ends && (!sheet.space.free(next) || barred(sheet, e) || sheet.need(board, e, Some((s, net, width))) > sheet.space.width(e) + EPS) {
                     continue;
                 }
                 let there = sheet.crossing(board, e, s, me, p, goal);
                 let c = cost + terms.dear[l] * dist(p, there);
-                let (to_key, c) = if ends { ((l, e, s, GOAL), c + terms.dear[l] * dist(there, goal)) } else { ((l, e, s, next), c) };
+                let (to_key, c) = match end { Some(g) => ((l, e, s, GOAL), c + terms.dear[l] * dist(there, g.1)), None => ((l, e, s, next), c) };
                 if best.get(&to_key).is_none_or(|b| c < b.cost && !through(&best, key, to_key)) {
-                    found.push((to_key, Seen { cost: c, prev: Some(key), at: there, bend_at: p, bend_cost: cost, bend: None, starts: true, over: None, about: None, push: None }));
+                    found.push((to_key, Seen { cost: c, prev: Some(key), at: there, bend_at: p, bend_cost: cost, bend: None, starts: true, over: None, about: None, push: None, end: end.map(|g| g.0) }));
                 }
             }
             for &c in &sheet.space.tri_spots[t] {
@@ -295,7 +303,7 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
                     let other = &sheet.strands[other];
                     let (to_key, c) = ((l, edge, slot2, into), cost + cross);
                     if other.net != net && !terms.keep.contains(&other.connection) && best.get(&to_key).is_none_or(|b| c < b.cost && !through(&best, key, to_key)) {
-                        found.push((to_key, Seen { cost: c, prev: Some(key), at: here, bend_at: here, bend_cost: c, bend: Some(key), starts: false, over: Some(other.connection), about: best[&key].about, push: None }));
+                        found.push((to_key, Seen { cost: c, prev: Some(key), at: here, bend_at: here, bend_cost: c, bend: Some(key), starts: false, over: Some(other.connection), about: best[&key].about, push: None, end: None }));
                     }
                 }
             }
@@ -317,7 +325,8 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
             };
             for (e, s, corner) in sheet.ways_on(into, edge, slot) {
                 let Some(next) = sheet.space.edges[e].t.iter().flatten().copied().find(|&x| x != into) else { continue };
-                let ends = sheet.space.ends.get(&to).is_some_and(|&o| sheet.space.tris[next].inside == Some(o));
+                let end = goals.iter().find(|g| sheet.space.ends.get(&g.0).is_some_and(|&o| sheet.space.tris[next].inside == Some(o))).copied();
+                let ends = end.is_some();
                 if !ends && (!sheet.space.free(next) || barred(sheet, e)) {
                     continue;
                 }
@@ -354,15 +363,15 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
                     (there, cost + TURN + terms.dear[l] * dist(here, there), Some(key), here, cost + TURN)
                 };
                 // The end's own side is the last crossing; then the way ends at its middle.
-                let (to_key, c) = if ends { ((l, e, s, GOAL), c + terms.dear[l] * dist(there, goal)) } else { ((l, e, s, next), c) };
+                let (to_key, c) = match end { Some(g) => ((l, e, s, GOAL), c + terms.dear[l] * dist(there, g.1)), None => ((l, e, s, next), c) };
                 if best.get(&to_key).is_none_or(|b| c < b.cost && !through(&best, key, to_key)) {
-                    found.push((to_key, Seen { cost: c, prev: Some(key), at: there, bend_at, bend_cost, bend, starts: false, over: None, about: Some(about), push: None }));
+                    found.push((to_key, Seen { cost: c, prev: Some(key), at: there, bend_at, bend_cost, bend, starts: false, over: None, about: Some(about), push: None, end: end.map(|g| g.0) }));
                 }
             }
         }
         for (k, seen) in found {
             // A way that has reached the goal has nothing left to go.
-            let to_go = if k.3 == GOAL { 0.0 } else { cheapest * dist(seen.at, goal) };
+            let to_go = if k.3 == GOAL { 0.0 } else { cheapest * left(seen.at) };
             heap.push(Open { order: seen.cost + to_go, cost: seen.cost, key: k });
             best.insert(k, seen);
         }
@@ -389,13 +398,16 @@ fn through(best: &HashMap<Key, Seen>, from: Key, key: Key) -> bool {
 /// The way that ends at `last`, as legs, a new leg at every via, and the connections it goes
 /// across.
 #[allow(clippy::type_complexity)]
-fn legs(best: &HashMap<Key, Seen>, last: Key, from: End, to: End) -> (Vec<Leg>, Vec<usize>, Vec<(usize, usize, usize, usize)>) {
+fn legs(best: &HashMap<Key, Seen>, last: Key) -> Option<(Vec<Leg>, Vec<usize>, Vec<(usize, usize, usize, usize)>)> {
+    // Each leg's start is filled in when the way has been followed back to it.
+    let from = End::Site(usize::MAX);
     let mut legs: Vec<Leg> = Vec::new();
     let mut over: Vec<usize> = Vec::new();
     let mut pushes: Vec<(usize, usize, usize, usize)> = Vec::new();
     // A way that ends at a via in the pour: its last leg comes to that via.
     let dropped = last.1 == VIA && last.3 == GOAL;
-    let mut leg = Leg { layer: last.0, from: Stop::End(from), to: if dropped { Stop::Spot(last.2) } else { Stop::End(to) }, steps: Vec::new() };
+    let mut leg = Leg { layer: last.0, from: Stop::End(from), to: if dropped { Stop::Spot(last.2) } else { Stop::End(best[&last].end?) }, steps: Vec::new() };
+    let mut first = None;
     if dropped && let Some((l, s, k)) = best[&last].push {
         pushes.push((last.2, l, s, k));
     }
@@ -405,6 +417,9 @@ fn legs(best: &HashMap<Key, Seen>, last: Key, from: End, to: End) -> (Vec<Leg>, 
         steps += 1;
         assert!(steps <= best.len(), "a way goes through one crossing twice");
         let prev = best[&k].prev;
+        if prev.is_none() {
+            first = best[&k].end;
+        }
         if k.1 == VIA {
             if let Some((l, s, c)) = best[&k].push
                 && !pushes.contains(&(k.2, l, s, c))
@@ -428,7 +443,8 @@ fn legs(best: &HashMap<Key, Seen>, last: Key, from: End, to: End) -> (Vec<Leg>, 
         at = prev;
     }
     leg.steps.reverse();
+    leg.from = Stop::End(first?);
     legs.push(leg);
     legs.reverse();
-    (legs, over, pushes)
+    Some((legs, over, pushes))
 }
