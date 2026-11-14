@@ -104,3 +104,25 @@ fn a_track_is_never_less_than_a_quarter_of_its_class_width() {
     assert_eq!(plan.wants[0].narrow, Some(0.25));
     assert_eq!(plan.wants[0].avoid, [gap]);
 }
+
+/// A rule area over the top of a long pad, its middle included, where no track may be: the
+/// wire stops where it comes onto the pad, which joins it as well as the middle would (a
+/// pogo-pin plug's pins under their mask openings, a pad on the board's edge).
+#[test]
+fn a_wire_that_may_not_reach_its_pads_middle_stops_where_it_comes_onto_the_pad() {
+    let long = pad(10.0, 10.0, 1.0, 6.0, "A");
+    let area = "(zone (net 0) (net_name \"\") (layers \"F.Cu\") (hatch edge 0.5)
+                  (keepout (tracks not_allowed) (vias not_allowed) (pads allowed) (copperpour allowed) (footprints allowed))
+                  (polygon (pts (xy 8 6) (xy 12 6) (xy 12 11) (xy 8 11))))";
+    let board = board(&[long.clone(), pad(10.0, 17.0, 1.0, 1.0, "A"), area.to_string()].concat(), 0.25);
+    let (_, drawing) = whole(&board);
+    assert_eq!(drawing.wires.len(), 1);
+    let ends = [drawing.wires[0].pts[0], *drawing.wires[0].pts.last().unwrap()];
+    let top = ends.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
+    assert!((top - 12.95).abs() < 1e-3, "just onto the pad's lower end, at 13: {ends:?}");
+    // With no such area it goes to the middle.
+    let board = self::board(&[long, pad(10.0, 17.0, 1.0, 1.0, "A")].concat(), 0.25);
+    let (_, drawing) = whole(&board);
+    let top = drawing.wires[0].pts.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
+    assert!((top - 10.0).abs() < 1e-6, "{:?}", drawing.wires[0].pts);
+}

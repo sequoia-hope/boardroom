@@ -59,3 +59,41 @@ fn a_pad_on_the_other_side_takes_a_via_into_the_pour() {
     assert!(length(ground[0]) < 5.0, "a short wire to the via, not one across the board: {} mm", length(ground[0]));
     assert_eq!(wire::open(&board, &plan, &drawing), 0);
 }
+
+/// A 30 by 20 mm board with GND poured over all of the front and joined to its pads solidly,
+/// a GND pad at each end, and two nets that each run from the top edge to the bottom between
+/// them, with no room for pour past their pads: SIG, laid before the pours are looked at, and VCC, a poured net (a patch of it on
+/// the back that reaches none of its pads) and so laid with what the pours leave.
+fn cut_twice() -> Board {
+    let pad = |x: f64, y: f64, n: usize, net: &str| format!("(footprint \"P\" (layer \"F.Cu\") (at {x} {y}) (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net {n} \"{net}\")))");
+    let parts = [pad(5.0, 10.0, 1, "GND"), pad(26.0, 10.0, 1, "GND"), pad(12.0, 1.3, 2, "SIG"), pad(12.0, 18.7, 2, "SIG"), pad(20.0, 1.3, 3, "VCC"), pad(20.0, 18.7, 3, "VCC")].concat();
+    let text = format!(
+        "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
+         (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
+         (net 0 \"\") (net 1 \"GND\") (net 2 \"SIG\") (net 3 \"VCC\")
+         (gr_rect (start 0 0) (end 30 20) (layer \"Edge.Cuts\") (width 0.1))
+         {parts}
+         (zone (net 1) (net_name \"GND\") (layer \"F.Cu\") (hatch edge 0.5) (connect_pads yes (clearance 0.2)) (min_thickness 0.25)
+           (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5))
+           (polygon (pts (xy 0.5 0.5) (xy 29.5 0.5) (xy 29.5 19.5) (xy 0.5 19.5))))
+         (zone (net 3) (net_name \"VCC\") (layer \"B.Cu\") (hatch edge 0.5) (connect_pads yes (clearance 0.2)) (min_thickness 0.25)
+           (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5))
+           (polygon (pts (xy 1 1) (xy 3 1) (xy 3 3) (xy 1 3)))))"
+    );
+    let (pcb, copper) = kicad::parse_board(&text).unwrap();
+    Board::new(&pcb, &copper, kicad::Rules::parse(RULES).unwrap())
+}
+
+#[test]
+fn a_wire_that_ended_in_pour_since_cut_off_is_laid_again() {
+    // SIG cuts the ground pour in two, so ground's two pads want a wire: under SIG to a via
+    // in the pour beyond. VCC, laid in the same round, cuts that pour again, between the via
+    // and the far pad. The wire is laid again to where the pour reaches the pad now.
+    let board = cut_twice();
+    let (plan, drawing) = wire::route(&board);
+    assert!(drawing.undrawn.is_empty() && plan.left.is_empty());
+    assert_eq!(wire::open(&board, &plan, &drawing), 0);
+    // Ground's copper ends past VCC, in the pour the far pad is in.
+    let far = drawing.wires.iter().filter(|w| board.net_name(w.net) == "GND").flat_map(|w| w.pts.iter().map(|p| p[0])).chain(plan.vias.iter().map(|v| v.at[0])).fold(0.0, f64::max);
+    assert!(far > 20.5, "{far}");
+}

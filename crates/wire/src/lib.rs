@@ -9,7 +9,12 @@
 //! connection is laid again another way ([`route`]).
 //!
 //! A net with a pour is left to its pour: [`route`] plans and draws the other nets, fills the
-//! pours round them ([`board::Pours`]) and plans only what the pours leave apart.
+//! pours round them ([`board::Pours`]) and plans only what the pours leave apart, and again
+//! what they leave apart once that is drawn: a connection that ended at a via in pour which
+//! later wires cut off is laid again, the second time all the way to the pad. A pad the
+//! wires leave fewer thermal spokes than the rules ask, because they shut in the pour a spoke
+//! of it ends in ([`board::Pours::starved`]), is given a spoke drawn by hand ([`Tie`]), or
+//! those wires are laid another way ([`shutting`]).
 
 pub mod chain;
 pub mod convex;
@@ -53,10 +58,22 @@ pub struct Undrawn {
     pub gap: Option<[P; 2]>,
 }
 
+/// A track from a pad's middle straight across the gap its pour leaves round it, into the
+/// pour: a spoke drawn by hand, where the pour's own leave the pad too few.
+#[derive(Debug, Clone, Serialize)]
+pub struct Tie {
+    pub layer: usize,
+    pub net: u32,
+    /// mm.
+    pub width: f64,
+    pub pts: [P; 2],
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct Drawing {
     pub wires: Vec<Wire>,
     pub undrawn: Vec<Undrawn>,
+    pub ties: Vec<Tie>,
 }
 
 fn nm(p: P) -> board::Point {
@@ -500,14 +517,7 @@ fn draw_with(board: &Board, plan: &Plan, watch: Option<(usize, usize)>, memo: &m
                     }
                     chain::Path { length: pts.windows(2).map(|w| convex::len(sub(w[1], w[0]))).sum(), pts }
                 });
-                let ids: Vec<ItemId> = path
-                    .pts
-                    .windows(2)
-                    .map(|seg| {
-                        let shape = Shape::Capsule { a: nm(seg[0]), b: nm(seg[1]), r: (strand.width * 1e6 / 2.0).round() as i64 };
-                        work.insert(Item { kind: Kind::Track, net: strand.net, layers: 1 << layer, shape, hole: None, locked: false, span: None })
-                    })
-                    .collect();
+                let ids = lay(&mut work, &path.pts, strand, layer);
                 let faults: Vec<board::Violation> = ids.iter().flat_map(|&id| board::check_item(&work, id)).collect();
                 if faults.is_empty() {
                     tracks.extend(ids.iter().map(|&id| (id, drawing.wires.len())));
@@ -516,6 +526,19 @@ fn draw_with(board: &Board, plan: &Plan, watch: Option<(usize, usize)>, memo: &m
                 }
                 for &id in &ids {
                     work.remove(id);
+                }
+                // What it is faulted for may lie on its own pad, past where it came onto it:
+                // the middle of a pad on the board's edge, or of one under a rule area.
+                if let Some(short) = short_of_pads(board, plan, strand, layer, &path.pts) {
+                    let ids = lay(&mut work, &short, strand, layer);
+                    if ids.iter().all(|&id| board::check_item(&work, id).is_empty()) {
+                        tracks.extend(ids.iter().map(|&id| (id, drawing.wires.len())));
+                        drawing.wires.push(Wire { layer, strand: s, net: strand.net, width: strand.width, pts: short, as_planned });
+                        break;
+                    }
+                    for &id in &ids {
+                        work.remove(id);
+                    }
                 }
                 // What it was faulted against that its course did not hold it from: a pad or a
                 // via that is not beside the gaps its strand crosses, or a wire drawn before it
@@ -574,6 +597,67 @@ fn draw_with(board: &Board, plan: &Plan, watch: Option<(usize, usize)>, memo: &m
     (drawing, watched)
 }
 
+/// The pieces of a wire of `strand` through `pts`, put on the board as tracks.
+fn lay(work: &mut Board, pts: &[P], strand: &plan::strands::Strand, layer: usize) -> Vec<ItemId> {
+    pts.windows(2)
+        .map(|seg| {
+            let shape = Shape::Capsule { a: nm(seg[0]), b: nm(seg[1]), r: (strand.width * 1e6 / 2.0).round() as i64 };
+            work.insert(Item { kind: Kind::Track, net: strand.net, layers: 1 << layer, shape, hole: None, locked: false, span: None })
+        })
+        .collect()
+}
+
+/// How far onto its pad a wire that stops short of the pad's middle goes, mm: enough for its
+/// end to lie on the pad's copper, and no more than half its width.
+const ONTO: f64 = 0.05;
+
+/// A wire's path cut short at each end that is a pad: to just past where it first comes onto
+/// the copper of that pad, or of a pad joined to it on the bare board. A wire need not reach
+/// the middle of its pad to be joined to it. None where that leaves the path as it is.
+fn short_of_pads(board: &Board, plan: &Plan, strand: &plan::strands::Strand, layer: usize, pts: &[P]) -> Option<Vec<P>> {
+    let copper = |end: End| -> Vec<&Shape> {
+        let End::Item(id) = end else { return Vec::new() };
+        std::iter::once(id).chain(plan.joined.get(&id).into_iter().flatten().copied()).filter_map(|p| board.item(p)).filter(|i| i.on(layer)).map(|i| &i.shape).collect()
+    };
+    // The path from its far end towards the pad whose copper is `on`: up to the last point off
+    // that copper, and then just onto it.
+    let cut = |pts: &[P], on: &[&Shape]| -> Option<Vec<P>> {
+        let inside = |p: P| on.iter().any(|s| s.contains(nm(p)));
+        let last = (0..pts.len().saturating_sub(1)).rev().find(|&i| !inside(pts[i]))?;
+        let (a, b) = (pts[last], pts[last + 1]);
+        if !inside(b) {
+            return None;
+        }
+        // Where the piece from `a` to `b` comes onto the copper.
+        let (mut lo, mut hi) = (0.0, 1.0);
+        for _ in 0..30 {
+            let mid = (lo + hi) / 2.0;
+            if inside([a[0] + (b[0] - a[0]) * mid, a[1] + (b[1] - a[1]) * mid]) {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        let len = convex::len(sub(b, a));
+        let t = (hi + ONTO.min(strand.width / 2.0) / len.max(1e-9)).min(1.0);
+        let mut out = pts[..=last].to_vec();
+        out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+        Some(out)
+    };
+    let (from, to) = (copper(strand.from), copper(strand.to));
+    let mut out = pts.to_vec();
+    if let Some(shorter) = cut(&out, &to) {
+        out = shorter;
+    }
+    out.reverse();
+    if let Some(shorter) = cut(&out, &from) {
+        out = shorter;
+    }
+    out.reverse();
+    let same = out.len() == pts.len() && out.iter().zip(pts).all(|(a, b)| convex::len(sub(*a, *b)) < 1e-6);
+    (!same && out.len() >= 2).then_some(out)
+}
+
 /// How many times the connections that could not be drawn are laid again.
 const ROUNDS: usize = 8;
 /// How many more rounds there may be in which a wire was made narrower: a track's width is
@@ -582,7 +666,8 @@ const NARROWER: usize = 2;
 
 /// The connections a board's pours leave to make once `drawing` is on it, for the nets in
 /// `poured`: the pours are filled round the drawn copper, and what a piece of pour reaches it
-/// joins. Each comes with the spots where a via would stand in pour its far end is joined to.
+/// joins. Each is from pad to pad, and comes with the spots where a via would stand in pour
+/// its far end is joined to.
 fn left_by_pours(board: &Board, plan: &Plan, drawing: &Drawing, poured: &[u32]) -> Vec<plan::Want> {
     let (with, _) = onto(board, plan, drawing);
     let pours = board::Pours::of(&with);
@@ -613,9 +698,24 @@ fn left_by_pours(board: &Board, plan: &Plan, drawing: &Drawing, poured: &[u32]) 
             }
         }
     }
-    let pad = |id: ItemId| board.item(id).is_some_and(|i| matches!(i.kind, Kind::Pad { .. }));
+    // The pads of each cluster of copper, and each pad's middle.
+    let middle = |id: ItemId| board.bbox(id).map(|b| board::Point::new((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2));
+    let mut pads: HashMap<usize, Vec<(ItemId, board::Point)>> = HashMap::new();
+    for (&id, &cluster) in &joined.cluster {
+        if board.item(id).is_some_and(|i| matches!(i.kind, Kind::Pad { .. })) {
+            pads.entry(cluster).or_default().extend(middle(id).map(|m| (id, m)));
+        }
+    }
+    // An end that is a wire or a via (one that stands in pour the wires have since cut off
+    // from what it was to join, say) is taken as the pad of its copper nearest the other end.
+    let pad_of = |end: ItemId, other: board::Point| -> Option<(ItemId, board::Point)> {
+        let of = pads.get(joined.cluster.get(&end)?)?;
+        of.iter().find(|p| p.0 == end).or_else(|| of.iter().min_by(|x, y| (x.0 != end, other.distance(x.1)).partial_cmp(&(y.0 != end, other.distance(y.1))).unwrap_or(std::cmp::Ordering::Equal))).copied()
+    };
     let mut wants = Vec::new();
-    for line in joined.airlines.iter().filter(|a| poured.contains(&a.net) && pad(a.from_item) && pad(a.to_item)) {
+    for line in joined.airlines.iter().filter(|a| poured.contains(&a.net)) {
+        let (Some(from), Some(to)) = (pad_of(line.from_item, line.to), pad_of(line.to_item, line.from)) else { continue };
+        let line = &board::Airline { net: line.net, from: from.1, to: to.1, from_item: from.0, to_item: to.0 };
         let into = |end: ItemId| -> Vec<usize> {
             let cluster = joined.cluster.get(&end);
             stands[&line.net].iter().filter(|(_, k)| Some(k) == cluster).map(|(c, _)| *c).collect()
@@ -678,27 +778,138 @@ fn settle(board: &Board, plan: &mut Plan, memo: &mut chain::Memo, said: &dyn Fn(
     drawing
 }
 
+/// The pads `drawing` leaves with too few spokes to their pour, as KiCad counts them once the
+/// pours are filled round it, but for those in `before`, which the bare board has already.
+fn starved(board: &Board, plan: &Plan, drawing: &Drawing, before: &[(ItemId, usize)]) -> Vec<board::Starved> {
+    let (with, _) = onto(board, plan, drawing);
+    board::Pours::likely(&with).starved(&with).into_iter().filter(|s| !before.contains(&(s.pad, s.layer))).collect()
+}
+
+/// What is wrong with `drawing` on the board once the pours are filled round it: how many
+/// connections are still open, and how many pads are left too few spokes to their pour that
+/// had enough on the bare board (KiCad's `starved_thermal`).
+pub fn amiss(board: &Board, plan: &Plan, drawing: &Drawing) -> (usize, usize) {
+    let before: Vec<(ItemId, usize)> = board::Pours::likely(board).starved(board).iter().map(|s| (s.pad, s.layer)).collect();
+    (open(board, plan, drawing), starved(board, plan, drawing, &before).len())
+}
+
+/// The wires that shut in the pour a starved pad's spokes end in, each as its connection and
+/// the gap of its strand nearest the pad: a spoke into a piece of pour that joins nothing
+/// else is no spoke, and it is the wires round that piece that made it one.
+pub fn shutting(board: &Board, plan: &Plan, drawing: &Drawing, starved: &[board::Starved]) -> Vec<(usize, plan::space::GapKey)> {
+    let (with, new) = onto(board, plan, drawing);
+    let pours = board::Pours::likely(&with);
+    // The tracks of each wire, in the order `onto` lays them.
+    let of_wire = drawing.wires.iter().enumerate().flat_map(|(w, wire)| std::iter::repeat_n(w, wire.pts.len().saturating_sub(1)));
+    let mut out = Vec::new();
+    for (&id, w) in new.iter().zip(of_wire) {
+        let wire = &drawing.wires[w];
+        for s in starved.iter().filter(|s| s.layer == wire.layer) {
+            let Some(pad) = with.item(s.pad).filter(|p| p.net != wire.net) else { continue };
+            if !s.pockets.iter().any(|&piece| pours.beside(&with, piece, id)) {
+                continue;
+            }
+            let sheet = &plan.sheets[wire.layer];
+            let strand = &sheet.strands[wire.strand];
+            let b = pad.shape.bbox();
+            let at = [(b.min.x + b.max.x) as f64 / 2e6, (b.min.y + b.max.y) as f64 / 2e6];
+            let ends = |e: usize| sheet.space.edges[e].v.map(|v| sheet.space.verts[v]);
+            let nearest = strand.crossings.iter().filter(|&&e| sheet.space.gap(e)).map(|&e| ends(e)).min_by(|x, y| chain::point_segment(at, x[0], x[1]).total_cmp(&chain::point_segment(at, y[0], y[1])));
+            if let Some(gap) = nearest {
+                let bar = (strand.connection, plan::space::gap_key(gap[0], gap[1]));
+                if !out.contains(&bar) {
+                    out.push(bar);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// How far `shape` reaches from `c` along `dir`, nm.
+fn extent(shape: &Shape, c: board::Point, dir: [f64; 2]) -> f64 {
+    let along = |p: board::Point| (p.x - c.x) as f64 * dir[0] + (p.y - c.y) as f64 * dir[1];
+    match shape {
+        Shape::Polygon(points) => points.iter().map(|p| along(*p)).fold(0.0, f64::max),
+        Shape::Capsule { a, b, r } => along(*a).max(along(*b)) + *r as f64,
+    }
+}
+
+/// A spoke drawn by hand for pad `s` of `with`, the board with the drawing on it and `pours`
+/// its pours: a track from the pad's middle, one of the eight ways, across its gap and the
+/// zone's least width on into pour that is not shut in, where the pad has no spoke already
+/// and the checker passes it. The track is left on `with`.
+fn tie(with: &mut Board, pours: &board::Pours, s: &board::Starved) -> Option<Tie> {
+    let pad = with.item(s.pad)?.clone();
+    let b = pad.shape.bbox();
+    let c = board::Point::new((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2);
+    let gap = *with.relief_pads.get(&(s.pad, s.zone))? as f64;
+    let least = with.zone_areas.iter().find(|z| z.zone == s.zone)?.min_thickness as f64;
+    if !pad.shape.contains(c) {
+        return None;
+    }
+    let class = plan::width(with, pad.net);
+    let narrow = (class / 2.0).max(with.rules.min_track_width * 1e3);
+    for width in [class, narrow] {
+        let r = (width * 1e6 / 2.0).round();
+        // The diagonals first: a pad's own spokes mostly run along its sides.
+        for turn in [1, 3, 5, 7, 0, 2, 4, 6] {
+            let (sin, cos) = (turn as f64 * std::f64::consts::FRAC_PI_4).sin_cos();
+            let reach = extent(&pad.shape, c, [cos, sin]);
+            let at = |d: f64| board::Point::new(c.x + (cos * d).round() as i64, c.y + (sin * d).round() as i64);
+            let (ring, far) = (at(reach + gap / 2.0), at(reach + gap + least + r));
+            let own = |p: board::Point| {
+                with.near(s.layer, board::BBox::of([p])).into_iter().any(|q| with.item(q).is_some_and(|it| matches!(it.kind, Kind::Spoke { pad, .. } if pad == s.pad) && it.on(s.layer) && it.shape.contains(p)))
+            };
+            let leads_on = pours.piece(pad.net, s.layer, far, r as i64).is_some_and(|piece| !s.pockets.contains(&piece));
+            if !leads_on || own(ring) {
+                continue;
+            }
+            let id = with.insert(Item { kind: Kind::Track, net: pad.net, layers: 1 << s.layer, shape: Shape::Capsule { a: c, b: far, r: r as i64 }, hole: None, locked: false, span: None });
+            if board::check_item(with, id).is_empty() {
+                let mm = |p: board::Point| [p.x as f64 / 1e6, p.y as f64 / 1e6];
+                return Some(Tie { layer: s.layer, net: pad.net, width, pts: [mm(c), mm(far)] });
+            }
+            with.remove(id);
+        }
+    }
+    None
+}
+
+/// `drawing` with a spoke drawn by hand for each pad it leaves short of spokes ([`tie`]),
+/// and how many pads are short still.
+fn tied(board: &Board, plan: &Plan, mut drawing: Drawing, before: &[(ItemId, usize)]) -> (Drawing, usize) {
+    for _ in 0..SPOKES {
+        let (mut with, _) = onto(board, plan, &drawing);
+        let pours = board::Pours::likely(&with);
+        let short: Vec<board::Starved> = pours.starved(&with).into_iter().filter(|s| !before.contains(&(s.pad, s.layer))).collect();
+        let more: Vec<Tie> = short.iter().filter_map(|s| tie(&mut with, &pours, s)).collect();
+        if more.is_empty() {
+            return (drawing, short.len());
+        }
+        drawing.ties.extend(more);
+    }
+    let short = starved(board, plan, &drawing, before).len();
+    (drawing, short)
+}
+
 /// Plans a stripped board and draws the plan ([`settle`]).
 ///
 /// A net with a pour is left to its pour: the other nets are planned and drawn first, the
 /// pours are filled round them, and only what the pours then leave apart is planned, each such
-/// connection to the nearest pad of the other part or to a via standing in its pour.
+/// connection to the nearest pad of the other part or to a via standing in its pour. A pad
+/// the wires then leave too few spokes, because they shut in the pour a spoke of it ends in,
+/// is given one drawn by hand ([`Tie`]); where it has no room for one, the wires that shut the
+/// pour in are laid another way, if that leaves no more open than before.
 ///
 /// A board that is not whole that way, and has parts whose pins stand nearer each other than
 /// vias may, is routed again with those parts fanned out first ([`plan::fan`]): a via beside
 /// each such pin, settled for a whole part before anything else is laid, and the connections
 /// then from via to via. The one with fewer connections open is kept.
 pub fn route(board: &Board) -> (Plan, Drawing) {
-    // (For trying things: WIRE_FAN=0 never fans out, WIRE_FAN=1 always does.)
-    let forced = std::env::var("WIRE_FAN").ok();
-    if forced.as_deref() == Some("1")
-        && let Some(fanned) = route_with(board, true)
-    {
-        return fanned;
-    }
     let Some(plain) = route_with(board, false) else { return (plan::start(board), Drawing::default()) };
     let still = open(board, &plain.0, &plain.1);
-    if still == 0 || forced.is_some() {
+    if still == 0 {
         return plain;
     }
     match route_with(board, true) {
@@ -735,30 +946,96 @@ fn route_with(board: &Board, fan: bool) -> Option<(Plan, Drawing)> {
     plan::add(board, &mut plan, wants);
     said("planned", &plan, None);
     let mut drawing = settle(board, &mut plan, &mut memo, &said);
-    // What the pours leave apart, and then what they leave apart once that is drawn: a wire
-    // laid to join one pad can cut the pour another was joined by.
-    for _ in 0..POURS {
-        if poured.is_empty() {
+    if poured.is_empty() {
+        return Some((plan, drawing));
+    }
+    drawing = pour(board, &mut plan, drawing, &poured, &mut memo, &said);
+    let before: Vec<(ItemId, usize)> = board::Pours::likely(board).starved(board).iter().map(|s| (s.pad, s.layer)).collect();
+    let (mut drawing, mut short) = tied(board, &plan, drawing, &before);
+    for _ in 0..SPOKES {
+        if short == 0 {
             break;
         }
-        let mut rest = left_by_pours(board, &plan, &drawing, &poured);
-        rest.retain(|w| !plan.wants.iter().any(|x| x.net == w.net && ((x.from, x.to) == (w.from, w.to) || (x.from, x.to) == (w.to, w.from))));
-        said(&format!("poured, {} left by the pours", rest.len()), &plan, None);
-        if rest.is_empty() {
+        let bars = shutting(board, &plan, &drawing, &starved(board, &plan, &drawing, &before));
+        said(&format!("{short} pads short of spokes, {} wires shutting them in", bars.len()), &plan, None);
+        if bars.is_empty() {
             break;
         }
-        plan::add(board, &mut plan, rest);
-        said("planned", &plan, None);
-        drawing = settle(board, &mut plan, &mut memo, &said);
+        let mut other = plan.clone();
+        plan::bar(board, &mut other, &bars);
+        let redrawn = settle(board, &mut other, &mut memo, &said);
+        let redrawn = pour(board, &mut other, redrawn, &poured, &mut memo, &said);
+        let (redrawn, left) = tied(board, &other, redrawn, &before);
+        if (open(board, &other, &redrawn), left) >= (open(board, &plan, &drawing), short) {
+            break;
+        }
+        (plan, drawing, short) = (other, redrawn, left);
     }
     Some((plan, drawing))
 }
 
-/// How many times the pours are filled to see what they leave apart.
-const POURS: usize = 3;
+/// Plans and draws what the pours leave apart, and then what they leave apart once that is
+/// drawn: a wire laid to join one pad can cut the pour another was joined by, or the pour a
+/// connection laid before it ends in.
+fn pour(board: &Board, plan: &mut Plan, mut drawing: Drawing, poured: &[u32], memo: &mut chain::Memo, said: &dyn Fn(&str, &Plan, Option<&Drawing>)) -> Drawing {
+    // The connection the plan has already for a pair of pads.
+    let had = |plan: &Plan, w: &plan::Want| plan.wants.iter().position(|x| x.net == w.net && !x.stub && ((x.from, x.to) == (w.from, w.to) || (x.from, x.to) == (w.to, w.from)));
+    // How many were found the round before: a round that finds no fewer is the last.
+    let mut found = usize::MAX;
+    // The connections laid again once already.
+    let mut twice: Vec<usize> = Vec::new();
+    for _ in 0..POURS {
+        let mut wants = left_by_pours(board, plan, &drawing, poured);
+        // A connection the plan has already, open all the same: it ended at a via in pour
+        // that wires laid since have cut off. It is taken out, so that its own copper counts
+        // for nothing, and laid again to where the pour reaches now.
+        let mut again: Vec<usize> = wants.iter().filter_map(|w| had(plan, w)).collect();
+        again.sort_unstable();
+        again.dedup();
+        if !again.is_empty() {
+            plan::lift_out(board, plan, &again);
+            drawing = draw_with(board, plan, None, memo).0;
+            wants = left_by_pours(board, plan, &drawing, poured);
+        }
+        let (renewed, rest): (Vec<plan::Want>, Vec<plan::Want>) = wants.into_iter().partition(|w| had(plan, w).is_some());
+        let mut renewed: Vec<(usize, plan::Want)> = renewed.into_iter().filter_map(|w| had(plan, &w).map(|c| (c, w))).collect();
+        renewed.sort_by_key(|r| r.0);
+        renewed.dedup_by_key(|r| r.0);
+        said(&format!("poured, {} left by the pours and {} to lay again", rest.len(), renewed.len()), plan, None);
+        if rest.is_empty() && renewed.is_empty() && again.is_empty() {
+            break;
+        }
+        // One laid again before and open again: its wire moves the wires beside it, and those
+        // cut the pour it ends in. It goes all the way to the pad.
+        for (c, want) in renewed.iter_mut() {
+            if twice.contains(c) {
+                want.into.clear();
+            } else {
+                twice.push(*c);
+            }
+        }
+        let stalled = rest.len() + renewed.len() >= found;
+        found = rest.len() + renewed.len();
+        plan::renew(board, plan, renewed);
+        plan::add(board, plan, rest);
+        said("planned", plan, None);
+        drawing = settle(board, plan, memo, said);
+        if stalled {
+            break;
+        }
+    }
+    drawing
+}
 
-/// The board with the drawing's copper on it: the wires as tracks and the plan's vias, and
-/// which items those are.
+/// How many times at most the pours are filled to see what they leave apart: fewer where a
+/// round finds no less to do than the one before.
+const POURS: usize = 6;
+/// How many times wires that shut a pad's spokes in are laid another way, and how many
+/// spokes a pad may be drawn by hand.
+const SPOKES: usize = 3;
+
+/// The board with the drawing's copper on it: the wires as tracks, the plan's vias and then
+/// the ties, and which items those are.
 pub fn onto(board: &Board, plan: &Plan, drawing: &Drawing) -> (Board, Vec<ItemId>) {
     let mut out = board.clone();
     let mut new = Vec::new();
@@ -775,6 +1052,10 @@ pub fn onto(board: &Board, plan: &Plan, drawing: &Drawing) -> (Board, Vec<ItemId
         let c = at(v.at);
         new.push(out.insert(Item { kind: Kind::Via, net: v.net, layers: all, shape: Shape::Capsule { a: c, b: c, r }, hole: Some((c, drill)), locked: false, span: None }));
     }
+    for t in &drawing.ties {
+        let shape = Shape::Capsule { a: at(t.pts[0]), b: at(t.pts[1]), r: (t.width * 1e6 / 2.0).round() as i64 };
+        new.push(out.insert(Item { kind: Kind::Track, net: t.net, layers: 1 << t.layer, shape, hole: None, locked: false, span: None }));
+    }
     (out, new)
 }
 
@@ -787,6 +1068,9 @@ pub fn write(text: &str, original: &Board, plan: &Plan, drawing: &Drawing) -> St
         for seg in w.pts.windows(2) {
             edit.tracks.push(kicad::write::NewTrack { start: m(seg[0]), end: m(seg[1]), width: w.width / 1e3, layer: original.layers[w.layer].clone(), net: original.file_net(w.net), locked: false });
         }
+    }
+    for t in &drawing.ties {
+        edit.tracks.push(kicad::write::NewTrack { start: m(t.pts[0]), end: m(t.pts[1]), width: t.width / 1e3, layer: original.layers[t.layer].clone(), net: original.file_net(t.net), locked: false });
     }
     let (r, drill) = plan::via_size(original);
     let (Some(top), Some(bottom)) = (original.layers.first(), original.layers.last()) else { return kicad::write::apply(text, &edit) };

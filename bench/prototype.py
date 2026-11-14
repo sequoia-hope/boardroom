@@ -118,6 +118,7 @@ def main():
         text = (f"<p>The plan: <b>{c['strands']}</b> strands with <b>{c['vias']}</b> vias, <b>{c['left']}</b> connections with no strand. "
                 f"The drawing: <b>{c['wires']}</b> strands drawn" + (f" ({c['as_planned']} of them at the plan's own angles)" if c.get('as_planned') else "")
                 + f", <b>{c['undrawn']}</b> not" + (f" ({why})" if why else "")
+                + (f", and <b>{c['ties']}</b> spokes drawn by hand from pads the wires left too few to their pour" if c.get('ties') else "")
                 + f". Our checker's faults in what was drawn: {faults}. Still open by our count: <b>{c['open']}</b>. "
                 f"{c['seconds']['draw']:.1f} s in all.</p>")
         if not a.no_kicad:
@@ -145,9 +146,12 @@ lie as near a corner as the wire may come to it, given the strands the plan has 
 out side by side at even pitch. Every wire is put to the exact checker and kept only if it passes. Where a wire cannot be drawn, its
 connection alone is planned again, narrower if the rules let it be and then barred from the gap it stuck in, and the rest stays as
 drawn. A track is as wide as its net's class asks unless that width has no way: then it is halved, down to the least the board's
-rules allow. <b>A net with a pour is left to its
+rules allow. A wire that may not reach the middle of its pad (a pad on the board's edge, say) stops where it comes onto the pad. <b>A net with a pour is left to its
 pour</b>: the other nets are planned and drawn first, the pours are filled round them (pale, in the net's colour), and only what a pour
-leaves apart is planned, to the nearest pad or to a via standing in the pour. A dashed red line is a strand still not drawn; a dashed
+leaves apart is planned, to the nearest pad or to a via standing in the pour; a connection whose via the wires laid after it cut off
+from its pour is laid again. A pad the pour joins by thermal spokes keeps as
+many as the board's rules ask: where the wires shut in the pour a spoke ends in, so that KiCad would not count it, the pad is drawn
+a spoke by hand (a short track straight out of it into open pour), or those wires are laid another way. A dashed red line is a strand still not drawn; a dashed
 yellow one a connection the plan has no strand for. <b>The designer's copper</b> (right) is the board as its designer routed it.</p>
 {''.join(rows)}
 """

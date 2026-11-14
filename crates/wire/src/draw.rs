@@ -71,6 +71,9 @@ pub fn layer(board: &Board, plan: &Plan, drawing: &Drawing, l: usize, faults: &[
     for wire in drawing.wires.iter().filter(|w| w.layer == l) {
         let _ = writeln!(s, "<path d='{}' stroke='{}' stroke-width='{:.4}'><title>{}</title></path>", path(&wire.pts, false), PALETTE[wire.net as usize % PALETTE.len()], wire.width, board.net_name(wire.net));
     }
+    for tie in drawing.ties.iter().filter(|t| t.layer == l) {
+        let _ = writeln!(s, "<path d='{}' stroke='{}' stroke-width='{:.4}'><title>{}, a spoke drawn by hand</title></path>", path(&tie.pts, false), PALETTE[tie.net as usize % PALETTE.len()], tie.width, board.net_name(tie.net));
+    }
     let (r, drill) = plan::via_size(board);
     for v in &plan.vias {
         let _ = writeln!(s, "<circle cx='{:.4}' cy='{:.4}' r='{:.4}' fill='{}' stroke='none'/><circle cx='{:.4}' cy='{:.4}' r='{:.4}' fill='#fff'/>", v.at[0], v.at[1], r as f64 / 1e6, PALETTE[v.net as usize % PALETTE.len()], v.at[0], v.at[1], drill as f64 / 1e6);

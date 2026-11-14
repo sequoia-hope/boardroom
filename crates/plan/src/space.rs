@@ -154,6 +154,45 @@ pub struct Space {
     pub tri_spots: Vec<Vec<usize>>,
 }
 
+/// How far out from everything on it a board with no edge drawn at all is taken to reach, nm.
+const FRAME: i64 = 2_000_000;
+
+/// The loops that bound the room on a board: its outline with its cut-outs, or, where its
+/// edge is not drawn as a closed loop, the least convex shape round every line of the edge
+/// and everything on the board (a box round it all, and a little more, where no edge is drawn
+/// at all). Without it the room would be what lies between the outermost pads of each layer,
+/// and a layer with pads in one row would have none.
+pub fn bounds(board: &Board) -> Vec<Vec<Point>> {
+    if !board.outline.is_empty() {
+        return board.outline.clone();
+    }
+    let corners = |b: board::BBox| [b.min, Point::new(b.max.x, b.min.y), b.max, Point::new(b.min.x, b.max.y)];
+    let things = board.items().filter_map(|(id, _)| board.bbox(id));
+    if board.outline_edges.is_empty() {
+        return things.reduce(|a, b| a.union(b)).map(|b| corners(b.grow(FRAME)).to_vec()).into_iter().collect();
+    }
+    let mut points: Vec<Point> = board.outline_edges.iter().flat_map(|&(a, b, _, _)| [a, b]).chain(things.flat_map(corners)).collect();
+    points.sort_by_key(|p| (p.x, p.y));
+    points.dedup();
+    if points.len() < 3 {
+        return Vec::new();
+    }
+    // The hull, one chain along the bottom and one back along the top.
+    let turn = |o: Point, a: Point, b: Point| (a.x - o.x) as i128 * (b.y - o.y) as i128 - (a.y - o.y) as i128 * (b.x - o.x) as i128;
+    let mut hull: Vec<Point> = Vec::new();
+    for half in [points.clone(), points.iter().rev().copied().collect()] {
+        let start = hull.len();
+        for p in half {
+            while hull.len() >= start + 2 && turn(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0 {
+                hull.pop();
+            }
+            hull.push(p);
+        }
+        hull.pop();
+    }
+    vec![hull]
+}
+
 /// The outline of a shape as a polygon that holds all of it: a circle's is a 12-gon round it.
 pub fn outline(shape: &Shape) -> Vec<P> {
     match shape {
@@ -362,7 +401,7 @@ impl Space {
                 }
             }
         }
-        let loops: Vec<Vec<P>> = board.outline.iter().map(|l| l.iter().map(|&p| mm(p)).collect()).collect();
+        let loops: Vec<Vec<P>> = bounds(board).iter().map(|l| l.iter().map(|&p| mm(p)).collect()).collect();
         let first_edge = obstacles.len();
         for l in &loops {
             obstacles.push(Obstacle { what: What::Edge, net: 0, item: None, centre: centre(l), poly: l.clone(), reach: 0.0, mask: 0.0 });

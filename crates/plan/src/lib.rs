@@ -100,7 +100,8 @@ pub fn strip(board: &mut Board) {
 /// The share of the board's area each layer's pours cover.
 pub fn poured(board: &Board) -> Vec<f64> {
     let area = |p: &[board::Point]| (0..p.len()).map(|i| p[i].x as f64 * p[(i + 1) % p.len()].y as f64 - p[(i + 1) % p.len()].x as f64 * p[i].y as f64).sum::<f64>().abs() / 2.0;
-    let of = board.outline.first().map_or(0.0, |o| area(o)) - board.outline.iter().skip(1).map(|h| area(h)).sum::<f64>();
+    let bounds = space::bounds(board);
+    let of = bounds.first().map_or(0.0, |o| area(o)) - bounds.iter().skip(1).map(|h| area(h)).sum::<f64>();
     (0..board.layers.len())
         .map(|l| {
             let a: f64 = board.items().filter(|(_, i)| matches!(i.kind, Kind::Pour { .. }) && i.on(l) && !i.drawn()).map(|(_, i)| match &i.shape {
@@ -199,12 +200,10 @@ pub(crate) fn via_item(board: &Board, at: space::P, net: u32) -> board::Item {
 /// layers; each kept only where the exact checker lets a via of no net stand on the bare board.
 pub fn via_spots(board: &Board, tight: bool) -> Spots {
     let (r, _) = via_size(board);
-    // A board whose outline does not close: the box round everything on it.
-    let outer = board.outline.first();
-    let box_ = match outer {
-        Some(o) => board::BBox::of(o.iter().copied()),
-        None => board.items().filter_map(|(id, _)| board.bbox(id)).reduce(|a, b| a.union(b)).unwrap_or(board::BBox::of([board::Point::new(0, 0)])),
-    };
+    // (A board whose outline does not close has the box round it for one.)
+    let bounds = space::bounds(board);
+    let outer = bounds.first();
+    let box_ = outer.map_or(board::BBox::of([board::Point::new(0, 0)]), |o| board::BBox::of(o.iter().copied()));
     // A little over what a track between two vias needs: a via stands in the triangulation as
     // a triangle about its middle, and the gap between two is that much short of their pitch.
     let pitch = 2 * r + 2 * board.clearance(0, 0) + board::nm(board.rules.min_track_width.max(width(board, 0) / 1e3)) + (8.0 * space::VIA_CORNER * 1e6) as i64;
@@ -680,7 +679,6 @@ pub fn add(board: &Board, plan: &mut Plan, more: Vec<Want>) {
 /// barred from the gap. Says whether any was made narrower.
 pub fn again(board: &Board, plan: &mut Plan, stuck: &[(usize, space::GapKey)]) -> bool {
     let mut narrowed = false;
-    let mut which: Vec<usize> = plan.left.iter().map(|l| l.connection).collect();
     for &(c, gap) in stuck {
         // Narrower first, the same way; at its narrowest, another way.
         if narrower(board, &mut plan.wants[c]) {
@@ -688,8 +686,50 @@ pub fn again(board: &Board, plan: &mut Plan, stuck: &[(usize, space::GapKey)]) -
         } else if !plan.wants[c].avoid.contains(&gap) {
             plan.wants[c].avoid.push(gap);
         }
-        which.push(c);
     }
+    relay(board, plan, stuck.iter().map(|s| s.0).collect());
+    narrowed
+}
+
+/// Lays again connections whose wires are where they should not be, each barred from a gap
+/// it went through, as wide as it was; and with them every connection the plan has no way
+/// for.
+pub fn bar(board: &Board, plan: &mut Plan, out_of: &[(usize, space::GapKey)]) {
+    for &(c, gap) in out_of {
+        if !plan.wants[c].avoid.contains(&gap) {
+            plan.wants[c].avoid.push(gap);
+        }
+    }
+    relay(board, plan, out_of.iter().map(|s| s.0).collect());
+}
+
+/// Takes connections out of the plan, with the vias they used: left unlaid, for [`renew`].
+pub fn lift_out(board: &Board, plan: &mut Plan, which: &[usize]) {
+    for &c in which {
+        if let Some(lifted) = lift(board, &plan.sheets, c) {
+            plan.sheets = lifted;
+        }
+    }
+    plan.vias = vias_of(&plan.sheets);
+}
+
+/// Lays connections again with new ends: each the connection's number and what it is to be
+/// now, its ends and the spots it may end at. What it was barred from and how narrow it had
+/// been made stay. For a connection that ended at a via in its net's pour, where the pour
+/// there no longer reaches what it was to join.
+pub fn renew(board: &Board, plan: &mut Plan, renewed: Vec<(usize, Want)>) {
+    let which = renewed.iter().map(|r| r.0).collect();
+    for (c, want) in renewed {
+        let old = &mut plan.wants[c];
+        (old.from, old.to, old.apart, old.into) = (want.from, want.to, want.apart, want.into);
+    }
+    relay(board, plan, which);
+}
+
+/// Lifts the connections numbered `which` and lays them again, and every connection the
+/// plan has no way for with them.
+fn relay(board: &Board, plan: &mut Plan, mut which: Vec<usize>) {
+    which.extend(plan.left.iter().map(|l| l.connection));
     // A stub that could not be drawn goes for good, and what started from its via is laid
     // again from the pad.
     for s in which.clone() {
@@ -708,7 +748,6 @@ pub fn again(board: &Board, plan: &mut Plan, stuck: &[(usize, space::GapKey)]) -
     which.retain(|&c| !plan.wants[c].stub);
     plan.left.retain(|l| !which.contains(&l.connection));
     place(board, plan, &which);
-    narrowed
 }
 
 /// Lays the connections numbered `which`, none of which is in the sheets, in that order.

@@ -270,6 +270,37 @@ fn spoke_cut(board: &Board, id: ItemId, copper: &Item, sid: ItemId, spoke: &Item
     (gap + SLACK < required as f64).then_some((gap, required))
 }
 
+/// The middle of a spoke's far end.
+fn tip(spoke: &Shape) -> Option<Point> {
+    match spoke {
+        Shape::Polygon(c) if c.len() == 4 => Some(Point::new((c[1].x + c[2].x) / 2, (c[1].y + c[2].y) / 2)),
+        _ => None,
+    }
+}
+
+/// The spoke of another pad that spoke `spoke` meets on `layer`, each one's end in the other:
+/// the two are a bridge from pad to pad, and neither is anything without the other.
+pub(crate) fn met(board: &Board, spoke: &Item, layer: usize) -> Option<ItemId> {
+    let (Kind::Spoke { pad, zone, .. }, Some(mine)) = (&spoke.kind, tip(&spoke.shape)) else { return None };
+    board.near(layer, spoke.shape.bbox()).into_iter().find(|&o| {
+        board.item(o).is_some_and(|other| {
+            matches!(&other.kind, Kind::Spoke { pad: p, zone: z, .. } if p != pad && z == zone) && other.on(layer) && tip(&other.shape).is_some_and(|theirs| other.shape.contains(mine) && spoke.shape.contains(theirs))
+        })
+    })
+}
+
+/// Whether another net's track or via, `but` aside, cuts spoke `sid` on `layer`, or the spoke
+/// it meets.
+pub(crate) fn cut(board: &Board, sid: ItemId, spoke: &Item, layer: usize, but: Option<ItemId>) -> bool {
+    let alone = |sid: ItemId, spoke: &Item| {
+        let reach = board.bbox(sid).unwrap_or_else(|| spoke.shape.bbox()).grow(board.limits.max_clearance);
+        board.near(layer, reach).into_iter().any(|c| {
+            Some(c) != but && board.item(c).is_some_and(|o| matches!(o.kind, Kind::Track | Kind::Via) && o.net != spoke.net && o.on(layer) && spoke_cut(board, c, o, sid, spoke, layer).is_some())
+        })
+    };
+    alone(sid, spoke) || met(board, spoke, layer).is_some_and(|o| board.item(o).is_some_and(|other| alone(o, other)))
+}
+
 /// Whether cutting spoke `sid` leaves its pad fewer whole spokes on `layer` than it needs,
 /// the others cut by other nets' tracks and vias but `id`. A track of the pad's net that leaves
 /// it counts as a spoke, as KiCad counts one that ends in the pour (kicad-cli 9.0.8: a pad with
@@ -302,12 +333,7 @@ fn spokes_left(board: &Board, id: ItemId, sid: ItemId, spoke: &Item, layer: usiz
         .filter(|&s| s != sid)
         .filter_map(|s| board.item(s).map(|it| (s, it)))
         .filter(|(_, it)| matches!(it.kind, Kind::Spoke { pad: p, .. } if p == pad) && it.on(layer))
-        .filter(|&(s, it)| {
-            let reach = board.bbox(s).unwrap_or_else(|| it.shape.bbox()).grow(board.limits.max_clearance);
-            !board.near(layer, reach).into_iter().any(|c| {
-                c != id && board.item(c).is_some_and(|o| matches!(o.kind, Kind::Track | Kind::Via) && o.net != it.net && o.on(layer) && spoke_cut(board, c, o, s, it, layer).is_some())
-            })
-        })
+        .filter(|&(s, it)| !cut(board, s, it, layer, Some(id)))
         .count();
     // KiCad leaves a pad no spoke reaches alone: one a via of its net stands on is joined.
     let via_on_it = || {
@@ -387,7 +413,10 @@ fn item_checks(
                     // pad's others stay whole.
                     Kind::Spoke { .. } if matches!(item.kind, Kind::Track | Kind::Via) && o.net != item.net => {
                         if let Some((gap, required)) = spoke_cut(board, id, item, other, o, layer) {
-                            if spokes_left(board, id, other, o, layer) {
+                            // And the pad of the spoke it meets: a bridge cut at either end
+                            // is cut for both.
+                            let both = met(board, o, layer).and_then(|m| board.item(m).map(|it| (m, it)));
+                            if spokes_left(board, id, other, o, layer) || both.is_some_and(|(m, it)| spokes_left(board, id, m, it, layer)) {
                                 found.push(Violation { rule: Rule::Clearance, a: id, b: Some(other), layer: Some(layer), gap, required });
                             }
                         }

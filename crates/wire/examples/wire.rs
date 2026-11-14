@@ -1,8 +1,8 @@
 //! `wire BOARD.kicad_pcb OUT_DIR`: strips the board, plans it, draws the plan as copper, checks
-//! the copper, and writes `wires.json`, `routed.kicad_pcb`, one `plan.LAYER.svg` and one
+//! the copper (and counts the pads a refill would leave short of thermal spokes), and writes `wires.json`, `routed.kicad_pcb`, one `plan.LAYER.svg` and one
 //! `wire.LAYER.svg` per layer that has pads, and a line of counts. `WIRE_WATCH=LAYER:STRAND` also
-//! writes `watch.svg`, that strand's course as the drawing saw it. `WIRE_POURS` tells what each
-//! pad of a poured net is joined to; `WIRE_TIMES` (in the library) tells each round's stages.
+//! writes `watch.svg`, that strand's course as the drawing saw it. `WIRE_POURS` tells each
+//! connection still open, with what its ends are, and what each pad of a poured net is joined to; `WIRE_TIMES` (in the library) tells each round's stages.
 //! Copper text is shaped by `kicad-text` where `ULTRAROUTE_TEXT_HELPER` names it (it is not
 //! beside an example); without it text is boxes, which cover pads its letters do not, and this
 //! says so.
@@ -57,6 +57,14 @@ fn main() {
             }
         }
     }
+    // The pads a refill leaves too few spokes to their pour, that had enough before.
+    let before = board::Pours::likely(&board).starved(&board);
+    for s in board::Pours::likely(&routed).starved(&routed).iter().filter(|s| !before.iter().any(|b| (b.pad, b.layer) == (s.pad, s.layer))) {
+        *rules.entry("StarvedThermal".to_string()).or_insert(0) += 1;
+        if let Some(b) = routed.bbox(s.pad) {
+            faults[s.layer].push([(b.min.x + b.max.x) as f64 / 2e6, (b.min.y + b.max.y) as f64 / 2e6]);
+        }
+    }
     let pours = board::Pours::of(&routed);
     let lines = board::connectivity_poured(&routed, &pours).airlines;
     let open = lines.len();
@@ -65,6 +73,21 @@ fn main() {
         m
     });
     if std::env::var("WIRE_POURS").is_ok() {
+        let what = |id: board::ItemId| {
+            routed.item(id).map_or("?".to_string(), |i| {
+                let kind = match i.kind {
+                    board::Kind::Pad { .. } => "a pad",
+                    board::Kind::Track => "a track",
+                    board::Kind::Via => "a via",
+                    _ => "copper",
+                };
+                let layers: Vec<&str> = (0..routed.layers.len()).filter(|l| i.on(*l)).map(|l| routed.layers[l].as_str()).collect();
+                format!("{kind} on {}", layers.join(" "))
+            })
+        };
+        for a in &lines {
+            eprintln!("open: {} from ({:.3}, {:.3}) {} to ({:.3}, {:.3}) {}", routed.net_name(a.net), a.from.x as f64 / 1e6, a.from.y as f64 / 1e6, what(a.from_item), a.to.x as f64 / 1e6, a.to.y as f64 / 1e6, what(a.to_item));
+        }
         let joined = board::connectivity_poured(&routed, &pours);
         for (id, item) in routed.items() {
             if !board.zone_areas.iter().any(|z| z.net == item.net) || !item.is_copper() || matches!(item.kind, board::Kind::Pour { .. }) {
@@ -114,6 +137,7 @@ fn main() {
             }),
             "left": plan.left.len(),
             "vias": plan.vias.len(),
+            "ties": drawing.ties.len(),
             "faults": rules,
             "open": open,
             "open_nets": open_nets,

@@ -21,6 +21,15 @@
 //! 0.508 mm clearance, 2026-11-13). And where two pads of the net stand too near for pour
 //! between them, the spokes they send towards each other are kept if they meet, as a bridge
 //! from pad to pad (Shift-in 32's row of ground pins: a track between two pins cuts it).
+//!
+//! From KiCad 9.0.8's filler (`zone_filler.cpp`, read 2026-11-14): a spoke is kept where the
+//! middle of its far end, past the gap by the arc error and half the zone's minimum width, is
+//! in the pour as it stands less every other net's clearance; the spoke is then added and
+//! those clearances cut out of it, so one whose side a neighbour's clearance takes is kept
+//! narrower, down to the minimum width. Every pad the zone joins by reliefs has its own gap,
+//! pads of one number too. What DRC then counts is in [`crate::Pours::starved`].
+
+use std::collections::HashSet;
 
 use kicad::{Copper, Pcb};
 
@@ -33,8 +42,9 @@ const DEFAULT_WIDTH: f64 = 0.5e-3;
 /// The shallowest land kept past a spoke's gap, where a zone sets no minimum width.
 const MIN_LAND: Nm = 25_000;
 
-/// How far past its gap KiCad draws a spoke, to test what its tip lands in.
-const PAST: Nm = 40_000;
+/// How far past its gap KiCad draws a spoke, to test what its tip lands in, over half the
+/// zone's minimum width (its filler's `spokesBox`: the gap, its arc error and half that width).
+const PAST: Nm = 5_000;
 
 /// A spoke with a pad of its net past its gap: the pad it is of, its layer, the middle of its
 /// far end, and the spoke as far as that.
@@ -84,10 +94,12 @@ impl Board {
     /// Keeps room for each thermal pad's spokes; `pads` pairs each of `copper.pads` (by index)
     /// with its item. Run once the board's copper, keepouts and edges are in.
     pub(crate) fn reserve_spokes(&mut self, pcb: &Pcb, copper: &Copper, pads: &[(usize, ItemId)]) {
-        let kept: std::collections::HashSet<usize> = self.items().filter_map(|(_, it)| match it.kind {
+        let kept: HashSet<usize> = self.items().filter_map(|(_, it)| match it.kind {
             Kind::Pour { zone, kept: true } => Some(zone),
             _ => None,
         }).collect();
+        // Each pad's first item: the pour leaves its gap round each of these.
+        let mains: HashSet<ItemId> = pads.iter().map(|&(_, id)| id).collect();
         let mut wanted = 0;
         let mut short = 0;
         for (z, zone) in copper.zones.iter().enumerate() {
@@ -148,15 +160,21 @@ impl Board {
                         if !corners.iter().all(|&p| within(p)) {
                             continue;
                         }
-                        if !self.in_a_relief(&past, id, &item, layer, gap) {
+                        if !self.in_a_relief(&past, id, &item, layer, gap, &mains) {
+                            // KiCad cuts other nets' clearance out of a spoke and keeps what is
+                            // left of it where that is still as wide as the zone's least width:
+                            // so where the whole spoke has no room, its middle alone may.
+                            let slim = || spoke_shape(pad.spoke_centre, angle, &item.shape, gap, land, land / 2).0;
                             if self.room_for(&shape, &item, z, layer, nm(zone.clearance)) {
                                 fits.push(shape);
+                            } else if land < 2 * half && self.room_for(&slim(), &item, z, layer, nm(zone.clearance)) {
+                                fits.push(slim());
                             }
                             continue;
                         }
                         // No pour past the gap, for a pad of the net stands there: the spoke
                         // may still meet that pad's spoke coming the other way.
-                        let (stub, _) = spoke_shape(pad.spoke_centre, angle, &item.shape, gap, PAST, width / 2);
+                        let (stub, _) = spoke_shape(pad.spoke_centre, angle, &item.shape, gap, PAST + nm(zone.min_thickness) / 2, width / 2);
                         if let Shape::Polygon(c) = &stub {
                             let tip = Point::new((c[1].x + c[2].x) / 2, (c[1].y + c[2].y) / 2);
                             facing.push(Facing { pad: id, layer, tip, stub });
@@ -213,12 +231,15 @@ impl Board {
 
     /// Whether a spoke's land `past` falls in the gap the pour leaves round another pad of the
     /// pad's net (that of `id`, a pad on `layer`): no pour is there for the spoke to reach (two
-    /// overlapping pads of a USB-C connector's ground, say). Each pad's gap is taken as `gap`.
-    fn in_a_relief(&self, past: &Shape, id: ItemId, pad: &Item, layer: usize, gap: Nm) -> bool {
+    /// overlapping pads of a USB-C connector's ground, say, or the row of holes under a
+    /// regulator's tab, all of one number). Each pad's gap is taken as `gap`. The pad's own
+    /// other shapes are not another pad: those of its number that are not in `mains`, the first
+    /// item of each pad.
+    fn in_a_relief(&self, past: &Shape, id: ItemId, pad: &Item, layer: usize, gap: Nm, mains: &HashSet<ItemId>) -> bool {
         let Kind::Pad { footprint, number, .. } = &pad.kind else { return false };
         let reach = past.bbox().grow(gap);
-        self.near(layer, reach).into_iter().filter(|&o| o != id).filter_map(|o| self.item(o)).any(|o| {
-            let own = matches!(&o.kind, Kind::Pad { footprint: f, number: n, .. } if f == footprint && n == number);
+        self.near(layer, reach).into_iter().filter(|&o| o != id).filter_map(|o| self.item(o).map(|it| (o, it))).any(|(o_id, o)| {
+            let own = !mains.contains(&o_id) && matches!(&o.kind, Kind::Pad { footprint: f, number: n, .. } if f == footprint && n == number);
             matches!(o.kind, Kind::Pad { .. }) && o.net == pad.net && o.on(layer) && !own && past.gap_within(&o.shape, gap as f64) < gap as f64
         })
     }

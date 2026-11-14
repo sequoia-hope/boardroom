@@ -1,6 +1,7 @@
 //! `spoke_audit BARE.kicad_pcb [ROUTED.kicad_pcb]`: the routed board's tracks and vias laid onto
 //! the bare board (or, with no routed board, the bare board's own), and those the checker
-//! refuses for cutting a pad's thermal spokes.
+//! refuses for cutting a pad's thermal spokes; then the pads a refill of the pours round all of
+//! it leaves with too few spokes, as KiCad counts them.
 
 use std::path::PathBuf;
 
@@ -42,4 +43,13 @@ fn main() {
         }
     }
     println!("{hits} tracks and vias cut into a spoke too many");
+    let starved = board::Pours::likely(&board).starved(&board);
+    for s in &starved {
+        let name = match board.item(s.pad).map(|p| &p.kind) {
+            Some(Kind::Pad { footprint, number, .. }) => format!("{}-{number}", board.footprints[*footprint].reference),
+            _ => "?".into(),
+        };
+        println!("{name} on {} is left too few spokes by a refill ({} of its spokes end in pour that joins nothing else)", board.layers[s.layer], s.pockets.len());
+    }
+    println!("{} pads starved after a refill", starved.len());
 }

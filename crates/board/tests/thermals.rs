@@ -236,3 +236,162 @@ fn a_track_of_the_pads_own_net_out_of_it_counts_as_a_spoke_and_a_via_on_it_joins
     b.insert(Item { kind: Kind::Via, net: 1, layers: 3, shape: Shape::Capsule { a: at, b: at, r: nm(0.2e-3) }, hole: Some((at, nm(0.1e-3))), locked: false, span: None });
     assert_eq!(clearance(&b, last), 0, "a via of its net stands on it");
 }
+
+#[test]
+fn pads_of_one_number_each_leave_their_own_gap() {
+    // Three holes under a regulator's tab, all pad 1, 0.79 mm apart: the pour leaves its gap
+    // round each, so the outer two keep only the spokes that point away from the row and the
+    // middle one none (TLPHnodeV2's U7, kicad-cli 9.0.8).
+    let hole = |y: f64| format!("(pad \"1\" thru_hole circle (at 0 {y}) (size 0.508 0.508) (drill 0.254) (layers \"*.Cu\") (net 1 \"A\"))");
+    let row = [hole(-0.7874), hole(0.0), hole(0.7874)].concat();
+    let tips = tips(&board(&row, "", "", FOUR));
+    assert_eq!(tips.len(), 4, "{tips:?}");
+    assert!(tips.iter().all(|&(_, y)| !(9.3..=10.7).contains(&y)), "{tips:?}");
+}
+
+#[test]
+fn a_spoke_with_room_for_its_middle_alone_is_kept_that_wide() {
+    // Net B's pad 0.15 mm above the -x spoke's edge, nearer than the zone's 0.2 mm: KiCad
+    // cuts that much off the spoke's side and keeps the rest, which is still as wide as the
+    // zone's least width (kitspace's O1, kicad-cli 9.0.8).
+    let beside = "(footprint \"P\" (layer \"F.Cu\") (at 9 9.3) (property \"Reference\" \"U2\")
+                    (pad \"1\" smd rect (at 0 0) (size 0.5 0.6) (layers \"F.Cu\") (net 2 \"B\")))";
+    let b = board(RECT, "", beside, FOUR);
+    assert!(tips(&b).contains(&(8.75, 10.0)), "{:?}", tips(&b));
+    let widths: Vec<f64> = b
+        .items()
+        .filter_map(|(_, it)| match (&it.kind, &it.shape) {
+            (Kind::Spoke { .. }, Shape::Polygon(p)) if (p[1].x + p[2].x) / 2 < nm(9e-3) => Some(p[0].distance(p[3]) / 1e6),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(widths.len(), 1);
+    assert!((widths[0] - 0.25).abs() < 1e-3, "{widths:?}");
+    // And a track that takes the middle too takes the spoke.
+    let mut b = b;
+    let cut = track(&mut b, 9.1);
+    assert_eq!(check_item(&b, cut).iter().filter(|v| v.rule == Rule::Clearance).count(), 1);
+}
+
+/// A track of net B from (x0, y0) to (x1, y1).
+fn other(b: &mut Board, (x0, y0): (f64, f64), (x1, y1): (f64, f64)) -> ItemId {
+    let id = own(b, (x0, y0), (x1, y1));
+    let mut item = b.item(id).unwrap().clone();
+    b.remove(id);
+    item.net = 2;
+    b.insert(item)
+}
+
+/// A pad with a hole wider than its spokes, so that each spoke is its own piece of copper.
+const HOLED: &str = "(pad \"1\" thru_hole rect (at 0 0) (size 1.6 1.6) (drill 1) (layers \"*.Cu\") (net 1 \"A\"))";
+/// The same pad with no hole: its spokes are one piece of copper under it.
+const WHOLE: &str = "(pad \"1\" smd rect (at 0 0) (size 1.6 1.6) (layers \"F.Cu\") (net 1 \"A\"))";
+/// Another pad of net A in the zone, for the pour to join U1's to.
+const SECOND: &str = "(footprint \"P\" (layer \"F.Cu\") (at 4 16) (property \"Reference\" \"U3\")
+                        (pad \"1\" smd rect (at 0 0) (size 1 0.6) (layers \"F.Cu\") (net 1 \"A\")))";
+
+/// Net B's tracks round three sides of the pour U1's +x spoke ends in, the pad's own gap the
+/// fourth: a piece of pour 0.6 by 1 mm that joins nothing but that spoke.
+fn shut_in(b: &mut Board) -> [ItemId; 3] {
+    [other(b, (11.2, 9.2), (12.2, 9.2)), other(b, (12.2, 9.2), (12.2, 10.8)), other(b, (12.2, 10.8), (11.2, 10.8))]
+}
+
+#[test]
+fn a_spoke_into_pour_that_joins_nothing_else_is_no_spoke() {
+    let mut b = board(HOLED, "", SECOND, FOUR);
+    assert!(Pours::likely(&b).starved(&b).is_empty(), "four spokes into the pour");
+    let round = shut_in(&mut b);
+    assert!(round.iter().all(|&t| check_item(&b, t).is_empty()), "no spoke is cut");
+    let pours = Pours::likely(&b);
+    let starved = pours.starved(&b);
+    assert_eq!(starved.len(), 1, "three spokes of the four asked for: {starved:?}");
+    assert_eq!((starved[0].layer, starved[0].pockets.len()), (0, 1));
+    // The tracks round that piece are what it ends at; one far off is not.
+    assert!(round.iter().all(|&t| pours.beside(&b, starved[0].pockets[0], t)));
+    let far = track(&mut b, 16.0);
+    assert!(!pours.beside(&b, starved[0].pockets[0], far));
+}
+
+#[test]
+fn spokes_under_a_pad_with_no_hole_are_one_piece_of_copper() {
+    // The same pour shut in, but the +x spoke is joined to the other three under the pad, and
+    // so the pour it ends in to the rest (kicad-cli 9.0.8: OpenBot's U2, whose spokes are
+    // wider than its hole, is not starved; R9, whose hole parts them, is).
+    let mut b = board(WHOLE, "", SECOND, FOUR);
+    shut_in(&mut b);
+    assert!(Pours::likely(&b).starved(&b).is_empty());
+}
+
+#[test]
+fn a_track_of_the_pads_net_into_the_pour_counts_for_a_spoke_unless_it_ends_in_the_pads_hole() {
+    let mut b = board(HOLED, "", SECOND, FOUR);
+    shut_in(&mut b);
+    // Out of the pad into its own +y spoke, inside the hole: KiCad takes the hole out of
+    // the pour, so this ends in none.
+    own(&mut b, (10.5, 10.0), (10.0, 10.2));
+    assert_eq!(Pours::likely(&b).starved(&b).len(), 1);
+    own(&mut b, (10.0, 10.0), (7.0, 7.0));
+    assert!(Pours::likely(&b).starved(&b).is_empty(), "three spokes and a track into the pour");
+}
+
+#[test]
+fn a_pad_whose_spokes_all_end_in_pour_that_joins_nothing_is_starved_only_once_a_track_joins_it() {
+    // Net B all round U1, 3 mm out: the pour inside joins nothing but the pad. KiCad leaves
+    // that to the connectivity check; but a track out of the pad on the other side of the
+    // board, ending over that pour, counts as one spoke, and then one is too few (Shift-in
+    // 32's P1-8, kicad-cli 9.0.8).
+    let mut b = board(HOLED, "", SECOND, "");
+    for (from, to) in [((7.0, 7.0), (13.0, 7.0)), ((13.0, 7.0), (13.0, 13.0)), ((13.0, 13.0), (7.0, 13.0)), ((7.0, 13.0), (7.0, 7.0))] {
+        other(&mut b, from, to);
+    }
+    assert!(Pours::likely(&b).starved(&b).is_empty());
+    let back = own(&mut b, (10.0, 10.0), (11.8, 11.8));
+    let mut item = b.item(back).unwrap().clone();
+    b.remove(back);
+    item.layers = 2;
+    b.insert(item);
+    let starved = Pours::likely(&b).starved(&b);
+    assert_eq!(starved.len(), 1, "{starved:?}");
+    assert_eq!(starved[0].pockets.len(), 1, "all four spokes end in the one piece");
+}
+
+#[test]
+fn two_pads_whose_spokes_meet_are_joined_by_them() {
+    // A second pad of net A below U1's, their ends 1.14 mm apart: no pour between the two
+    // gaps, and each pad's spoke towards the other ends inside the other's. KiCad keeps the
+    // two as a bridge (Biscay's SOT-23-6 with two ground pins, kicad-cli 9.0.8).
+    let below = "(footprint \"P\" (layer \"F.Cu\") (at 10 11.74) (property \"Reference\" \"U2\")
+                   (pad \"1\" smd rect (at 0 0) (size 1 0.6) (layers \"F.Cu\") (net 1 \"A\")))";
+    let mut b = board(RECT, "", &[below, SECOND].concat(), "");
+    // Net B takes every other spoke of the lower pad, and the upper pad's two sideways.
+    track(&mut b, 11.5);
+    track(&mut b, 8.5);
+    across(&mut b, 12.9);
+    let open = |b: &Board| connectivity_poured(b, &Pours::of(b)).airlines.iter().filter(|a| a.net == 1).count();
+    assert_eq!(open(&b), 0, "the lower pad by the bridge, the upper by its spoke up into the pour");
+    // A track of net B between the two cuts the bridge.
+    other(&mut b, (9.0, 10.87), (11.0, 10.87));
+    assert_eq!(open(&b), 1);
+}
+
+#[test]
+fn a_bridge_cut_at_one_pads_end_is_cut_for_the_other_pad_too() {
+    // The two pads of the test before, one spoke asked of each. Net B takes every spoke of
+    // the upper pad but the one that meets the lower pad's.
+    let below = "(footprint \"P\" (layer \"F.Cu\") (at 10 11.74) (property \"Reference\" \"U2\")
+                   (pad \"1\" smd rect (at 0 0) (size 1 0.6) (layers \"F.Cu\") (net 1 \"A\")))";
+    let mut b = board(RECT, "", below, "(version 1) (rule one (constraint min_resolved_spokes 1))");
+    track(&mut b, 11.5);
+    track(&mut b, 8.5);
+    across(&mut b, 8.7);
+    // A track that comes within its clearance of the lower pad's half of the bridge alone:
+    // the lower pad has its spoke down still, but the upper is left none.
+    let beside = other(&mut b, (10.5, 11.12), (11.2, 11.12));
+    let hits: Vec<Violation> = check_item(&b, beside).into_iter().filter(|v| v.rule == Rule::Clearance).collect();
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(matches!(b.item(hits[0].b.unwrap()).unwrap().kind, Kind::Spoke { .. }));
+    // Farther off it cuts neither.
+    b.remove(beside);
+    let clear = other(&mut b, (10.7, 11.12), (11.2, 11.12));
+    assert!(check_item(&b, clear).iter().all(|v| v.rule != Rule::Clearance));
+}

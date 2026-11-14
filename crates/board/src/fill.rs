@@ -7,13 +7,18 @@
 //! [`fill_zones`] is for showing the board: pads join their pour solidly, with no thermal
 //! spokes. [`Pours`] is for telling what a pour joins once copper has been laid on the board
 //! ([`crate::connectivity_poured`]): there a pad joined by thermal reliefs has its gap round it
-//! and is joined only by the spokes kept for it whose land the pour still reaches.
+//! and is joined only by the spokes kept for it whose land the pour still reaches. And for
+//! telling which pads the copper laid leaves too few spokes ([`Pours::starved`]), as KiCad's
+//! DRC counts them: a spoke into a piece of pour that joins nothing else is none.
 
 use crate::geom::{nm, point_segment, BBox, Nm, Point, Shape};
-use crate::model::{Board, Kind, ZoneArea};
+use crate::model::{Board, Item, ItemId, Kind, ZoneArea};
 
 /// Side of a raster cell: 25 µm, a sixth of the narrowest pour the boards here allow.
 pub const STEP: Nm = 25_000;
+
+/// KiCad's arc error, by which its filler shrinks a pour less than half the minimum width.
+const ARC_ERROR: Nm = 5_000;
 /// A raster larger than this many cells a side is not filled, so a stray coordinate cannot ask
 /// for gigabytes.
 const SIDE_MAX: i64 = 20_000;
@@ -222,30 +227,46 @@ impl Raster {
             .flat_map(|di| (-reach..=reach).map(move |dj| (di, dj)))
             .filter(|(di, dj)| (di * di + dj * dj) * STEP * STEP <= r * r)
             .collect();
+        self.open_with(&disc);
+    }
+
+    /// Opens the copper by a disc `across` cells across: a strip that many cells wide stays,
+    /// one a cell narrower goes. (A disc about a cell's middle is an odd number of cells
+    /// across; one of an even number is about a cell's corner.)
+    fn open_across(&mut self, across: i64) {
+        if across <= 1 {
+            return;
+        }
+        // In half cells: the disc's middle, and each cell's.
+        let c = if across % 2 == 0 { -1 } else { 0 };
+        let reach = across / 2 + 1;
+        let disc: Vec<(i64, i64)> = (-reach..=reach)
+            .flat_map(|di| (-reach..=reach).map(move |dj| (di, dj)))
+            .filter(|(di, dj)| (2 * di - c).pow(2) + (2 * dj - c).pow(2) <= across * across)
+            .collect();
+        self.open_with(&disc);
+    }
+
+    /// Opens the copper by `disc`, cells about its own: what the disc cannot reach by sliding
+    /// inside the copper goes.
+    fn open_with(&mut self, disc: &[(i64, i64)]) {
         let before = self.cells.clone();
         let mut eroded = self.cells.clone();
-        for j in 0..self.h {
-            for i in 0..self.w {
-                if !before[j * self.w + i] && self.edge(i, j) {
-                    for &(di, dj) in &disc {
-                        let (x, y) = (i as i64 + di, j as i64 + dj);
-                        if x >= 0 && y >= 0 && (x as usize) < self.w && (y as usize) < self.h {
-                            eroded[y as usize * self.w + x as usize] = false;
-                        }
-                    }
+        let (w, h) = (self.w, self.h);
+        let clear = |eroded: &mut Vec<bool>, i: usize, j: usize| {
+            for &(di, dj) in disc {
+                let (x, y) = (i as i64 - di, j as i64 - dj);
+                if x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h {
+                    eroded[y as usize * w + x as usize] = false;
                 }
             }
-        }
-        // Copper on the raster's own edge borders nothing filled beyond it.
+        };
         for j in 0..self.h {
             for i in 0..self.w {
-                if before[j * self.w + i] && (i == 0 || j == 0 || i + 1 == self.w || j + 1 == self.h) {
-                    for &(di, dj) in &disc {
-                        let (x, y) = (i as i64 + di, j as i64 + dj);
-                        if x >= 0 && y >= 0 && (x as usize) < self.w && (y as usize) < self.h {
-                            eroded[y as usize * self.w + x as usize] = false;
-                        }
-                    }
+                // Copper on the raster's own edge borders nothing filled beyond it.
+                let rim = before[j * self.w + i] && (i == 0 || j == 0 || i + 1 == self.w || j + 1 == self.h);
+                if rim || (!before[j * self.w + i] && self.edge(i, j)) {
+                    clear(&mut eroded, i, j);
                 }
             }
         }
@@ -255,7 +276,7 @@ impl Raster {
         for j in 0..self.h {
             for i in 0..self.w {
                 if eroded.cells[j * self.w + i] && eroded.edge(i, j) {
-                    for &(di, dj) in &disc {
+                    for &(di, dj) in disc {
                         let (x, y) = (i as i64 + di, j as i64 + dj);
                         if x >= 0 && y >= 0 && (x as usize) < self.w && (y as usize) < self.h {
                             let k = y as usize * self.w + x as usize;
@@ -387,7 +408,7 @@ pub fn fill_zones_until(board: &Board, stop: &dyn Fn() -> bool) -> Option<Vec<Fi
             if stop() {
                 return None;
             }
-            if let Some(r) = fill_one(board, zone, layer, &poured, false, stop)? {
+            if let Some(r) = fill_one(board, zone, layer, &poured, false, false, stop)? {
                 fills.push(Fill { zone: zone.zone, net: zone.net, layer, rects: r.rects(), pieces: r.pieces() });
                 poured.push((zone.net, layer, r));
             }
@@ -403,8 +424,9 @@ const STOP_EVERY: usize = 64;
 /// With `as_joined`, the pour is what joins: a block's kept pour is copper like any other, of
 /// its net, and a pad joined by thermal spokes has its gap round it, the pour beyond held by
 /// the lands of its spokes. Without, no pour on the board is looked at and every pad of the
-/// net is poured over.
-fn fill_one(board: &Board, zone: &ZoneArea, layer: usize, poured: &[(u32, usize, Raster)], as_joined: bool, stop: &dyn Fn() -> bool) -> Option<Option<Raster>> {
+/// net is poured over. A strip of pour stays where it is surely as wide as the zone's minimum
+/// width; with `nearest`, where it is that wide to the nearest step.
+fn fill_one(board: &Board, zone: &ZoneArea, layer: usize, poured: &[(u32, usize, Raster)], as_joined: bool, nearest: bool, stop: &dyn Fn() -> bool) -> Option<Option<Raster>> {
     let Shape::Polygon(outline) = &zone.outline else { return Some(None) };
     if outline.len() < 3 {
         return Some(None);
@@ -510,7 +532,12 @@ fn fill_one(board: &Board, zone: &ZoneArea, layer: usize, poured: &[(u32, usize,
     if stop() {
         return None;
     }
-    r.open(zone.min_thickness / 2);
+    if nearest {
+        // KiCad shrinks the pour by half the minimum width less its arc error and grows it back.
+        r.open_across((zone.min_thickness - 2 * ARC_ERROR + STEP - 1).div_euclid(STEP));
+    } else {
+        r.open(zone.min_thickness / 2);
+    }
     if net != 0 {
         r.keep_seeded(&seeds);
     }
@@ -541,22 +568,51 @@ struct Part {
     piece: Vec<u32>,
 }
 
+/// A pad a refill leaves with too few thermal spokes on a layer ([`Pours::starved`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Starved {
+    pub pad: ItemId,
+    /// The zone, as numbered among the file's, and the layer of it the pad is short on.
+    pub zone: usize,
+    pub layer: usize,
+    /// The pieces of pour its spokes end in that join nothing but the pad.
+    pub pockets: Vec<usize>,
+}
+
 /// The pours as a refill would leave them round the copper on the board as it stands, to tell
 /// what each piece of pour joins. A block's kept pours are copper already and are not poured.
 /// Good to a raster step, as [`fill_zones`] is: the refill itself is KiCad's.
 pub struct Pours {
     parts: Vec<Part>,
     pieces: usize,
+    /// The spokes that meet another pad's, each with the piece the two are: where two pads of
+    /// a net stand too near each other for pour between them, KiCad keeps the spokes they send
+    /// towards each other if those meet, as a bridge from pad to pad, and that is a piece of
+    /// copper of its own.
+    bridges: std::collections::HashMap<ItemId, usize>,
 }
 
 impl Pours {
     pub fn of(board: &Board) -> Pours {
+        Pours::with(board, false)
+    }
+
+    /// The pours as KiCad most likely leaves them. The fill is good to a step, and
+    /// [`Pours::of`] drops a strip of pour that is within a step of the zone's minimum width,
+    /// so that nothing is taken for joined that may not be; here such a strip stays where it
+    /// is that wide to the nearest step, for telling which pour a spoke ends in
+    /// ([`Pours::starved`]).
+    pub fn likely(board: &Board) -> Pours {
+        Pours::with(board, true)
+    }
+
+    fn with(board: &Board, nearest: bool) -> Pours {
         let mut poured: Vec<(u32, usize, Raster)> = Vec::new();
         let mut parts = Vec::new();
         let mut pieces = 0u32;
         for zone in order(board).into_iter().filter(|z| !z.kept) {
             for layer in (0..board.layers.len()).filter(|l| zone.layers & (1 << l) != 0) {
-                let Some(Some(r)) = fill_one(board, zone, layer, &poured, true, &|| false) else { continue };
+                let Some(Some(r)) = fill_one(board, zone, layer, &poured, true, nearest, &|| false) else { continue };
                 poured.push((zone.net, layer, r.clone()));
                 if zone.net == 0 {
                     continue;
@@ -591,7 +647,20 @@ impl Pours {
                 parts.push(Part { zone: zone.zone, net: zone.net, layer, land: zone.min_thickness.max(STEP), raster: r, piece });
             }
         }
-        Pours { parts, pieces: pieces as usize }
+        // Spokes that meet, uncut: each one's end in the other.
+        let mut bridges = std::collections::HashMap::new();
+        for (s, spoke) in board.items() {
+            let layer = spoke.layers.trailing_zeros() as usize;
+            if bridges.contains_key(&s) {
+                continue;
+            }
+            if let Some(o) = crate::check::met(board, spoke, layer).filter(|_| !crate::check::cut(board, s, spoke, layer, None)) {
+                bridges.insert(s, pieces as usize);
+                bridges.insert(o, pieces as usize);
+                pieces += 1;
+            }
+        }
+        Pours { parts, pieces: pieces as usize, bridges }
     }
 
     /// How many pieces of pour there are; each is numbered below this.
@@ -645,8 +714,8 @@ impl Pours {
     /// The pieces of pour that copper item `id` is joined to on `layer`. A track is joined where
     /// an end of it lies in the pour, a via where its middle does, a pad the pour joins solidly
     /// where any of it does. A pad joined by thermal spokes is joined by each spoke whose land,
-    /// past the gap round the pad, is still pour.
-    pub fn joined(&self, board: &Board, id: crate::model::ItemId, layer: usize) -> Vec<usize> {
+    /// past the gap round the pad, is still pour, and by each that meets another pad's.
+    pub fn joined(&self, board: &Board, id: ItemId, layer: usize) -> Vec<usize> {
         let mut out = Vec::new();
         let Some(item) = board.item(id) else { return out };
         if !item.on(layer) || !item.is_copper() {
@@ -672,7 +741,7 @@ impl Pours {
                         for s in board.near(layer, near) {
                             let Some(spoke) = board.item(s) else { continue };
                             if matches!(spoke.kind, Kind::Spoke { pad, zone, .. } if pad == id && zone == part.zone) && spoke.on(layer) {
-                                add(land(&spoke.shape, part.land).and_then(|p| Pours::at(part, p)));
+                                add(land(&spoke.shape, part.land).and_then(|p| Pours::at(part, p)).or_else(|| self.bridges.get(&s).copied()));
                             }
                         }
                     } else {
@@ -695,6 +764,187 @@ impl Pours {
             }
         }
         out
+    }
+
+    /// The pads a refill leaves with too few thermal spokes, as KiCad's DRC counts them
+    /// (`starved_thermal`, its `drc_test_provider_zone_connections`, 9.0.8). A spoke counts
+    /// where its land is pour that joins something besides the pad: a piece of pour that only
+    /// the pad's own spokes reach leads nowhere. A track of the pad's net that leaves the pad, on
+    /// any layer, counts as a spoke where its far end lies over the zone's pour on this one. A
+    /// pad with nothing that counts is let be if its spokes all end in such pieces (it is the
+    /// connections that are then open, not the reliefs that are starved), and so is one no
+    /// spoke reaches at all.
+    pub fn starved(&self, board: &Board) -> Vec<Starved> {
+        // What each piece of pour joins: one item, or more.
+        let mut one: Vec<Option<ItemId>> = vec![None; self.pieces];
+        let mut more = vec![false; self.pieces];
+        for (id, item) in board.items().filter(|(_, it)| matches!(it.kind, Kind::Pad { .. } | Kind::Track | Kind::Via)) {
+            for part in self.parts.iter().filter(|part| part.net == item.net && item.on(part.layer)) {
+                let pieces: Vec<usize> = match item.kind {
+                    Kind::Pad { .. } => self.joined(board, id, part.layer),
+                    _ => part.raster.cells_in(&item.shape).into_iter().filter(|&c| part.piece[c] != 0).map(|c| part.piece[c] as usize - 1).collect(),
+                };
+                for k in pieces {
+                    match one[k] {
+                        None => one[k] = Some(id),
+                        Some(o) if o != id => more[k] = true,
+                        Some(_) => {}
+                    }
+                }
+            }
+        }
+        // Each relief pad's uncut spokes on each layer of its zone, with the piece each ends
+        // in. An uncut spoke with no pour at its end by this fill is one that meets another
+        // pad's (a bridge from pad to pad), or one whose land the fill, good to a step, has
+        // just lost: KiCad has it, and it is taken to lead on.
+        struct Relief<'a> {
+            pad: ItemId,
+            item: &'a Item,
+            part: &'a Part,
+            gap: Nm,
+            need: usize,
+            ends: Vec<Option<usize>>,
+        }
+        // The pieces that are one copper through a pad: its spokes all start at its middle, so
+        // two of them are one piece of copper unless its hole parts them (KiCad takes a relief
+        // pad's hole out of the pour last of all): two a quarter turn apart where the corner
+        // they share lies outside the hole, two opposite where they are wider than it.
+        let mut same: Vec<usize> = (0..self.pieces).collect();
+        fn root(same: &mut [usize], mut k: usize) -> usize {
+            while same[k] != k {
+                same[k] = same[same[k]];
+                k = same[k];
+            }
+            k
+        }
+        let mut reliefs = Vec::new();
+        for (&(pad, zone), &gap) in &board.relief_pads {
+            let Some(item) = board.item(pad) else { continue };
+            for part in self.parts.iter().filter(|part| part.zone == zone && item.on(part.layer)) {
+                let layer = part.layer;
+                let spokes: Vec<(ItemId, &Item)> = board
+                    .near(layer, item.shape.bbox().grow(STEP))
+                    .into_iter()
+                    .filter_map(|s| board.item(s).map(|it| (s, it)))
+                    .filter(|(_, it)| matches!(it.kind, Kind::Spoke { pad: p, zone: z, .. } if p == pad && z == zone) && it.on(layer))
+                    .collect();
+                let Some(need) = spokes.iter().find_map(|(_, it)| match it.kind {
+                    Kind::Spoke { need, .. } => Some(need as usize),
+                    _ => None,
+                }) else {
+                    continue;
+                };
+                // Each uncut spoke: its piece, the way it runs and half its width.
+                let whole: Vec<(Option<usize>, [f64; 2], f64)> = spokes
+                    .iter()
+                    .filter(|&&(s, spoke)| !crate::check::cut(board, s, spoke, layer, None))
+                    .filter_map(|&(_, spoke)| {
+                        let Shape::Polygon(c) = &spoke.shape else { return None };
+                        let along = [((c[1].x + c[2].x) - (c[0].x + c[3].x)) as f64, ((c[1].y + c[2].y) - (c[0].y + c[3].y)) as f64];
+                        let len = along[0].hypot(along[1]).max(1.0);
+                        Some((land(&spoke.shape, part.land).and_then(|p| Pours::at(part, p)), [along[0] / len, along[1] / len], c[0].distance(c[3]) / 2.0))
+                    })
+                    .collect();
+                let hole = item.hole.map_or(0.0, |(_, r)| r as f64);
+                for i in 0..whole.len() {
+                    for j in 0..i {
+                        let (a, b) = (&whole[i], &whole[j]);
+                        let turn = a.1[0] * b.1[0] + a.1[1] * b.1[1];
+                        let half = a.2.min(b.2);
+                        let through = if turn < -0.7 { half > hole } else { turn < 0.7 && half * std::f64::consts::SQRT_2 > hole };
+                        if !through {
+                            continue;
+                        }
+                        match (a.0, b.0) {
+                            (Some(x), Some(y)) => {
+                                let (x, y) = (root(&mut same, x), root(&mut same, y));
+                                same[x] = y;
+                            }
+                            // One of them taken to lead on: so does the other.
+                            (Some(x), None) | (None, Some(x)) => more[x] = true,
+                            (None, None) => {}
+                        }
+                    }
+                }
+                reliefs.push(Relief { pad, item, part, gap, need, ends: whole.iter().map(|w| w.0).collect() });
+            }
+        }
+        // What every piece of one copper joins, taken together.
+        for k in 0..self.pieces {
+            let r = root(&mut same, k);
+            if r == k {
+                continue;
+            }
+            more[r] |= more[k] || matches!((one[r], one[k]), (Some(x), Some(y)) if x != y);
+            one[r] = one[r].or(one[k]);
+        }
+        let mut out = Vec::new();
+        for Relief { pad, item, part, gap, need, ends } in reliefs {
+            let (mut whole, mut pockets) = (0, Vec::new());
+            for end in ends {
+                match end {
+                    Some(k) if !more[root(&mut same, k)] => pockets.push(k),
+                    _ => whole += 1,
+                }
+            }
+            if (whole == 0 && pockets.is_empty()) || whole >= need {
+                continue;
+            }
+            let half = gap as f64 / 2.0;
+            let on_pad = |p: Point| item.shape.gap_within(&Shape::Capsule { a: p, b: p, r: 0 }, half) < half;
+            for l in 0..board.layers.len() {
+                for t in board.near(l, item.shape.bbox().grow(gap)).into_iter().filter_map(|t| board.item(t)) {
+                    let (Kind::Track, Shape::Capsule { a, b, .. }) = (&t.kind, &t.shape) else { continue };
+                    if t.net != item.net || !t.on(l) {
+                        continue;
+                    }
+                    let far = if on_pad(*a) {
+                        *b
+                    } else if on_pad(*b) {
+                        *a
+                    } else {
+                        continue;
+                    };
+                    // The zone's copper is its pour and its spokes, less the pad's hole. (A pad's
+                    // spokes meet at its middle, where a track to it ends: on the edge of each.)
+                    let in_a_spoke = || {
+                        board.near(part.layer, BBox::of([far]).grow(STEP)).into_iter().any(|s| {
+                            board.item(s).is_some_and(|it| matches!(it.kind, Kind::Spoke { zone, .. } if zone == part.zone) && it.on(part.layer) && it.shape.gap_within(&Shape::Capsule { a: far, b: far, r: 0 }, STEP as f64) < STEP as f64 && !item.hole.is_some_and(|(c, r)| far.distance(c) <= r as f64) && !crate::check::cut(board, s, it, part.layer, None))
+                        })
+                    };
+                    whole += usize::from(Pours::at(part, far).is_some() || in_a_spoke());
+                }
+            }
+            // With nothing else that counts, the spokes into such pieces do.
+            if whole == 0 {
+                whole = pockets.len();
+            }
+            if whole < need {
+                pockets.sort_unstable();
+                pockets.dedup();
+                out.push(Starved { pad, zone: part.zone, layer: part.layer, pockets });
+            }
+        }
+        out.sort_by_key(|s| (s.layer, s.pad));
+        out
+    }
+
+    /// Whether piece `piece` ends at copper item `id` of another net: some of it lies as near
+    /// the item as its pour keeps from it, to a step or two.
+    pub fn beside(&self, board: &Board, piece: usize, id: ItemId) -> bool {
+        let Some(item) = board.item(id) else { return false };
+        self.parts.iter().filter(|part| item.on(part.layer) && part.net != item.net).any(|part| {
+            let own = board.zone_areas.iter().find(|z| z.zone == part.zone).map_or(0, |z| z.clearance);
+            let reach = own.max(board.clearance(part.net, item.net)) + 2 * STEP;
+            let r = &part.raster;
+            let (cols, rows) = r.span(item.shape.bbox().grow(reach));
+            rows.into_iter().any(|j| {
+                cols.clone().any(|i| {
+                    let c = r.center(i, j);
+                    part.piece[j * r.w + i] as usize == piece + 1 && item.shape.gap_within(&Shape::Capsule { a: c, b: c, r: 0 }, reach as f64) < reach as f64
+                })
+            })
+        })
     }
 
     /// The pour of every net on `layer` as rectangles `[x0, y0, x1, y1]`, with each one's net.
@@ -741,6 +991,28 @@ mod tests {
         assert!(!covered(&fills, Point::new(4_750_000, 5_000_000)));
         assert!(covered(&fills, Point::new(4_650_000, 5_000_000)));
         assert_eq!(fills[0].pieces, 1);
+    }
+
+    /// Whether a strip `cells` wide down the middle of a raster is still there once opened.
+    fn strip_stays(cells: i64, open: impl Fn(&mut Raster)) -> bool {
+        let mut r = Raster::over(BBox::of([Point::new(0, 0), Point::new(60 * STEP, 60 * STEP)])).unwrap();
+        let strip = [Point::new(20 * STEP, 5 * STEP), Point::new((20 + cells) * STEP, 5 * STEP), Point::new((20 + cells) * STEP, 55 * STEP), Point::new(20 * STEP, 55 * STEP)];
+        r.scan(&[&strip], true);
+        assert_eq!(r.cells.iter().filter(|&&c| c).count() as i64, cells * 50);
+        open(&mut r);
+        r.cells.iter().any(|&c| c)
+    }
+
+    #[test]
+    fn a_strip_stays_where_a_disc_that_many_cells_across_fits_in_it() {
+        assert!(strip_stays(10, |r| r.open_across(10)), "an even number of cells");
+        assert!(!strip_stays(9, |r| r.open_across(10)));
+        assert!(strip_stays(11, |r| r.open_across(11)), "an odd number");
+        assert!(!strip_stays(10, |r| r.open_across(11)));
+        // Opening by half of 0.254 mm, as the pours that tell what is joined are, drops a
+        // strip of ten cells, which may be 0.25 mm or 0.27.
+        assert!(!strip_stays(10, |r| r.open(127_000)));
+        assert!(strip_stays(11, |r| r.open(127_000)));
     }
 
     #[test]
