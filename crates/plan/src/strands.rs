@@ -38,7 +38,7 @@ pub struct Sheet {
 
 /// A part of a free triangle, as its strands divide it: each strand cuts a corner off, so the
 /// parts are the bands between the strands round each corner and what is left in the middle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Region {
     /// What touches all three sides.
     Middle,
@@ -52,6 +52,11 @@ const BESIDE: f64 = 5.0 * crate::space::VIA_CORNER;
 
 /// Lengths this much over still fit: sums of rule values are not exact in floating point.
 pub const EPS: f64 = 1e-6;
+
+/// How far round a spot the strands are looked at before a via is put there, mm
+/// ([`Sheet::via_clear`]).
+const ROUND_A_VIA: f64 = 3.0;
+
 
 impl Sheet {
     pub fn new(space: Space) -> Sheet {
@@ -361,6 +366,25 @@ impl Sheet {
         }
     }
 
+    /// The one strand between two parts of triangle `t`, and the crossing of its that its
+    /// line through the triangle starts from: none unless the parts lie side by side.
+    pub fn chord_between(&self, t: usize, a: Region, b: Region) -> Option<(usize, usize)> {
+        let n = self.corners(t);
+        let band = |r: Region, c: usize| match r {
+            Region::Band { corner, band } if corner == c => Some(band),
+            Region::Middle => Some(n[c]),
+            _ => None,
+        };
+        (0..3).find_map(|c| {
+            let (x, y) = (band(a, c)?, band(b, c)?);
+            if x.abs_diff(y) != 1 {
+                return None;
+            }
+            let [(s, k), (s2, k2)] = self.chord(t, c, x.min(y));
+            (s == s2 && k.abs_diff(k2) == 1).then_some((s, k.min(k2)))
+        })
+    }
+
     /// The strand that is `q` strands out from corner `c` of triangle `t`, and its crossing of
     /// each of the two sides that meet there.
     fn chord(&self, t: usize, c: usize, q: usize) -> [(usize, usize); 2] {
@@ -434,6 +458,92 @@ impl Sheet {
             let via = if last.0 == net && net != 0 { 0.0 } else { board.clearance(last.0, net) as f64 / 1e6 + self.space.spots.radius };
             let need = self.space.keep(board, tri.v[x], first.0) + between + nets.iter().map(|w| w.1).sum::<f64>() + via;
             need <= dist(self.space.verts[tri.v[x]], p) + EPS
+        })
+    }
+
+    /// Whether a via of `net` at `p`, in triangle `t`, leaves their room to the strands that
+    /// pass between it and every corner within [`ROUND_A_VIA`] of it that it can see, as the
+    /// strands lie ([`Sheet::places`]). Once the via is in, the triangles round it are others,
+    /// and it has a gap to corners that were none of its own triangle's: what [`Sheet::via_fits`]
+    /// asks of those three is asked here of the rest.
+    pub fn via_clear(&self, board: &Board, t: usize, p: P, net: u32) -> bool {
+        let places = self.places(board);
+        let v = &self.space.verts;
+        // The free triangles in reach of the spot, from its own outwards: their strands as
+        // lines, their corners, and the sides that are walls.
+        let mut seen = vec![t];
+        let mut chords: Vec<(P, P, usize)> = Vec::new();
+        let mut walls: Vec<(P, P)> = Vec::new();
+        let mut corners: Vec<usize> = Vec::new();
+        let mut i = 0;
+        while i < seen.len() {
+            let x = seen[i];
+            i += 1;
+            let tri = &self.space.tris[x];
+            let n = self.corners(x);
+            for (c, &round) in n.iter().enumerate() {
+                for q in 0..round {
+                    let [(s, k), (s2, k2)] = self.chord(x, c, q);
+                    chords.push((self.point(self.strands[s].crossings[k], places[s][k]), self.point(self.strands[s2].crossings[k2], places[s2][k2]), s));
+                }
+                if !corners.contains(&tri.v[c]) && !self.space.tris[t].v.contains(&tri.v[c]) {
+                    corners.push(tri.v[c]);
+                }
+            }
+            for &e in &tri.e {
+                let edge = &self.space.edges[e];
+                if point_segment(p, v[edge.v[0]], v[edge.v[1]]) > ROUND_A_VIA {
+                    continue;
+                }
+                match edge.t.iter().flatten().copied().find(|&y| y != x) {
+                    Some(y) if self.space.free(y) => {
+                        if !seen.contains(&y) {
+                            seen.push(y);
+                        }
+                    }
+                    _ => walls.push((v[edge.v[0]], v[edge.v[1]])),
+                }
+            }
+        }
+        if chords.is_empty() {
+            return true;
+        }
+        // Where the line from the spot to `x` crosses the one from `a` to `b`: how far along
+        // the first, if it is short of `x` and within the second.
+        let cross = |x: P, a: P, b: P| {
+            let (d, r) = ([x[0] - p[0], x[1] - p[1]], [b[0] - a[0], b[1] - a[1]]);
+            let den = d[0] * r[1] - d[1] * r[0];
+            if den.abs() < 1e-18 {
+                return None;
+            }
+            let w = [a[0] - p[0], a[1] - p[1]];
+            let (s, u) = ((w[0] * r[1] - w[1] * r[0]) / den, (w[0] * d[1] - w[1] * d[0]) / den);
+            (s > 1e-9 && s < 1.0 - 1e-9 && (0.0..1.0).contains(&u)).then_some(s)
+        };
+        corners.iter().all(|&corner| {
+            let x = v[corner];
+            let d = dist(p, x);
+            if d > ROUND_A_VIA || walls.iter().any(|&(a, b)| cross(x, a, b).is_some()) {
+                return true;
+            }
+            // The strands between, from the corner outwards: one that crosses the line twice
+            // is not between the two.
+            let mut between: Vec<(f64, usize, usize)> = Vec::new();
+            for &(a, b, s) in &chords {
+                if let Some(at) = cross(x, a, b) {
+                    match between.iter_mut().find(|k| k.1 == s) {
+                        Some(k) => *k = (k.0.max(at), s, k.2 + 1),
+                        None => between.push((at, s, 1)),
+                    }
+                }
+            }
+            between.retain(|k| k.2 % 2 == 1);
+            between.sort_by(|a, b| b.0.total_cmp(&a.0));
+            let nets: Vec<(u32, f64)> = between.iter().map(|k| (self.strands[k.1].net, self.strands[k.1].width)).collect();
+            let (Some(first), Some(last)) = (nets.first(), nets.last()) else { return true };
+            let gaps: f64 = nets.windows(2).map(|w| Self::clear(board, w[0].0, w[1].0)).sum();
+            let via = if last.0 == net && net != 0 { 0.0 } else { board.clearance(last.0, net) as f64 / 1e6 + self.space.spots.radius };
+            self.space.keep(board, corner, first.0) + gaps + nets.iter().map(|w| w.1).sum::<f64>() + via <= d + EPS
         })
     }
 

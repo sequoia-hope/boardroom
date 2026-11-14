@@ -251,17 +251,42 @@ fn put(board: &Board, sheets: &[Sheet], connection: usize, want: &Want, way: &wa
             end: anchor(leg.to, leg.steps.last())?,
         });
     }
+    // A strand a via stands just past is led round the far side of it: out to one side of the
+    // via, past it, and back in on the other side.
+    let mut pushes = way.pushes.clone();
+    pushes.sort_by_key(|p| std::cmp::Reverse(p.3));
     let out: Vec<Sheet> = sheets
         .iter()
+        .enumerate()
         .zip(fresh)
-        .map(|(sheet, fresh)| {
+        .map(|((l, sheet), fresh)| {
             let mut traces = carry::traces(board, sheet, &Some)?;
+            for &(spot, _, strand, k) in pushes.iter().filter(|p| p.1 == l) {
+                let trace = traces.get_mut(sheet.laid().position(|s| s == strand)?)?;
+                let (a, b, p) = (*trace.pts.get(k)?, *trace.pts.get(k + 1)?, known.at[spot]);
+                let from = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+                let d = space::dist(from, p);
+                if d < 1e-9 {
+                    return None;
+                }
+                let by = PAST * space::VIA_CORNER;
+                let out = [(p[0] - from[0]) / d * by, (p[1] - from[1]) / d * by];
+                let mut side = [-out[1], out[0]];
+                if side[0] * (a[0] - from[0]) + side[1] * (a[1] - from[1]) < 0.0 {
+                    side = [-side[0], -side[1]];
+                }
+                trace.pts.splice(k + 1..k + 1, [[p[0] + side[0], p[1] + side[1]], [p[0] + out[0], p[1] + out[1]], [p[0] - side[0], p[1] - side[1]]]);
+            }
             traces.extend(fresh);
             carry::sheet(board, sheet.space.layer, &vias, &known, &traces)
         })
         .collect::<Option<_>>()?;
     stand(board, &out).then_some(out)
 }
+
+/// A strand led round a via passes this many times [`space::VIA_CORNER`] from its middle:
+/// past the via's corners, and short of where a spot is too near a strand to be beside it.
+const PAST: f64 = 2.5;
 
 /// How many times a way whose vias the sheets do not hold is looked for again without them.
 const AGAIN: usize = 6;
