@@ -15,6 +15,6 @@ pub mod spokes;
 pub use model::{arc_chords, Block, Board, ZoneArea, FootprintInfo, Item, ItemId, Kind, LoadError, ANY_ONE_NET, DRAWN};
 pub use custom::Thing;
 pub use check::{check, check_item, check_item_with_pours, intrudes, mask_gap, mask_pair_gap, within, Rule, Violation, MASK_MARGIN};
-pub use connect::{anchors, connectivity, connectivity_without_pours, joined, net_connectivity, Airline, Connectivity};
-pub use fill::{fill_zones, fill_zones_until, Fill};
+pub use connect::{anchors, connectivity, connectivity_poured, connectivity_without_pours, joined, net_connectivity, Airline, Connectivity};
+pub use fill::{fill_zones, fill_zones_until, Fill, Pours};
 pub use geom::{inside, nm, point_segment, BBox, Nm, Point, Shape};

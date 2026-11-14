@@ -19,7 +19,7 @@ fn main() {
     let (board, text) = Board::load(Path::new(&path)).expect("board");
     let (_, copper) = kicad::parse_board(&text).expect("parse");
     let started = Instant::now();
-    let fills = fill_zones(&board, &copper);
+    let fills = fill_zones(&board);
     let ms = started.elapsed().as_secs_f64() * 1e3;
     let rects: usize = fills.iter().map(|f| f.rects.len()).sum();
     println!("{} fills, {rects} rectangles, {ms:.0} ms", fills.len());

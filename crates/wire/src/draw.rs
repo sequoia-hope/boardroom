@@ -24,8 +24,9 @@ fn path(pts: &[P], close: bool) -> String {
     d
 }
 
-/// One layer as SVG, millimetres, KiCad's frame. `faults` are places to ring.
-pub fn layer(board: &Board, plan: &Plan, drawing: &Drawing, l: usize, faults: &[P]) -> String {
+/// One layer as SVG, millimetres, KiCad's frame. `faults` are places to ring; `pours` is the
+/// layer's poured copper as rectangles in nanometres, each with its net, drawn pale under all.
+pub fn layer(board: &Board, plan: &Plan, drawing: &Drawing, l: usize, faults: &[P], pours: &[(u32, [board::Nm; 4])]) -> String {
     let sheet = &plan.sheets[l];
     let sp = &sheet.space;
     let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
@@ -42,6 +43,14 @@ pub fn layer(board: &Board, plan: &Plan, drawing: &Drawing, l: usize, faults: &[
         lo[0] - m, lo[1] - m, lo[0] - m, lo[1] - m
     );
     let thin = (w.max(h) / 1500.0).max(0.02);
+    let mut pour = String::new();
+    for (net, r) in pours {
+        let (x, y) = (r[0] as f64 / 1e6, r[1] as f64 / 1e6);
+        let _ = write!(pour, "<rect x='{x:.3}' y='{y:.3}' width='{:.3}' height='{:.3}' fill='{}'/>", r[2] as f64 / 1e6 - x, r[3] as f64 / 1e6 - y, PALETTE[*net as usize % PALETTE.len()]);
+    }
+    if !pour.is_empty() {
+        let _ = writeln!(s, "<g opacity='0.16' shape-rendering='crispEdges'>{pour}</g>");
+    }
     for o in &sp.obstacles {
         let (fill, stroke) = match o.what {
             What::Edge => ("none", "#000"),
@@ -50,6 +59,13 @@ pub fn layer(board: &Board, plan: &Plan, drawing: &Drawing, l: usize, faults: &[
             What::Hole => ("#fff", "#555"),
             What::Keepout => ("#f6dede", "#c88"),
         };
+        if o.reach > 0.0 {
+            // A round thing, held as its middle or middle line: drawn as far out as it reaches.
+            if o.what != What::Pad || o.item.is_some() {
+                let _ = writeln!(s, "<path d='{}' stroke='{fill}' stroke-width='{:.3}'/>", path(&o.poly, true), 2.0 * o.reach);
+            }
+            continue;
+        }
         let _ = writeln!(s, "<path d='{}' fill='{fill}' stroke='{stroke}' stroke-width='{:.3}'/>", path(&o.poly, true), thin * 2.0);
     }
     for wire in drawing.wires.iter().filter(|w| w.layer == l) {
@@ -98,6 +114,10 @@ pub fn course(sheet: &plan::Sheet, course: &crate::chain::Course, found: Option<
     );
     for o in &sheet.space.obstacles {
         if o.what == What::Edge {
+            continue;
+        }
+        if o.reach > 0.0 {
+            let _ = writeln!(s, "<path d='{}' stroke='#ddd' stroke-width='{:.4}'/>", path(&o.poly, true), 2.0 * o.reach);
             continue;
         }
         let _ = writeln!(s, "<path d='{}' fill='#ddd' stroke='#999' stroke-width='{:.4}'/>", path(&o.poly, true), thin);

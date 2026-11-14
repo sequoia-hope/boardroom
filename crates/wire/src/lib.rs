@@ -5,8 +5,11 @@
 //! Each wire is drawn alone, from the plan and nothing else. From every corner it keeps the
 //! corner's own distance and the room of the strands the plan has between the two, whether
 //! those are drawn yet or not, and each of its pieces lies as near some corner as that allows
-//! ([`chain`]). So the order wires are drawn in changes nothing. Each wire is then put to the
-//! exact checker; one it faults is not kept, and is reported: nothing is mended afterwards.
+//! ([`chain`]). Each wire is then put to the exact checker; one it faults is not kept, and its
+//! connection is laid again another way ([`route`]).
+//!
+//! A net with a pour is left to its pour: [`route`] plans and draws the other nets, fills the
+//! pours round them ([`board::Pours`]) and plans only what the pours leave apart.
 
 pub mod chain;
 pub mod convex;
@@ -92,24 +95,11 @@ pub fn course(board: &Board, sheet: &Sheet, s: usize) -> Option<Course> {
     let mut held: Vec<Gap> = Vec::new();
     let mut corners: HashMap<usize, Corner> = HashMap::new();
     let mut holds: HashMap<usize, Corner> = HashMap::new();
+    let mut fronts: Vec<chain::Front> = Vec::new();
     for k in 1..=gaps {
         let edge = &space.edges[c[k]];
         let ends = edge.v.map(|v| space.verts[v]);
         let (lo, hi) = sheet.room(board, s, k)?;
-        // A pad's own wire turns at the pad's corner as it leaves the pad, and a turn takes
-        // room: where the strand nearest a corner is of the corner's own pad, its own width
-        // more, if the gap has the room.
-        let turn = |i: usize| {
-            let nearest = if i == 0 { sheet.on[c[k]].first() } else { sheet.on[c[k]].last() };
-            let Some(of) = nearest.map(|&(x, _)| &sheet.strands[x]) else { return 0.0 };
-            let Some(o) = space.vert_of[edge.v[i]] else { return 0.0 };
-            let pad = &space.obstacles[o];
-            if pad.what != What::Pad || pad.net == 0 {
-                return 0.0;
-            }
-            if pad.net == of.net { of.width / edge.len.max(1e-12) } else { 0.0 }
-        };
-        let (lo, hi) = if lo + turn(0) <= hi - turn(1) { (lo + turn(0), hi - turn(1)) } else { (lo, hi) };
         // Across the gap, into the triangle after it.
         let apex = space.tris[tris[k]?].v.iter().copied().find(|v| !edge.v.contains(v))?;
         let mut forward = left(sub(ends[1], ends[0]));
@@ -130,6 +120,8 @@ pub fn course(board: &Board, sheet: &Sheet, s: usize) -> Option<Course> {
                 continue;
             }
             corners.entry(v).or_insert(corner).r = r.max(corners.get(&v).map_or(0.0, |h| h.r));
+            let along = sub(ends[1 - i], ends[i]);
+            fronts.push(chain::Front { at: ends[i], r, along: [along[0] / edge.len.max(1e-12), along[1] / edge.len.max(1e-12)] });
             // Held from it on both sides of the gap.
             for m in [stage(k - 1), stage(k)] {
                 stages[m].corners.push(corner);
@@ -187,6 +179,8 @@ pub fn course(board: &Board, sheet: &Sheet, s: usize) -> Option<Course> {
     let (lo, hi) = ([lo[0] - OUT, lo[1] - OUT], [hi[0] + OUT, hi[1] + OUT]);
     let within = vec![[lo, [hi[0], lo[1]], hi], [lo, hi, [lo[0], hi[1]]]];
     // A pad at least half as long again as it is wide is left, and come to, along its length.
+    // (Tried 2026-11-13: by the side the plan has the strand cross, a long side straight out.
+    // Every wire of the synthetic buses then left its pad by a hook out of the pad's side.)
     let along = |o: usize| -> Vec<usize> {
         let poly = &space.obstacles[o].poly;
         if poly.len() != 4 || space.obstacles[o].reach > 0.0 {
@@ -208,6 +202,8 @@ pub fn course(board: &Board, sheet: &Sheet, s: usize) -> Option<Course> {
         let poly = &space.obstacles[o].poly;
         (0..poly.len()).map(|i| dot(sub(poly[(i + 1) % poly.len()], poly[i]), sub(poly[(i + 1) % poly.len()], poly[i])).sqrt()).fold(0.0, f64::max) / 2.0
     };
+    // An end of the wire that stands in such room has it for its own.
+    fronts.retain(|f| [a, b].iter().all(|&p| dot(sub(p, f.at), sub(p, f.at)).sqrt() >= f.r || dot(sub(p, f.at), f.along) < 0.0));
     Some(Course {
         a,
         b,
@@ -215,6 +211,7 @@ pub fn course(board: &Board, sheet: &Sheet, s: usize) -> Option<Course> {
         stages,
         corners: Vec::new(),
         holds: holds.into_values().collect(),
+        fronts,
         beside: Vec::new(),
         walls,
         within,
@@ -292,6 +289,55 @@ fn neighbour(board: &Board, sheet: &Sheet, s: usize, course: &Course, other: &Wi
     Some((side, me.width / 2.0 + between + other.width / 2.0))
 }
 
+/// Holds the wire of strand `s` off a wire already drawn, in each gap the plan has them both
+/// cross: no nearer where the drawn wire crosses it than the two may be with the strands the
+/// plan has between them, on the side of it the plan has this one. Each wire is drawn alone,
+/// and in a wide gap two drawn where each lies best can leave too little between them for a
+/// third the plan has there.
+fn keep_off(board: &Board, sheet: &Sheet, s: usize, course: &mut Course, other: &Wire) {
+    let space = &sheet.space;
+    let (me, it) = (&sheet.strands[s], &sheet.strands[other.strand]);
+    if me.net == it.net {
+        return;
+    }
+    let clear = |a: u32, b: u32| if a == b { 0.0 } else { board.clearance(a, b) as f64 / 1e6 };
+    let mut m = 0;
+    for (k, &e) in me.crossings.iter().enumerate() {
+        let edge = &space.edges[e];
+        let ends = edge.v.map(|v| space.verts[v]);
+        let Some(at) = (m..course.gaps.len()).find(|&x| course.gaps[x].ends == ends) else { continue };
+        m = at + 1;
+        let on = &sheet.on[e];
+        let (Some(mine), Some(its)) = (on.iter().position(|&x| x == (s, k)), on.iter().position(|&x| x.0 == other.strand)) else { continue };
+        let (lo, hi) = (mine.min(its), mine.max(its));
+        let mut apart = me.width / 2.0 + other.width / 2.0;
+        let mut last = on[lo].0;
+        for &(x, _) in &on[lo + 1..=hi] {
+            apart += clear(sheet.strands[last].net, sheet.strands[x].net) + if x == on[hi].0 { 0.0 } else { sheet.strands[x].width };
+            last = x;
+        }
+        // Where the drawn wire crosses the gap, as a share of the gap from its first corner.
+        let along = sub(ends[1], ends[0]);
+        let crossed = other.pts.windows(2).find_map(|w| {
+            let d = sub(w[1], w[0]);
+            let den = convex::cross(along, d);
+            if den.abs() < 1e-12 {
+                return None;
+            }
+            let t = convex::cross(sub(w[0], ends[0]), d) / den;
+            let u = convex::cross(sub(w[0], ends[0]), along) / den;
+            ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)).then_some(t)
+        });
+        let Some(t) = crossed else { continue };
+        let gap = &mut course.gaps[at];
+        let by = apart / edge.len.max(1e-12);
+        let (new_lo, new_hi) = if its < mine { (gap.lo.max(t + by), gap.hi) } else { (gap.lo, gap.hi.min(t - by)) };
+        if new_lo <= new_hi {
+            (gap.lo, gap.hi) = (new_lo, new_hi);
+        }
+    }
+}
+
 /// A wire already drawn that the new wire was faulted against, for it to keep from: its
 /// corners and pieces, on its side of the new wire, no nearer than the two may be.
 fn learn_wire(board: &Board, sheet: &Sheet, s: usize, other: &Wire, course: &mut Course) -> bool {
@@ -366,6 +412,11 @@ pub fn draw(board: &Board, plan: &Plan) -> Drawing {
 /// [`draw`], and a picture of the course of one strand (a layer and a strand's number): what it
 /// keeps from, and the wire found.
 pub fn draw_watching(board: &Board, plan: &Plan, watch: Option<(usize, usize)>) -> (Drawing, Option<String>) {
+    draw_with(board, plan, watch, &mut chain::Memo::default())
+}
+
+/// [`draw_watching`], with the chains found for courses drawn before.
+fn draw_with(board: &Board, plan: &Plan, watch: Option<(usize, usize)>, memo: &mut chain::Memo) -> (Drawing, Option<String>) {
     let mut drawing = Drawing::default();
     let mut watched = None;
     // The board as it fills: every wire is put to the exact checker as it is drawn, and one it
@@ -419,12 +470,13 @@ pub fn draw_watching(board: &Board, plan: &Plan, watch: Option<(usize, usize)>) 
             for other in drawing.wires.iter().filter(|w| w.layer == layer) {
                 if let Some((side, r)) = neighbour(board, sheet, s, &course, other, true) {
                     course.beside.extend(other.pts.windows(2).map(|w| (w[0], w[1], r, side)));
+                    keep_off(board, sheet, s, &mut course, other);
                 }
             }
             let mut again = 0;
             loop {
                 // Along the pads' lengths if that can be; else any way out of them.
-                let found = chain::chain(&course, BENDS).or_else(|_| chain::chain(&Course { out: Vec::new(), into: Vec::new(), ..course.clone() }, BENDS));
+                let found = memo.chain(&course, BENDS).or_else(|_| memo.chain(&Course { out: Vec::new(), into: Vec::new(), ..course.clone() }, BENDS));
                 if watch == Some((layer, s)) {
                     watched = Some(draw::course(sheet, &course, found.as_ref().ok()));
                 }
@@ -499,6 +551,8 @@ pub fn draw_watching(board: &Board, plan: &Plan, watch: Option<(usize, usize)>) 
                         let at = [(b.min.x + b.max.x) as f64 / 2e6, (b.min.y + b.max.y) as f64 / 2e6];
                         course.gaps.iter().min_by(|x, y| chain::point_segment(at, x.ends[0], x.ends[1]).total_cmp(&chain::point_segment(at, y.ends[0], y.ends[1]))).map(|g| g.ends)
                     });
+                    // With no gap held: the one in the middle of its strand.
+                    let middle = strand.crossings.get(strand.crossings.len() / 2).map(|&e| sheet.space.edges[e].v.map(|v| sheet.space.verts[v]));
                     // What it was faulted against, in a word.
                     let against = match faults.iter().flat_map(|f| [Some(f.a), f.b]).flatten().find(|id| !ids.contains(id)) {
                         Some(id) if tracks.contains_key(&id) => "another wire",
@@ -511,7 +565,7 @@ pub fn draw_watching(board: &Board, plan: &Plan, watch: Option<(usize, usize)>) 
                         },
                         None => "the board's edge",
                     };
-                    drawing.undrawn.push(Undrawn { layer, strand: s, net: strand.net, why: format!("{why} ({:?} against {against}, {:.3} of {:.3} mm)", faults[0].rule, faults[0].gap / 1e6, faults[0].required as f64 / 1e6), refused: path.pts, gap: stuck.or(near) });
+                    drawing.undrawn.push(Undrawn { layer, strand: s, net: strand.net, why: format!("{why} ({:?} against {against}, {:.3} of {:.3} mm)", faults[0].rule, faults[0].gap / 1e6, faults[0].required as f64 / 1e6), refused: path.pts, gap: stuck.or(near).or(middle) });
                     break;
                 }
             }
@@ -520,42 +574,141 @@ pub fn draw_watching(board: &Board, plan: &Plan, watch: Option<(usize, usize)>) 
     (drawing, watched)
 }
 
-/// How many times a board is planned again with what drawing it has shown.
-const ROUNDS: usize = 6;
+/// How many times the connections that could not be drawn are laid again.
+const ROUNDS: usize = 8;
 
-/// Plans a stripped board and draws the plan; then, while some strand cannot be drawn, takes
-/// a track's room off the gap where each went wrong, and plans and draws again. A gap's length
-/// is the most it can hold; what it does hold depends on what stands round it, and drawing is
-/// what finds that out. Of the rounds, the one that leaves fewest connections open is kept.
-pub fn route(board: &Board) -> (Plan, Drawing) {
-    let mut less: HashMap<plan::space::GapKey, f64> = HashMap::new();
-    let mut best: Option<(usize, Plan, Drawing)> = None;
-    for _ in 0..ROUNDS {
-        let plan = plan::plan_with(board, &less);
-        let drawing = draw(board, &plan);
-        let open = plan.left.len() + drawing.undrawn.len();
-        let mut told = false;
-        for u in &drawing.undrawn {
-            if let Some(gap) = u.gap {
-                let strand = &plan.sheets[u.layer].strands[u.strand];
-                *less.entry(plan::space::gap_key(gap[0], gap[1])).or_insert(0.0) += strand.width + board.clearance(strand.net, strand.net) as f64 / 1e6;
-                told = true;
+/// The connections a board's pours leave to make once `drawing` is on it, for the nets in
+/// `poured`: the pours are filled round the drawn copper, and what a piece of pour reaches it
+/// joins. Each comes with the spots where a via would stand in pour its far end is joined to.
+fn left_by_pours(board: &Board, plan: &Plan, drawing: &Drawing, poured: &[u32]) -> Vec<plan::Want> {
+    let (with, _) = onto(board, plan, drawing);
+    let pours = board::Pours::of(&with);
+    let joined = board::connectivity_poured(&with, &pours);
+    let Some(spots) = plan.sheets.first().map(|s| s.space.spots.clone()) else { return Vec::new() };
+    let (r, _) = plan::via_size(board);
+    // The cluster of copper each piece of pour is part of.
+    let mut cluster_of: HashMap<usize, usize> = HashMap::new();
+    for (&id, &cluster) in &joined.cluster {
+        let Some(item) = with.item(id) else { continue };
+        if !poured.contains(&item.net) {
+            continue;
+        }
+        for layer in (0..with.layers.len()).filter(|l| item.on(*l)) {
+            for piece in pours.joined(&with, id, layer) {
+                cluster_of.insert(piece, cluster);
             }
         }
-        if best.as_ref().is_none_or(|b| open < b.0) {
-            best = Some((open, plan, drawing));
-        }
-        if best.as_ref().is_some_and(|b| b.0 == 0) || !told {
-            break;
+    }
+    // Per net, the spots a via would stand in its pour at, with the cluster that joins it to.
+    let mut stands: HashMap<u32, Vec<(usize, usize)>> = HashMap::new();
+    for &net in poured {
+        let list = stands.entry(net).or_default();
+        for (c, p) in spots.at.iter().enumerate() {
+            let cluster = (0..with.layers.len()).find_map(|l| pours.piece(net, l, nm(*p), r).and_then(|piece| cluster_of.get(&piece).copied()));
+            if let Some(cluster) = cluster {
+                list.push((c, cluster));
+            }
         }
     }
-    let (_, plan, drawing) = best.unwrap_or_else(|| {
-        let plan = plan::plan(board);
-        let drawing = draw(board, &plan);
-        (0, plan, drawing)
-    });
+    let pad = |id: ItemId| board.item(id).is_some_and(|i| matches!(i.kind, Kind::Pad { .. }));
+    let mut wants = Vec::new();
+    for line in joined.airlines.iter().filter(|a| poured.contains(&a.net) && pad(a.from_item) && pad(a.to_item)) {
+        let into = |end: ItemId| -> Vec<usize> {
+            let cluster = joined.cluster.get(&end);
+            stands[&line.net].iter().filter(|(_, k)| Some(k) == cluster).map(|(c, _)| *c).collect()
+        };
+        let mut want = plan::Want::of(line);
+        want.into = into(want.to);
+        // From the end that has no pour to the end that has.
+        if want.into.is_empty() {
+            let back = into(want.from);
+            if !back.is_empty() {
+                (want.from, want.to, want.into) = (want.to, want.from, back);
+            }
+        }
+        wants.push(want);
+    }
+    wants.sort_by(|a, b| a.apart.total_cmp(&b.apart));
+    wants
+}
+
+/// How many connections are still open with `drawing` on the board and the pours filled round
+/// it.
+pub fn open(board: &Board, plan: &Plan, drawing: &Drawing) -> usize {
+    let (with, _) = onto(board, plan, drawing);
+    board::connectivity_poured(&with, &board::Pours::of(&with)).airlines.len()
+}
+
+/// Draws the plan, and while some strand cannot be drawn, lays its connection again barred
+/// from the gap its wire stuck in, and draws again: the rest of the plan stays, so what was
+/// drawn stays drawn. A gap's length is the most it can hold; what it does hold depends on
+/// what stands round it, and drawing is what finds that out. The plan is left as it was
+/// when fewest of its connections were open.
+fn settle(board: &Board, plan: &mut Plan, memo: &mut chain::Memo, said: &dyn Fn(&str, &Plan, Option<&Drawing>)) -> Drawing {
+    let mut best: Option<(usize, Plan, Drawing)> = None;
+    for _ in 0..ROUNDS {
+        let drawing = draw_with(board, plan, None, memo).0;
+        said("drawn", plan, Some(&drawing));
+        let open = plan.left.len() + drawing.undrawn.len();
+        let stuck: Vec<(usize, plan::space::GapKey)> =
+            drawing.undrawn.iter().filter_map(|u| Some((plan.sheets[u.layer].strands[u.strand].connection, u.gap.map(|g| plan::space::gap_key(g[0], g[1]))?))).collect();
+        if best.as_ref().is_none_or(|b| open < b.0) {
+            best = Some((open, plan.clone(), drawing));
+        }
+        if open == 0 || stuck.is_empty() {
+            break;
+        }
+        plan::again(board, plan, &stuck);
+        said("laid again", plan, None);
+    }
+    let (_, kept, drawing) = best.unwrap_or_else(|| (0, plan.clone(), Drawing::default()));
+    *plan = kept;
+    drawing
+}
+
+/// Plans a stripped board and draws the plan ([`settle`]).
+///
+/// A net with a pour is left to its pour: the other nets are planned and drawn first, the
+/// pours are filled round them, and only what the pours then leave apart is planned, each such
+/// connection to the nearest pad of the other part or to a via standing in its pour.
+pub fn route(board: &Board) -> (Plan, Drawing) {
+    let mut poured: Vec<u32> = board.zone_areas.iter().filter(|z| !z.kept && z.net != 0).map(|z| z.net).collect();
+    poured.sort_unstable();
+    poured.dedup();
+    let lines = board::connectivity_without_pours(board).airlines;
+    let mut memo = chain::Memo::default();
+    let times = std::env::var("WIRE_TIMES").is_ok();
+    let clock = std::time::Instant::now();
+    let said = |what: &str, plan: &Plan, drawing: Option<&Drawing>| {
+        if times {
+            eprintln!("{:7.2} s  {what}: {} strands, {} vias, {} left{}", clock.elapsed().as_secs_f64(), plan.sheets.iter().map(|s| s.laid().count()).sum::<usize>(), plan.vias.len(), plan.left.len(), drawing.map_or(String::new(), |d| format!(", {} drawn, {} not", d.wires.len(), d.undrawn.len())));
+        }
+    };
+    let mut plan = plan::start(board);
+    plan::add(board, &mut plan, plan::wants(&lines).into_iter().filter(|w| !poured.contains(&w.net)).collect());
+    said("planned", &plan, None);
+    let mut drawing = settle(board, &mut plan, &mut memo, &said);
+    // What the pours leave apart, and then what they leave apart once that is drawn: a wire
+    // laid to join one pad can cut the pour another was joined by.
+    for _ in 0..POURS {
+        if poured.is_empty() {
+            break;
+        }
+        let mut rest = left_by_pours(board, &plan, &drawing, &poured);
+        rest.retain(|w| !plan.wants.iter().any(|x| x.net == w.net && ((x.from, x.to) == (w.from, w.to) || (x.from, x.to) == (w.to, w.from))));
+        said(&format!("poured, {} left by the pours", rest.len()), &plan, None);
+        if rest.is_empty() {
+            break;
+        }
+        plan::add(board, &mut plan, rest);
+        said("planned", &plan, None);
+        drawing = settle(board, &mut plan, &mut memo, &said);
+    }
     (plan, drawing)
 }
+
+/// How many times the pours are filled to see what they leave apart.
+const POURS: usize = 3;
 
 /// The board with the drawing's copper on it: the wires as tracks and the plan's vias, and
 /// which items those are.

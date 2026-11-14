@@ -321,6 +321,10 @@ pub struct Board {
     pub pad_zone_connect: HashMap<ItemId, u8>,
     /// Zones, by index, that join no pad of their net unless the pad says otherwise.
     pub zones_without_pads: std::collections::HashSet<usize>,
+    /// Pads a zone joins by thermal spokes of which some must stay whole, with the zone, and the
+    /// gap the pour leaves round the pad: such a pad is joined to its pour only by its
+    /// [`Kind::Spoke`] items.
+    pub relief_pads: HashMap<(ItemId, usize), Nm>,
     /// Slotted holes: the two ends of a slot's centre line, its radius the item's `hole`'s. A
     /// slot is longer than the circle `hole` holds; [`Board::hole_shape`] gives all of it.
     pub hole_ends: HashMap<ItemId, (Point, Point)>,
@@ -433,6 +437,12 @@ fn slot_ends(position: [f64; 2], rotation_deg: f64, d: [f64; 2]) -> Option<(Poin
 /// other nets' holes cut out of them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ZoneArea {
+    /// Its number among the file's zones.
+    pub zone: usize,
+    /// Zones of higher priority are poured first, and the others round them.
+    pub priority: u32,
+    /// A block's zone: its copper is kept as laid, not poured again.
+    pub kept: bool,
     pub net: u32,
     pub layers: u64,
     pub outline: Shape,
@@ -525,6 +535,7 @@ impl Board {
             pad_clearances: HashMap::new(),
             pad_zone_connect: HashMap::new(),
             zones_without_pads: copper.zones.iter().enumerate().filter(|(_, z)| z.no_pads).map(|(i, _)| i).collect(),
+            relief_pads: Default::default(),
             hole_ends: HashMap::new(),
             ties: HashMap::new(),
             keepout_holes: HashMap::new(),
@@ -785,6 +796,9 @@ impl Board {
             if zone.outline.len() >= 3 {
                 let poly = |p: &Vec<[f64; 2]>| Shape::Polygon(p.iter().copied().map(Point::from_m).collect());
                 board.zone_areas.push(crate::model::ZoneArea {
+                    zone: z,
+                    priority: zone.priority,
+                    kept: blocks.iter().any(|b| b.zones.contains(&z)),
                     net: zone.net,
                     layers: mask(&zone.layers),
                     outline: poly(&zone.outline),

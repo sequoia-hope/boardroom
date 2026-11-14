@@ -142,6 +142,13 @@ pub fn connectivity_without_pours(board: &Board) -> Connectivity {
     joined_copper(board, false, None)
 }
 
+/// Connectivity with the pours as a refill would leave them round the board's copper as it
+/// stands (`pours`, [`crate::fill::Pours::of`] this board): each piece of pour joins the copper
+/// of its net that it reaches, and the pours in the file join nothing.
+pub fn connectivity_poured(board: &Board, pours: &crate::fill::Pours) -> Connectivity {
+    joined_copper_inner(board, false, None, Some(pours))
+}
+
 /// One net's part of [`connectivity`] (`with_pours`) or [`connectivity_without_pours`], found
 /// without looking at the other nets' copper.
 pub fn net_connectivity(board: &Board, net: u32, with_pours: bool) -> Connectivity {
@@ -149,10 +156,10 @@ pub fn net_connectivity(board: &Board, net: u32, with_pours: bool) -> Connectivi
 }
 
 fn joined_copper(board: &Board, with_pours: bool, only: Option<u32>) -> Connectivity {
-    joined_copper_inner(board, with_pours, only)
+    joined_copper_inner(board, with_pours, only, None)
 }
 
-fn joined_copper_inner(board: &Board, with_pours: bool, only: Option<u32>) -> Connectivity {
+fn joined_copper_inner(board: &Board, with_pours: bool, only: Option<u32>, pours: Option<&crate::fill::Pours>) -> Connectivity {
     let ids: Vec<ItemId> = board
         .items()
         .filter(|(_, it)| it.is_copper() && it.net != 0 && only.is_none_or(|n| it.net == n) && cluster_member(board, it, with_pours))
@@ -171,6 +178,23 @@ fn joined_copper_inner(board: &Board, with_pours: bool, only: Option<u32>) -> Co
                 let Some(o) = board.item(other) else { continue };
                 if o.net == item.net && o.is_copper() && o.on(layer) && cluster_member(board, o, with_pours) && sets.find(id) != sets.find(other) && joined(board, id, other) {
                     sets.join(id, other);
+                }
+            }
+        }
+    }
+    if let Some(pours) = pours {
+        // The first item each piece of pour was found to join: the rest join that.
+        let mut first: Vec<Option<ItemId>> = vec![None; pours.pieces()];
+        for &id in &ids {
+            let item = board.item(id).expect("listed above");
+            for layer in (0..board.layers.len()).filter(|l| item.on(*l)) {
+                for piece in pours.joined(board, id, layer) {
+                    match first[piece] {
+                        Some(other) => {
+                            sets.join(id, other);
+                        }
+                        None => first[piece] = Some(id),
+                    }
                 }
             }
         }

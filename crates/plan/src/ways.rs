@@ -100,6 +100,13 @@ pub struct Terms<'a> {
     pub ban: &'a [usize],
     /// Connections whose strands the way may not go across, whatever `cross` says.
     pub keep: &'a [usize],
+    /// Spots that stand in the net's pour, in a piece of it the way's far end is joined to: a
+    /// via at one ends the way, and costs `drop`. Only where vias are let.
+    pub into: &'a [usize],
+    pub drop: f64,
+    /// Gaps the way may not cross: those a wire for this connection could not be drawn
+    /// through.
+    pub avoid: &'a [crate::space::GapKey],
 }
 
 /// Where a via of `net` at spot `c` would stand on each layer, the triangle and the part of
@@ -149,7 +156,14 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
     let mut stands: HashMap<usize, Option<Vec<(usize, Region)>>> = HashMap::new();
     // The board with the plan's vias on it, made when the first spot is asked about.
     let mut with: Option<Board> = None;
-    let cheapest = terms.dear.iter().copied().fold(f64::MAX, f64::min);
+    // With a pour to end in, the far end's middle is no bound on what is left to go.
+    let barred = |sheet: &Sheet, e: usize| {
+        !terms.avoid.is_empty() && {
+            let [a, b] = sheet.space.edges[e].v.map(|v| sheet.space.verts[v]);
+            terms.avoid.contains(&crate::space::gap_key(a, b))
+        }
+    };
+    let cheapest = if terms.into.is_empty() || terms.via.is_none() { terms.dear.iter().copied().fold(f64::MAX, f64::min) } else { 0.0 };
     // The first crossings of the leg that leaves `from`, on each layer it is on.
     for (l, sheet) in sheets.iter().enumerate() {
         let Some(&o) = sheet.space.ends.get(&from) else { continue };
@@ -174,6 +188,13 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
     // A via at spot `c`, come to on layer `l` at `cost`: it may be left on any other layer.
     let arrive = |c: usize, l: usize, cost: f64, prev: Key, via: f64, best: &mut HashMap<Key, Seen>, heap: &mut BinaryHeap<Open>| {
         let p = spots.at[c];
+        if terms.into.contains(&c) {
+            let (key, cost) = ((l, VIA, c, GOAL), cost + terms.drop);
+            if best.get(&key).is_none_or(|b| cost < b.cost) {
+                best.insert(key, Seen { cost, prev: Some(prev), at: p, bend_at: p, bend_cost: cost, bend: None, starts: false, over: None });
+                heap.push(Open { order: cost, cost, key });
+            }
+        }
         for m in (0..sheets.len()).filter(|&m| m != l) {
             let (key, cost) = ((m, VIA, c, 0), cost + via);
             if best.get(&key).is_none_or(|b| cost < b.cost && !through(best, prev, key)) {
@@ -202,7 +223,7 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
             for (e, s) in sheet.doors(t, region) {
                 let Some(next) = sheet.space.edges[e].t.iter().flatten().copied().find(|&x| x != t) else { continue };
                 let ends = sheet.space.ends.get(&to).is_some_and(|&o| sheet.space.tris[next].inside == Some(o));
-                if !ends && (!sheet.space.free(next) || sheet.need(board, e, Some((s, net, width))) > sheet.space.width(e) + EPS) {
+                if !ends && (!sheet.space.free(next) || barred(sheet, e) || sheet.need(board, e, Some((s, net, width))) > sheet.space.width(e) + EPS) {
                     continue;
                 }
                 let there = sheet.crossing(board, e, s, me, p, goal);
@@ -259,7 +280,7 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
             for (e, s, corner) in sheet.ways_on(into, edge, slot) {
                 let Some(next) = sheet.space.edges[e].t.iter().flatten().copied().find(|&x| x != into) else { continue };
                 let ends = sheet.space.ends.get(&to).is_some_and(|&o| sheet.space.tris[next].inside == Some(o));
-                if !ends && !sheet.space.free(next) {
+                if !ends && (!sheet.space.free(next) || barred(sheet, e)) {
                     continue;
                 }
                 if !sheet.throat(board, into, corner, net, width) {
@@ -314,8 +335,10 @@ fn through(best: &HashMap<Key, Seen>, from: Key, key: Key) -> bool {
 fn legs(best: &HashMap<Key, Seen>, last: Key, from: End, to: End) -> (Vec<Leg>, Vec<usize>) {
     let mut legs: Vec<Leg> = Vec::new();
     let mut over: Vec<usize> = Vec::new();
-    let mut leg = Leg { layer: last.0, from: Stop::End(from), to: Stop::End(to), steps: Vec::new() };
-    let mut at = Some(last);
+    // A way that ends at a via in the pour: its last leg comes to that via.
+    let dropped = last.1 == VIA && last.3 == GOAL;
+    let mut leg = Leg { layer: last.0, from: Stop::End(from), to: if dropped { Stop::Spot(last.2) } else { Stop::End(to) }, steps: Vec::new() };
+    let mut at = if dropped { best[&last].prev } else { Some(last) };
     let mut steps = 0;
     while let Some(k) = at {
         steps += 1;

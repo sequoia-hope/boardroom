@@ -8,7 +8,6 @@
 //! (docs/one-system-spec.md, "Dependency rules").
 
 use board::{Board, Item as BoardItem, Kind, Nm, Point, Shape};
-use kicad::Copper;
 use scene::{AreaKind, Fill, Geom, Item, Prim, Scene};
 
 /// What [`load`] could not read.
@@ -32,7 +31,7 @@ pub fn load(pcb: &str, pro: &str, dru: &str) -> Result<(Board, Scene), LoadError
         rules.apply_custom(dru, "board.kicad_dru");
     }
     let board = Board::new(&model, &copper, rules);
-    let scene = view(&board, &copper);
+    let scene = view(&board);
     Ok((board, scene))
 }
 
@@ -113,9 +112,9 @@ fn item(board: &Board, it: &BoardItem) -> Option<Item> {
     })
 }
 
-/// The board as a scene. `copper` is the file's copper the board was built from, for pouring
-/// its zones as a refill would (our fill, a preview of KiCad's).
-pub fn view(board: &Board, copper: &Copper) -> Scene {
+/// The board as a scene, its zones poured as a refill would pour them (our fill, a preview of
+/// KiCad's).
+pub fn view(board: &Board) -> Scene {
     let mut s = Scene::new();
     s.set_layers(&board.layers);
     for (i, name) in board.nets.iter().enumerate().filter(|(_, n)| !n.is_empty()) {
@@ -144,7 +143,7 @@ pub fn view(board: &Board, copper: &Copper) -> Scene {
             next += 1;
         }
     }
-    let fills = board::fill_zones(board, copper)
+    let fills = board::fill_zones(board)
         .iter()
         .flat_map(|f| {
             f.rects.iter().map(move |r| {

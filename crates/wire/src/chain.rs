@@ -54,6 +54,18 @@ pub struct Stage {
     pub walls: Vec<Wall>,
 }
 
+/// The room in front of a corner that the strands between it and the wire have: the half of the
+/// disc of radius `r` about `at` that faces along the gap (`along`, a unit vector from the
+/// corner). The wire keeps out of it wherever it is, not only as it crosses the gap: a wire that
+/// leaves one pin of a row and runs under the next pins comes near their corners long before it
+/// crosses the gaps that end on them, and the wires of those pins come out between.
+#[derive(Debug, Clone, Copy)]
+pub struct Front {
+    pub at: P,
+    pub r: f64,
+    pub along: P,
+}
+
 /// A wire's course: its ends, the gaps it crosses in order, and what it passes on the way.
 #[derive(Debug, Clone, Default)]
 pub struct Course {
@@ -68,6 +80,8 @@ pub struct Course {
     /// Corners that hold lines and nothing more: those of the pads the wire ends on, which it
     /// need not keep from, at the distance the strands between leave it.
     pub holds: Vec<Corner>,
+    /// What the wire keeps out of wherever it is: the room in front of each corner of its gaps.
+    pub fronts: Vec<Front>,
     /// The pieces of wires already drawn that the plan has beside this one, each with the
     /// nearest the middles of the two may be and whether it is on this wire's left: the line
     /// along a piece at that distance is one the wire may take, and a piece on such a line
@@ -88,6 +102,19 @@ pub struct Course {
     pub least: f64,
     /// How far the directions are turned from the board's axes, radians.
     pub frame: f64,
+}
+
+/// Chains already searched for, each by its course: the search finds the same chain for the
+/// same course, and a board planned again after a small change has most of its courses as
+/// they were.
+#[derive(Default)]
+pub struct Memo(std::collections::HashMap<String, Result<Path, usize>>);
+
+impl Memo {
+    /// [`chain`], searched for only where this course has not been before.
+    pub fn chain(&mut self, course: &Course, most: u32) -> Result<Path, usize> {
+        self.0.entry(format!("{most} {course:?}")).or_insert_with(|| chain(course, most)).clone()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -222,6 +249,29 @@ impl Course {
             for w in here.walls.iter().chain(&self.walls) {
                 if let Some(t) = wall(o, w) {
                     stop = stop.min(t);
+                }
+            }
+            for f in &self.fronts {
+                // Where the stretch is within the disc, and where in front of the corner.
+                let w = sub(f.at, o);
+                let along = dot(w, d);
+                let off = dot(w, w) - along * along;
+                let r = f.r - TOL;
+                if r <= 0.0 || off >= r * r {
+                    continue;
+                }
+                let half = (r * r - off).sqrt();
+                let (mut t0, mut t1) = ((along - half).max(0.0), along + half);
+                let (h0, hd) = (-dot(w, f.along), dot(d, f.along));
+                if hd > 1e-12 {
+                    t0 = t0.max(-h0 / hd);
+                } else if hd < -1e-12 {
+                    t1 = t1.min(-h0 / hd);
+                } else if h0 < 0.0 {
+                    continue;
+                }
+                if t0 < t1 - 1e-9 {
+                    stop = stop.min(t0);
                 }
             }
             for c in &self.corners {

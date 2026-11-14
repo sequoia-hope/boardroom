@@ -1,7 +1,8 @@
 //! `wire BOARD.kicad_pcb OUT_DIR`: strips the board, plans it, draws the plan as copper, checks
 //! the copper, and writes `wires.json`, `routed.kicad_pcb`, one `plan.LAYER.svg` and one
 //! `wire.LAYER.svg` per layer that has pads, and a line of counts. `WIRE_WATCH=LAYER:STRAND` also
-//! writes `watch.svg`, that strand's course as the drawing saw it.
+//! writes `watch.svg`, that strand's course as the drawing saw it. `WIRE_POURS` tells what each
+//! pad of a poured net is joined to; `WIRE_TIMES` (in the library) tells each round's stages.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -19,19 +20,14 @@ fn main() {
     let mut board = original.clone();
     plan::strip(&mut board);
     let started = std::time::Instant::now();
-    // WIRE_WATCH=LAYER:STRAND writes that strand's course as watch.svg, for the first plan.
+    // WIRE_WATCH=LAYER:STRAND writes that strand's course as watch.svg.
     let watch = std::env::var("WIRE_WATCH").ok().and_then(|w| {
         let (l, s) = w.split_once(':')?;
         Some((l.parse().ok()?, s.parse().ok()?))
     });
-    let ((plan, drawing), watched) = match watch {
-        Some(_) => {
-            let plan = plan::plan(&board);
-            let (drawing, watched) = wire::draw_watching(&board, &plan, watch);
-            ((plan, drawing), watched)
-        }
-        None => (wire::route(&board), None),
-    };
+    let (plan, drawing) = wire::route(&board);
+    // The strand watched is drawn again, alone among the same wires, for its picture.
+    let watched = watch.and_then(|_| wire::draw_watching(&board, &plan, watch).1);
     let planned = started.elapsed().as_secs_f64();
     let drawn = started.elapsed().as_secs_f64();
     let (routed, new) = wire::onto(&board, &plan, &drawing);
@@ -54,7 +50,25 @@ fn main() {
             }
         }
     }
-    let open = board::connectivity_without_pours(&routed).airlines.len();
+    let pours = board::Pours::of(&routed);
+    let lines = board::connectivity_poured(&routed, &pours).airlines;
+    let open = lines.len();
+    let open_nets = lines.iter().fold(BTreeMap::new(), |mut m, a| {
+        *m.entry(routed.net_name(a.net).to_string()).or_insert(0) += 1;
+        m
+    });
+    if std::env::var("WIRE_POURS").is_ok() {
+        let joined = board::connectivity_poured(&routed, &pours);
+        for (id, item) in routed.items() {
+            if !board.zone_areas.iter().any(|z| z.net == item.net) || !item.is_copper() || matches!(item.kind, board::Kind::Pour { .. }) {
+                continue;
+            }
+            let Some(b) = routed.bbox(id) else { continue };
+            let pieces: Vec<(usize, Vec<usize>)> = (0..routed.layers.len()).map(|l| (l, pours.joined(&routed, id, l))).filter(|(_, p)| !p.is_empty()).collect();
+            let relief = board.zone_areas.iter().any(|z| routed.relief_pads.contains_key(&(id, z.zone)));
+            eprintln!("{:?} net {} at {:.2},{:.2} relief {relief} cluster {:?} pieces {pieces:?}", item.kind, routed.net_name(item.net), (b.min.x + b.max.x) as f64 / 2e6, (b.min.y + b.max.y) as f64 / 2e6, joined.cluster.get(&id));
+        }
+    }
     let out = Path::new(&args[2]);
     std::fs::create_dir_all(out).unwrap();
     if let Some(svg) = watched {
@@ -67,7 +81,7 @@ fn main() {
         if !sheet.space.ends.keys().any(|e| matches!(e, plan::End::Item(_))) && sheet.laid().count() == 0 {
             continue;
         }
-        std::fs::write(out.join(format!("wire.{}.svg", board.layers[l])), wire::draw::layer(&board, &plan, &drawing, l, &faults[l])).unwrap();
+        std::fs::write(out.join(format!("wire.{}.svg", board.layers[l])), wire::draw::layer(&board, &plan, &drawing, l, &faults[l], &pours.rects(l))).unwrap();
         std::fs::write(out.join(format!("plan.{}.svg", board.layers[l])), plan::draw::layer(&board, &plan, l)).unwrap();
         let wires: Vec<&wire::Wire> = drawing.wires.iter().filter(|w| w.layer == l).collect();
         layers.push(serde_json::json!({
@@ -95,6 +109,7 @@ fn main() {
             "vias": plan.vias.len(),
             "faults": rules,
             "open": open,
+            "open_nets": open_nets,
             "seconds": {"plan": planned, "draw": drawn},
         })
     );

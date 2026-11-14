@@ -52,8 +52,8 @@ pub fn layer(board: &Board, plan: &Plan, l: usize) -> String {
             What::Keepout => ("#f6dede", "#c88"),
         };
         if o.reach > 0.0 {
-            // A via of the plan: round, about its middle.
-            let _ = writeln!(s, "<circle cx='{:.3}' cy='{:.3}' r='{:.3}' fill='{fill}' stroke='{stroke}' stroke-width='{:.3}'/>", o.centre[0], o.centre[1], o.reach, thin * 2.0);
+            // A round thing, held as its middle or middle line: drawn as far out as it reaches.
+            let _ = writeln!(s, "<path d='{}' stroke='{fill}' stroke-width='{:.3}'/>", path(&o.poly, true), 2.0 * o.reach);
             continue;
         }
         let _ = writeln!(s, "<path d='{}' fill='{fill}' stroke='{stroke}' stroke-width='{:.3}'/>", path(&o.poly, true), thin * 2.0);

@@ -64,9 +64,6 @@ pub struct Spots {
     pub radius: f64,
     /// How far apart the middles of two vias must be, mm.
     pub apart: f64,
-    /// Room taken off gaps, mm, each gap told by its two corners ([`gap_key`]): what drawing
-    /// has shown a gap does not hold, for all that its length says.
-    pub less: HashMap<GapKey, f64>,
 }
 
 /// A gap by the places of its two corners, to a nanometre, the lesser first: the same gap in
@@ -176,6 +173,60 @@ pub fn outline(shape: &Shape) -> Vec<P> {
     }
 }
 
+/// A round shape as what it is: its middle (a triangle [`VIA_CORNER`] across) or its middle
+/// line (a sliver that wide), and how far it reaches from there. None for a shape that is not
+/// round. A circle taken as a polygon has corners that stand out past the circle or sides
+/// that cut inside it, and one track between two header pins fits by less than either.
+pub fn slim(shape: &Shape) -> Option<(Vec<P>, f64)> {
+    let (a, b, r) = match shape {
+        Shape::Capsule { a, b, r } => (mm(*a), mm(*b), *r as f64 / 1e6),
+        Shape::Polygon(p) => oval(&p.iter().map(|&q| mm(q)).collect::<Vec<P>>())?,
+    };
+    let long = dist(a, b);
+    if long < 4.0 * VIA_CORNER {
+        let poly = (0..3).map(|i| {
+            let t = std::f64::consts::PI * (0.5 + 2.0 * i as f64 / 3.0);
+            [a[0] + VIA_CORNER * t.cos(), a[1] + VIA_CORNER * t.sin()]
+        });
+        return Some((poly.collect(), r + VIA_CORNER));
+    }
+    let n = [-(b[1] - a[1]) / long * VIA_CORNER, (b[0] - a[0]) / long * VIA_CORNER];
+    Some((vec![[a[0] + n[0], a[1] + n[1]], [b[0] + n[0], b[1] + n[1]], [b[0] - n[0], b[1] - n[1]], [a[0] - n[0], a[1] - n[1]]], r + VIA_CORNER))
+}
+
+/// How far a polygon's corners may be from an oval's edge for the polygon to be that oval, mm.
+const ROUND: f64 = 0.004;
+
+/// The oval a polygon was made from, if it is one: the two ends of its middle line and its
+/// radius, every corner within [`ROUND`] inside its edge and none outside. An oval or round pad
+/// comes from the file as a polygon of many corners.
+fn oval(poly: &[P]) -> Option<(P, P, f64)> {
+    if poly.len() < 12 {
+        return None;
+    }
+    // Its length is between the two corners farthest apart; its width is twice the farthest
+    // any corner is from the line between them.
+    let first = (0..poly.len()).max_by(|&x, &y| dist(poly[0], poly[x]).total_cmp(&dist(poly[0], poly[y])))?;
+    let other = (0..poly.len()).max_by(|&x, &y| dist(poly[first], poly[x]).total_cmp(&dist(poly[first], poly[y])))?;
+    let (p, q) = (poly[first], poly[other]);
+    let long = dist(p, q);
+    if long <= 0.0 {
+        return None;
+    }
+    let u = [(q[0] - p[0]) / long, (q[1] - p[1]) / long];
+    let r = poly.iter().map(|c| ((c[0] - p[0]) * u[1] - (c[1] - p[1]) * u[0]).abs()).fold(0.0, f64::max);
+    // A circle's corners are all as far apart as its two farthest: its radius is half that.
+    let r = r.min(long / 2.0);
+    let (a, b) = ([p[0] + u[0] * r, p[1] + u[1] * r], [q[0] - u[0] * r, q[1] - u[1] * r]);
+    let (a, b) = if long - 2.0 * r < 4.0 * VIA_CORNER { ([(p[0] + q[0]) / 2.0, (p[1] + q[1]) / 2.0], [(p[0] + q[0]) / 2.0, (p[1] + q[1]) / 2.0]) } else { (a, b) };
+    let from = |c: P| if dist(a, b) > 0.0 { point_segment(c, a, b) } else { dist(c, a) };
+    let far = poly.iter().map(|&c| from(c)).fold(0.0, f64::max);
+    let near = poly.iter().map(|&c| from(c)).fold(f64::MAX, f64::min);
+    // And no side cuts far inside: the middle of each is on the edge too.
+    let sides = (0..poly.len()).map(|i| from([(poly[i][0] + poly[(i + 1) % poly.len()][0]) / 2.0, (poly[i][1] + poly[(i + 1) % poly.len()][1]) / 2.0])).fold(f64::MAX, f64::min);
+    (far - near <= ROUND && far - sides <= 4.0 * ROUND).then_some((a, b, far))
+}
+
 /// A polygon's corners may move this far when it is made simpler, mm: a round pad comes as
 /// hundreds of corners, and each is a vertex of the triangulation.
 const FINE: f64 = 0.01;
@@ -218,10 +269,10 @@ impl Space {
         let mut ends = HashMap::new();
         let opened = |opening: Option<(u64, Nm)>| opening.filter(|o| o.0 & (1 << layer) != 0).map_or(0.0, |o| (o.1 + board.mask_margin()) as f64 / 1e6);
         let add = |what, net, item: Option<ItemId>, shape: &Shape, obstacles: &mut Vec<Obstacle>| {
-            let poly = outline(shape);
+            let (poly, reach) = slim(shape).unwrap_or_else(|| (outline(shape), 0.0));
             if poly.len() >= 3 {
                 let mask = if what == What::Pad { opened(item.and_then(|id| board.mask_openings.get(&id).copied())) } else { 0.0 };
-                obstacles.push(Obstacle { what, net, item, centre: centre(&poly), poly, reach: 0.0, mask });
+                obstacles.push(Obstacle { what, net, item, centre: centre(&poly), poly, reach, mask });
             }
         };
         for (id, item) in board.items() {
@@ -274,9 +325,38 @@ impl Space {
                     .fold(f64::MAX, f64::min)
             };
             of.sort_by(|a, b| room(b.0, b.1.net).total_cmp(&room(a.0, a.1.net)).then(a.0.cmp(&b.0)));
+            // A round pad is held as its middle line: a spoke starts at the pad's middle, and
+            // only the part of it past the pad's edge is there to keep from.
+            let round = board.item(pad).and_then(|p| slim(&p.shape)).map(|(line, reach)| (line[0], line[line.len() - 2], reach));
             for (id, item) in of.into_iter().take(need as usize) {
+                let shape = match (&item.shape, round) {
+                    (Shape::Polygon(c), Some((a, b, reach))) if c.len() == 4 => {
+                        // Its corners run near, far, far, near: each near one is moved out
+                        // along the spoke to the pad's edge.
+                        let c: Vec<P> = c.iter().map(|&q| mm(q)).collect();
+                        let out = |near: P, far: P| -> Option<P> {
+                            let long = dist(near, far);
+                            let at = |t: f64| [near[0] + (far[0] - near[0]) * t / long, near[1] + (far[1] - near[1]) * t / long];
+                            let (mut lo, mut hi) = (0.0, long);
+                            if point_segment(far, a, b) <= reach {
+                                return None;
+                            }
+                            if point_segment(near, a, b) >= reach {
+                                return Some(near);
+                            }
+                            for _ in 0..30 {
+                                let mid = (lo + hi) / 2.0;
+                                if point_segment(at(mid), a, b) < reach { lo = mid } else { hi = mid }
+                            }
+                            Some(at(hi))
+                        };
+                        let (Some(n0), Some(n3)) = (out(c[0], c[1]), out(c[3], c[2])) else { continue };
+                        Shape::Polygon([n0, c[1], c[2], n3].iter().map(|q| board::Point::new((q[0] * 1e6).round() as i64, (q[1] * 1e6).round() as i64)).collect())
+                    }
+                    _ => item.shape.clone(),
+                };
                 let before = obstacles.len();
-                add(What::Copper, item.net, Some(id), &item.shape, &mut obstacles);
+                add(What::Copper, item.net, Some(id), &shape, &mut obstacles);
                 if let Some(o) = obstacles.get_mut(before) {
                     o.mask = clearance as f64 / 1e6;
                 }
@@ -394,8 +474,7 @@ impl Space {
         let edge = &self.edges[e];
         let (a, b) = (self.verts[edge.v[0]], self.verts[edge.v[1]]);
         let (x, y) = ((b[0] - a[0]).abs(), (b[1] - a[1]).abs());
-        let less = if self.spots.less.is_empty() { 0.0 } else { self.spots.less.get(&gap_key(a, b)).copied().unwrap_or(0.0) };
-        (x.max(y).max((x + y) * std::f64::consts::FRAC_1_SQRT_2) - less).max(0.0)
+        x.max(y).max((x + y) * std::f64::consts::FRAC_1_SQRT_2)
     }
 
     /// The plan's vias here: the middle and the net of each.
@@ -421,7 +500,7 @@ impl Space {
         let o = &self.obstacles[k];
         match o.what {
             What::Edge => board.rules.min_copper_edge_clearance * 1e3,
-            What::Hole => board.rules.min_hole_clearance * 1e3,
+            What::Hole => board.rules.min_hole_clearance * 1e3 + o.reach,
             What::Keepout => 0.0,
             What::Pad | What::Copper if o.net == net && net != 0 => 0.0,
             // A pad that asks for more than its net does is given it, as the checker gives it.

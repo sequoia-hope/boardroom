@@ -131,10 +131,11 @@ to red at full. Each connection is a strand through the gaps it passes in order,
 cross on a layer, and a via is put in only where a connection wants one. A connection with no way has the connections in its way
 lifted and laid again. <b>The plan drawn</b> (middle): each strand, alone, as pieces in 0/45/90 that each pass an end of the wire or
 lie as near a corner as the wire may come to it, given the strands the plan has between; so wires that pass a corner together come
-out side by side at even pitch, whatever order they are drawn in. Every wire is put to the exact checker and kept only if it passes.
-Where a wire cannot be drawn, the gap it stuck in is counted as narrower and the board is planned again, a few times; the round
-that leaves fewest connections open is the one shown. A dashed red line is a strand still not drawn; a dashed yellow one a connection
-the plan has no strand for. <b>The designer's copper</b> (right) is the board as its designer routed it.</p>
+out side by side at even pitch. Every wire is put to the exact checker and kept only if it passes. Where a wire cannot be drawn, its
+connection alone is planned again, barred from the gap it stuck in, and the rest stays as drawn. <b>A net with a pour is left to its
+pour</b>: the other nets are planned and drawn first, the pours are filled round them (pale, in the net's colour), and only what a pour
+leaves apart is planned, to the nearest pad or to a via standing in the pour. A dashed red line is a strand still not drawn; a dashed
+yellow one a connection the plan has no strand for. <b>The designer's copper</b> (right) is the board as its designer routed it.</p>
 {''.join(rows)}
 """
     OUT.mkdir(parents=True, exist_ok=True)
