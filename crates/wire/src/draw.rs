@@ -98,8 +98,12 @@ pub fn layer(board: &Board, plan: &Plan, drawing: &Drawing, l: usize, faults: &[
 
 /// One strand's course as SVG: obstacles, where it may bend (thin blue), each corner it keeps
 /// from as a circle of that distance (green where the corner is on the wire's left, purple on
-/// its right), the sides it keeps from (orange), and the wire found (black).
-pub fn course(sheet: &plan::Sheet, course: &crate::chain::Course, found: Option<&crate::chain::Path>) -> String {
+/// its right), the sides it keeps from (orange), and the wire found (black). Also the wires
+/// already drawn on the layer (grey-blue, at their widths), the strand as it lies in the plan
+/// (`line`, dashed red), the part of each gap the wire may cross in (thick orange), and the
+/// room in front of each corner that it keeps out of (the half of a pink circle its tick is
+/// on).
+pub fn course(sheet: &plan::Sheet, course: &crate::chain::Course, found: Option<&crate::chain::Path>, drawn: &[&crate::Wire], line: &[P]) -> String {
     let all: Vec<P> = course.within.iter().flatten().copied().chain([course.a, course.b]).collect();
     let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
     for p in &all {
@@ -128,8 +132,20 @@ pub fn course(sheet: &plan::Sheet, course: &crate::chain::Course, found: Option<
     for t in &course.within {
         let _ = writeln!(s, "<path d='{}' stroke='#8ad' stroke-width='{:.4}'/>", path(t, true), thin);
     }
+    for w in drawn {
+        let _ = writeln!(s, "<path d='{}' stroke='#9ab' stroke-opacity='0.7' stroke-width='{:.4}'><title>strand {} net {}</title></path>", path(&w.pts, false), w.width, w.strand, w.net);
+    }
     for g in &course.gaps {
+        let at = |u: f64| [g.ends[0][0] + (g.ends[1][0] - g.ends[0][0]) * u, g.ends[0][1] + (g.ends[1][1] - g.ends[0][1]) * u];
         let _ = writeln!(s, "<path d='{}' stroke='#fa0' stroke-width='{:.4}'/>", path(&g.ends, false), thin);
+        let _ = writeln!(s, "<path d='{}' stroke='#fa0' stroke-width='{:.4}'/>", path(&[at(g.lo), at(g.hi)], false), thin * 4.0);
+    }
+    for f in &course.fronts {
+        let _ = writeln!(s, "<circle cx='{:.4}' cy='{:.4}' r='{:.4}' stroke='#f6a' stroke-width='{:.4}'/>", f.at[0], f.at[1], f.r, thin);
+        let _ = writeln!(s, "<path d='{}' stroke='#f6a' stroke-width='{:.4}'/>", path(&[f.at, [f.at[0] + f.along[0] * f.r, f.at[1] + f.along[1] * f.r]], false), thin);
+    }
+    if line.len() >= 2 {
+        let _ = writeln!(s, "<path d='{}' stroke='#d00' stroke-width='{:.4}' stroke-dasharray='{:.4} {:.4}'/>", path(line, false), thin * 2.0, thin * 6.0, thin * 4.0);
     }
     for c in course.corners.iter().chain(course.stages.iter().flat_map(|s| &s.corners)) {
         let _ = writeln!(s, "<circle cx='{:.4}' cy='{:.4}' r='{:.4}' stroke='{}' stroke-width='{:.4}'/>", c.at[0], c.at[1], c.r, if c.left { "#2a2" } else { "#a2a" }, thin * 1.5);

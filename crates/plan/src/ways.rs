@@ -135,6 +135,10 @@ fn standing(board: &Board, sheets: &[Sheet], with: &mut Option<Board>, c: usize,
 /// Whether the exact checker lets a via of `net` stand at spot `c` beside the plan's others.
 fn exact(board: &Board, sheets: &[Sheet], with: &mut Option<Board>, c: usize, net: u32) -> bool {
     let Some(first) = sheets.first() else { return false };
+    // Nor may it shut the way out of another net's pin.
+    if first.space.spots.shuts(first.space.spots.at[c], net) {
+        return false;
+    }
     let with = with.get_or_insert_with(|| {
         let mut with = board.clone();
         for (at, of) in first.space.vias() {

@@ -64,6 +64,23 @@ pub struct Spots {
     pub radius: f64,
     /// How far apart the middles of two vias must be, mm.
     pub apart: f64,
+    /// What a track of another net keeps from a via's copper for the sake of its hole, mm
+    /// ([`Obstacle::hole`]).
+    pub hole: f64,
+    /// The way straight out of each pad of a fine-pitch part: from the pad's outer end, a
+    /// little way on, with the pad's net. No via of another net stands where a track along it
+    /// could not pass ([`Spots::shuts`]): a pin between two others has no other way out, and
+    /// a via, unlike a strand, is not lifted to let it through.
+    pub ways_out: Vec<(P, P, u32)>,
+    /// How near the middle of a via of another net may be to a way out, mm.
+    pub out_keep: f64,
+}
+
+impl Spots {
+    /// Whether a via of `net` at `p` would shut the way out of a pad of another net.
+    pub fn shuts(&self, p: P, net: u32) -> bool {
+        self.ways_out.iter().any(|&(a, b, of)| of != net && point_segment(p, a, b) < self.out_keep)
+    }
 }
 
 /// A gap by the places of its two corners, to a nanometre, the lesser first: the same gap in
@@ -109,6 +126,31 @@ pub struct Obstacle {
     /// What a track of another net keeps from its copper so as not to be bared in its solder
     /// mask opening, mm: nothing where it has none on this layer.
     pub mask: f64,
+    /// How far its copper stands out past the polygon, mm: a shape of many corners (a pad
+    /// with round corners) is held as a simpler one, and the corners left out lie outside it.
+    pub past: f64,
+    /// What a track of another net keeps from its copper so as to keep the rules' distance
+    /// from the hole drilled in it, mm: what the copper round the hole is narrower than that
+    /// distance by, and nothing where it has no hole. A small via's ring is narrower than the
+    /// hole clearance, and a track that keeps only its clearance from the ring is too near
+    /// the hole.
+    pub hole: f64,
+}
+
+/// [`Obstacle::hole`] for copper `shape` with a hole of radius `r` between `a` and `b` in it,
+/// mm.
+pub fn hole_keep(board: &Board, shape: &Shape, (a, b, r): (Point, Point, Nm)) -> f64 {
+    // The least copper from the hole's edge to the shape's.
+    let ring = [a, b]
+        .iter()
+        .map(|&h| match shape {
+            Shape::Capsule { a, b, r } => *r as f64 / 1e6 - point_segment(mm(h), mm(*a), mm(*b)),
+            Shape::Polygon(p) if shape.contains(h) => (0..p.len()).map(|i| point_segment(mm(h), mm(p[i]), mm(p[(i + 1) % p.len()]))).fold(f64::MAX, f64::min),
+            Shape::Polygon(_) => 0.0,
+        })
+        .fold(f64::MAX, f64::min)
+        - r as f64 / 1e6;
+    (board.rules.min_hole_clearance * 1e3 - ring.max(0.0)).max(0.0)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -157,6 +199,9 @@ pub struct Space {
     /// ([`Space::leant_on`]).
     #[serde(skip)]
     cap: Vec<f64>,
+    /// For each corner, the far corners of the obstacle sides that meet at it.
+    #[serde(skip)]
+    sides_at: Vec<Vec<usize>>,
 }
 
 /// How far out from everything on it a board with no edge drawn at all is taken to reach, nm.
@@ -316,7 +361,23 @@ impl Space {
             let (poly, reach) = slim(shape).unwrap_or_else(|| (outline(shape), 0.0));
             if poly.len() >= 3 {
                 let mask = if what == What::Pad { opened(item.and_then(|id| board.mask_openings.get(&id).copied())) } else { 0.0 };
-                obstacles.push(Obstacle { what, net, item, centre: centre(&poly), poly, reach, mask });
+                // Copper with a hole in it: a pad's, a via's.
+                let drilled = item.filter(|_| what != What::Hole).and_then(|id| match board.hole_shape(id, board.item(id)?)? {
+                    Shape::Capsule { a, b, r } => Some((a, b, r)),
+                    Shape::Polygon(_) => None,
+                });
+                let hole = drilled.map_or(0.0, |h| hole_keep(board, shape, h));
+                // The corners its simpler outline leaves out, and how far the farthest is.
+                let past = match shape {
+                    Shape::Polygon(all) if reach == 0.0 && all.len() > poly.len() => all
+                        .iter()
+                        .map(|&q| mm(q))
+                        .filter(|&q| !inside(q, &poly))
+                        .map(|q| (0..poly.len()).map(|i| point_segment(q, poly[i], poly[(i + 1) % poly.len()])).fold(f64::MAX, f64::min))
+                        .fold(0.0, f64::max),
+                    _ => 0.0,
+                };
+                obstacles.push(Obstacle { what, net, item, centre: centre(&poly), poly, reach, mask, hole, past });
             }
         };
         for (id, item) in board.items() {
@@ -409,7 +470,7 @@ impl Space {
         let loops: Vec<Vec<P>> = bounds(board).iter().map(|l| l.iter().map(|&p| mm(p)).collect()).collect();
         let first_edge = obstacles.len();
         for l in &loops {
-            obstacles.push(Obstacle { what: What::Edge, net: 0, item: None, centre: centre(l), poly: l.clone(), reach: 0.0, mask: 0.0 });
+            obstacles.push(Obstacle { what: What::Edge, net: 0, item: None, centre: centre(l), poly: l.clone(), reach: 0.0, mask: 0.0, hole: 0.0, past: 0.0 });
         }
         let first_site = obstacles.len();
         for (k, &(at, net)) in vias.iter().enumerate() {
@@ -418,7 +479,7 @@ impl Space {
                 let a = std::f64::consts::PI * (0.5 + 2.0 * i as f64 / 3.0);
                 [at[0] + VIA_CORNER * a.cos(), at[1] + VIA_CORNER * a.sin()]
             });
-            obstacles.push(Obstacle { what: What::Pad, net, item: None, centre: at, poly: poly.collect(), reach: spots.radius + VIA_CORNER, mask: opened(Some(board.via_openings)) });
+            obstacles.push(Obstacle { what: What::Pad, net, item: None, centre: at, poly: poly.collect(), reach: spots.radius + VIA_CORNER, mask: opened(Some(board.via_openings)), hole: spots.hole, past: 0.0 });
         }
 
         // Corners, one vertex per place (to a nanometre), and each polygon's sides as constraints.
@@ -523,8 +584,16 @@ impl Space {
                 tri_spots[t].push(k);
             }
         }
-        let mut space = Space { layer, obstacles, verts, vert_of, tris, edges, ends, sites, spots: spots.clone(), spot_tri, tri_spots, cap: Vec::new() };
+        let mut space = Space { layer, obstacles, verts, vert_of, tris, edges, ends, sites, spots: spots.clone(), spot_tri, tri_spots, cap: Vec::new(), sides_at: Vec::new() };
         space.cap = (0..space.edges.len()).map(|e| space.leant_on(e)).collect();
+        let mut sides_at = vec![Vec::new(); space.verts.len()];
+        for (e, edge) in space.edges.iter().enumerate() {
+            if !space.gap(e) {
+                sides_at[edge.v[0]].push(edge.v[1]);
+                sides_at[edge.v[1]].push(edge.v[0]);
+            }
+        }
+        space.sides_at = sides_at;
         space
     }
 
@@ -586,6 +655,24 @@ impl Space {
         room
     }
 
+    /// The room between corner `v` and a point `p` that is to be a corner too (a via's middle):
+    /// how far apart they are, or less where a side of `v`'s obstacle leans over the line
+    /// between them, as [`Space::leant_on`] has it for a gap that is there: what passes
+    /// between the two passes between `p` and that side.
+    pub fn room_to(&self, v: usize, p: P) -> f64 {
+        let x = self.verts[v];
+        let mut room = dist(x, p);
+        for &far in self.sides_at.get(v).map_or(&[][..], |s| s.as_slice()) {
+            let y = self.verts[far];
+            let l2 = dist(x, y).powi(2);
+            let along = ((p[0] - x[0]) * (y[0] - x[0]) + (p[1] - x[1]) * (y[1] - x[1])) / l2.max(1e-18);
+            if along > 0.0 && along <= 1.0 {
+                room = room.min(dist(p, lerp(x, y, along)));
+            }
+        }
+        room
+    }
+
     /// Whether an edge is a gap: not a side of an obstacle, which no strand passes along.
     pub fn gap(&self, e: usize) -> bool {
         let [a, b] = self.edges[e].v.map(|v| self.vert_of[v]);
@@ -639,7 +726,7 @@ impl Space {
             // A pad that asks for more than its net does is given it, as the checker gives it.
             What::Pad | What::Copper => {
                 let own = o.item.and_then(|i| board.pad_clearances.get(&i).copied()).unwrap_or(0);
-                (board.clearance(net, o.net).max(own) as f64 / 1e6).max(o.mask) + o.reach
+                (board.clearance(net, o.net).max(own) as f64 / 1e6).max(o.mask).max(o.hole) + o.reach + o.past
             }
         }
     }

@@ -4,7 +4,9 @@ rubber-band sketch (crates/plan), the plan drawn as copper (crates/wire), and th
 
     prototype.py [--set look|ours] [--only id,...] [--look RUN] [--no-kicad] [--cap SECONDS]
 
---only runs those boards again and leaves the rest of the page as it was.
+--only runs those boards again and leaves the rest of the page as it was. With WIRE_FIRST set
+the router stops at its first plan and drawing (nothing laid again, no pours), and the page says
+so of each board run that way: for a board the whole run does not finish.
 
 Needs `cargo build --release -p wire --example wire` and `cargo build --release -p kicad-text`. The designer's pictures are the look set's
 (lookset.py RUN, by default the baseline's). Writes LAB/planned/prototype/: index.html and, per
@@ -161,6 +163,7 @@ def main():
                         f"<figure><figcaption>the plan drawn: {e(note)}</figcaption>{pic('wire')}</figure>"
                         f"<figure><figcaption>{beside}</figcaption>{designer}</figure></div>")
         why = "; ".join(f"{n}: {e(w)}" for w, n in c["why"].items())
+        first = "<p class='bad'>The first pass only: the whole run was stopped unfinished, so nothing here was laid again and the nets with pours were not routed at all.</p>" if "WIRE_FIRST" in os.environ else ""
         faults = ", ".join(f"{n} {e(t)}" for t, n in c["faults"].items()) or "none"
         text = (f"<p>The plan: <b>{c['strands']}</b> strands with <b>{c['vias']}</b> vias, <b>{c['left']}</b> connections with no strand. "
                 f"The drawing: <b>{c['wires']}</b> strands drawn" + (f" ({c['as_planned']} of them at the plan's own angles)" if c.get('as_planned') else "")
@@ -176,7 +179,7 @@ def main():
                 new = ", ".join(f"{n} {e(t)}" for t, n in sorted(k[2].items())) or "none"
                 text += f"<p>KiCad, after a refill: <b>{k[0]}</b> unconnected (the bare board has {k[1]}), errors the drawn copper adds: <b>{new}</b>.</p>"
                 (out / "kicad.json").write_text(json.dumps({"unconnected": k[0], "bare_unconnected": k[1], "new_errors": k[2]}, indent=1))
-        rows[bid] = f"<h2>{e(title)}</h2>{text}" + "".join(figs)
+        rows[bid] = f"<h2>{e(title)}</h2>{first}{text}" + "".join(figs)
     # Each board's part of the page is kept beside its files: a run of some boards (--only)
     # leaves the others on the page as they were.
     for bid, row in rows.items():

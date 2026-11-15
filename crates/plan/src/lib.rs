@@ -12,7 +12,10 @@
 //! the plan left as it is. A connection ends on its pad or on any pad already joined to it
 //! ([`Plan::joined`]), and is as wide as its net's class asks unless it has no way at that
 //! width ([`wide`]). A part whose pads stand nearer each other than vias may can have its way
-//! out settled for the whole part before anything else is laid ([`escape`]).
+//! out settled for the whole part before anything else is laid ([`escape`]); without that, no
+//! via of another net is put in the way straight out of such a pad ([`Spots::shuts`]). A
+//! track keeps from a via what its hole asks as well as what its copper does
+//! ([`space::Obstacle::hole`]).
 
 pub mod carry;
 pub mod draw;
@@ -114,10 +117,16 @@ pub fn poured(board: &Board) -> Vec<f64> {
         .collect()
 }
 
-/// A net's track width, mm: its class's.
+/// A net's track width, mm: its class's, and no less than the rules let a track of it be.
 pub fn width(board: &Board, net: u32) -> f64 {
     let class = board.rules.class_of(board.net_name(net));
-    class.map_or(board.rules.min_track_width, |c| c.track_width.max(board.rules.min_track_width)) * 1e3
+    (class.map_or(board.rules.min_track_width, |c| c.track_width.max(board.rules.min_track_width)) * 1e3).max(least_width(board, net))
+}
+
+/// The least a track of `net` may be wide, mm: the board's least, or what a custom rule asks
+/// of the net (a supply rail's width for its current).
+fn least_width(board: &Board, net: u32) -> f64 {
+    (board.rules.min_track_width * 1e3).max(board.min_track_width_of(net) as f64 / 1e6)
 }
 
 /// The track width a connection is laid at, mm: its net's class's, unless it has been made
@@ -130,13 +139,13 @@ pub fn wide(board: &Board, want: &Want) -> f64 {
 const NARROWEST: f64 = 0.25;
 
 /// Makes a connection narrower, if it may be: half as wide, and no less than the least the
-/// board's rules let a track be, nor than [`NARROWEST`] of its class's width (a board may give
-/// no least at all). A class's width is what its tracks are drawn at by default, and no rule:
+/// board's rules let a track of its net be, nor than [`NARROWEST`] of its class's width (a
+/// board may give no least at all). A class's width is what its tracks are drawn at by default, and no rule:
 /// the designers lay narrower where that is what fits (KiwiSDR's antenna board asks for 1 mm,
 /// and 261 of its 420 pieces of track are 0.25 mm).
 fn narrower(board: &Board, want: &mut Want) -> bool {
     let now = wide(board, want);
-    let least = (board.rules.min_track_width * 1e3).max(NARROWEST * width(board, want.net));
+    let least = least_width(board, want.net).max(NARROWEST * width(board, want.net));
     if want.stub || now <= least + 1e-9 {
         return false;
     }
@@ -200,16 +209,24 @@ pub(crate) fn via_item(board: &Board, at: space::P, net: u32) -> board::Item {
 /// two neighbours, and the point farthest from the corners of each free triangle of the bare
 /// layers; each kept only where the exact checker lets a via of no net stand on the bare board.
 pub fn via_spots(board: &Board, tight: bool) -> Spots {
-    let (r, _) = via_size(board);
+    let (r, drill) = via_size(board);
+    let centre = board::Point::new(0, 0);
+    // What a track keeps from a via's copper: its clearance, or more where the via's ring is
+    // narrower than the rules keep copper from a hole.
+    let hole = space::hole_keep(board, &board::Shape::Capsule { a: centre, b: centre, r }, (centre, centre, drill));
+    let keep = board.clearance(0, 0).max(board::nm(hole / 1e3));
+    // Two vias as near as they may stand: copper from copper, copper from the other's hole,
+    // hole from hole.
+    let apart = (2 * r + board.clearance(0, 0)).max(r + drill + board::nm(board.rules.min_hole_clearance)).max(2 * drill + board::nm(board.rules.min_hole_to_hole));
     // (A board whose outline does not close has the box round it for one.)
     let bounds = space::bounds(board);
     let outer = bounds.first();
     let box_ = outer.map_or(board::BBox::of([board::Point::new(0, 0)]), |o| board::BBox::of(o.iter().copied()));
     // A little over what a track between two vias needs: a via stands in the triangulation as
     // a triangle about its middle, and the gap between two is that much short of their pitch.
-    let pitch = 2 * r + 2 * board.clearance(0, 0) + board::nm(board.rules.min_track_width.max(width(board, 0) / 1e3)) + (8.0 * space::VIA_CORNER * 1e6) as i64;
+    let pitch = 2 * r + 2 * keep + board::nm(board.rules.min_track_width.max(width(board, 0) / 1e3)) + (8.0 * space::VIA_CORNER * 1e6) as i64;
     // For fan-outs: as near each other as two vias may stand.
-    let pitch = if tight { 2 * r + board.clearance(0, 0) + (8.0 * space::VIA_CORNER * 1e6) as i64 } else { pitch };
+    let pitch = if tight { apart + (8.0 * space::VIA_CORNER * 1e6) as i64 } else { pitch };
     let mut scratch = board.clone();
     let mut at = Vec::new();
     let mut y = box_.min.y + pitch / 2;
@@ -255,7 +272,64 @@ pub fn via_spots(board: &Board, tight: bool) -> Spots {
             scratch.remove(id);
         }
     }
-    Spots { at, radius: r as f64 / 1e6, apart: (2 * r + board.clearance(0, 0)) as f64 / 1e6 }
+    let apart = apart as f64 / 1e6;
+    // Not for fan-outs: there each pad's via has its own place, beside its neighbours'.
+    let ways_out = if tight { Vec::new() } else { ways_out(board, apart, pitch as f64 / 1e6) };
+    Spots { at, radius: r as f64 / 1e6, apart, hole, ways_out, out_keep: (r + keep) as f64 / 1e6 + width(board, 0) / 2.0 }
+}
+
+/// The way straight out of each pad that stands nearer another pad of its part than two vias
+/// may stand (`apart`), and is longer than it is wide: from its end away from the part's
+/// middle, `far` mm on along its length, with its net.
+fn ways_out(board: &Board, apart: f64, far: f64) -> Vec<(space::P, space::P, u32)> {
+    let mid = |id: ItemId| board.bbox(id).map(|b| [(b.min.x + b.max.x) as f64 / 2e6, (b.min.y + b.max.y) as f64 / 2e6]);
+    let pads: Vec<(ItemId, usize, u64, space::P, u32)> = board
+        .items()
+        .filter_map(|(id, item)| match item.kind {
+            Kind::Pad { footprint, .. } if item.layers.count_ones() == 1 => Some((id, footprint, item.layers, mid(id)?, item.net)),
+            _ => None,
+        })
+        .collect();
+    let mut parts: std::collections::HashMap<(usize, u64), Vec<usize>> = std::collections::HashMap::new();
+    for (k, p) in pads.iter().enumerate() {
+        parts.entry((p.1, p.2)).or_default().push(k);
+    }
+    let mut out = Vec::new();
+    for of in parts.values() {
+        let n = of.len() as f64;
+        let middle = of.iter().fold([0.0, 0.0], |c, &k| [c[0] + pads[k].3[0] / n, c[1] + pads[k].3[1] / n]);
+        for &k in of {
+            let (id, _, _, at, net) = pads[k];
+            if net == 0 || !of.iter().any(|&j| j != k && space::dist(pads[j].3, at) < apart) {
+                continue;
+            }
+            // Its length: along its longest side, where it is half as long again as it is wide.
+            let Some(item) = board.item(id) else { continue };
+            let poly = space::outline(&item.shape);
+            let side = |i: usize| [poly[(i + 1) % poly.len()][0] - poly[i][0], poly[(i + 1) % poly.len()][1] - poly[i][1]];
+            let Some(long) = (0..poly.len()).map(side).max_by(|a, b| a[0].hypot(a[1]).total_cmp(&b[0].hypot(b[1]))) else { continue };
+            let l = long[0].hypot(long[1]);
+            if l < 1e-9 {
+                continue;
+            }
+            let long = [long[0] / l, long[1] / l];
+            let span = |d: [f64; 2]| {
+                let on = poly.iter().map(|q| q[0] * d[0] + q[1] * d[1]);
+                on.clone().fold(f64::MIN, f64::max) - on.fold(f64::MAX, f64::min)
+            };
+            let (len, wide) = (span(long), span([-long[1], long[0]]));
+            if len < 1.5 * wide {
+                continue;
+            }
+            let mut dir = long;
+            if dir[0] * (at[0] - middle[0]) + dir[1] * (at[1] - middle[1]) < 0.0 {
+                dir = [-dir[0], -dir[1]];
+            }
+            let tip = [at[0] + dir[0] * len / 2.0, at[1] + dir[1] * len / 2.0];
+            out.push((tip, [tip[0] + dir[0] * far, tip[1] + dir[1] * far], net));
+        }
+    }
+    out
 }
 
 /// A spot in a triangle is left out when another spot is this near, mm.
@@ -623,7 +697,7 @@ const OUT_STEPS: [f64; 11] = [-0.1, -0.2, -0.3, -0.45, -0.6, -0.8, 0.15, 0.3, 0.
 
 /// The places for the vias of one row of a part's pads: the pads that have a connection, in
 /// their order along the row, each with where its via may stand (none where no via may).
-fn slots(board: &Board, apart: f64, radius: f64, row: &[(ItemId, space::P)], middle: space::P, scratch: &mut Board) -> Vec<(ItemId, Option<space::P>)> {
+fn slots(board: &Board, apart: f64, radius: f64, hole: f64, row: &[(ItemId, space::P)], middle: space::P, scratch: &mut Board) -> Vec<(ItemId, Option<space::P>)> {
     let (first, last) = (row[0].1, row[row.len() - 1].1);
     let len = space::dist(first, last).max(1e-9);
     let along = [(last[0] - first[0]) / len, (last[1] - first[1]) / len];
@@ -644,7 +718,7 @@ fn slots(board: &Board, apart: f64, radius: f64, row: &[(ItemId, space::P)], mid
     let most = places.iter().zip(&t).map(|(s, t)| (s - t).abs()).fold(0.0, f64::max);
     // Out from the row far enough for the farthest stub to come across at 45 degrees and
     // straighten before its via.
-    let clearance = board.clearance(0, 0) as f64 / 1e6;
+    let clearance = (board.clearance(0, 0) as f64 / 1e6).max(hole);
     let out = most + radius + clearance + width(board, 0);
     let reach = |pad: ItemId, dir: space::P| {
         let Some(item) = board.item(pad) else { return 0.0 };
@@ -764,7 +838,7 @@ pub fn escape(board: &Board, wants: &[Want]) -> (Spots, Vec<Want>) {
             if wanted.is_empty() {
                 continue;
             }
-            let stood = slots(board, spots.apart, spots.radius, &wanted, middle, &mut scratch);
+            let stood = slots(board, spots.apart, spots.radius, spots.hole, &wanted, middle, &mut scratch);
             let places: Vec<space::P> = stood.iter().filter_map(|s| s.1).collect();
             if let (Some(&first), Some(&last)) = (places.first(), places.last()) {
                 fans.push(vec![a, b, last, first]);

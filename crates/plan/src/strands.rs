@@ -115,7 +115,7 @@ impl Sheet {
     /// one's far edge: each its width and each two neighbours their clearance. Neighbours of
     /// one net lie on each other, as one track that parts where they part, and take the
     /// wider one's width.
-    fn stack(board: &Board, nets: &[(u32, f64)]) -> f64 {
+    pub fn stack(board: &Board, nets: &[(u32, f64)]) -> f64 {
         let mut total = 0.0;
         let mut last: Option<(u32, f64)> = None;
         for &(n, w) in nets {
@@ -533,9 +533,9 @@ impl Sheet {
                 nets.extend((band..n[corner]).rev().map(|q| of(corner, q)));
             }
             let (Some(first), Some(last)) = (nets.first(), nets.last()) else { return true };
-            let via = if last.0 == net && net != 0 { 0.0 } else { board.clearance(last.0, net) as f64 / 1e6 + self.space.spots.radius };
+            let via = if last.0 == net && net != 0 { 0.0 } else { (board.clearance(last.0, net) as f64 / 1e6).max(self.space.spots.hole) + self.space.spots.radius };
             let need = self.space.keep(board, tri.v[x], first.0) + Self::stack(board, &nets) + via;
-            need <= dist(self.space.verts[tri.v[x]], p) + EPS
+            need <= self.space.room_to(tri.v[x], p) + EPS
         })
     }
 
@@ -628,9 +628,9 @@ impl Sheet {
             between.sort_by(|a, b| b.0.total_cmp(&a.0));
             let nets: Vec<(u32, f64)> = between.iter().map(|k| (self.strands[k.1].net, self.strands[k.1].width)).collect();
             let (Some(first), Some(last)) = (nets.first(), nets.last()) else { return true };
-            let via = if last.0 == net && net != 0 { 0.0 } else { board.clearance(last.0, net) as f64 / 1e6 + self.space.spots.radius };
+            let via = if last.0 == net && net != 0 { 0.0 } else { (board.clearance(last.0, net) as f64 / 1e6).max(self.space.spots.hole) + self.space.spots.radius };
             // A corner the spot cannot see, for a wall between, asks nothing.
-            self.space.keep(board, corner, first.0) + Self::stack(board, &nets) + via <= d + EPS || walls.iter().any(|&(a, b)| cross(x, a, b).is_some())
+            self.space.keep(board, corner, first.0) + Self::stack(board, &nets) + via <= self.space.room_to(corner, p) + EPS || walls.iter().any(|&(a, b)| cross(x, a, b).is_some())
         })
     }
 
