@@ -17,10 +17,15 @@
 //! wires leave fewer thermal spokes than the rules ask, because they shut in the pour a spoke
 //! of it ends in ([`board::Pours::starved`]), is given a spoke drawn by hand ([`Tie`]), or
 //! those wires are laid another way ([`shutting`]).
+//!
+//! Last of all, copper a net has no need of is taken out ([`spare`]): a wire is drawn from pad
+//! to pad knowing nothing of the copper its net has already, and where it joins that copper a
+//! second time one of the two ways round is spare.
 
 pub mod chain;
 pub mod convex;
 pub mod draw;
+pub mod spare;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -77,6 +82,9 @@ pub struct Drawing {
     pub wires: Vec<Wire>,
     pub undrawn: Vec<Undrawn>,
     pub ties: Vec<Tie>,
+    /// Lengths of wire taken out again: each was one of two ways between the same two places
+    /// of its net's copper, and the other is kept ([`spare`]).
+    pub spare: Vec<Wire>,
 }
 
 fn nm(p: P) -> board::Point {
@@ -1072,7 +1080,9 @@ fn tied(board: &Board, plan: &Plan, mut drawing: Drawing, before: &[(ItemId, usi
 pub fn route(board: &Board) -> (Plan, Drawing) {
     let never = AtomicBool::new(false);
     if std::env::var("WIRE_FIRST").is_ok() {
-        return route_with(board, false, &never).unwrap_or_else(|| (plan::start(board), Drawing::default()));
+        let (plan, drawing) = route_with(board, false, &never).unwrap_or_else(|| (plan::start(board), Drawing::default()));
+        let drawing = without_spare(board, &plan, drawing);
+        return (plan, drawing);
     }
     // The two ways side by side, each on a thread of its own: neither asks anything of the
     // other. The second is for a board the first leaves open, and is told to stop, at the
@@ -1089,10 +1099,35 @@ pub fn route(board: &Board) -> (Plan, Drawing) {
         (plain.zip(still), fanned.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
     });
     let Some((plain, still)) = plain else { return (plan::start(board), Drawing::default()) };
-    match fanned {
+    let (plan, drawing) = match fanned {
         Some(fanned) if still > 0 && open(board, &fanned.0, &fanned.1) < still => fanned,
         _ => plain,
+    };
+    let drawing = without_spare(board, &plan, drawing);
+    (plan, drawing)
+}
+
+/// `drawing` with the copper its nets have no need of taken out ([`spare::spare`]), where
+/// that leaves no more connections open and no more pads short of spokes: a track that lies
+/// in its net's pour can be all that joins a piece of the pour, and a track from a pad into
+/// its pour counts as a spoke of the pad. Where it does leave more, the nets with pours are
+/// left as they are; and where that does too, all are.
+fn without_spare(board: &Board, plan: &Plan, drawing: Drawing) -> Drawing {
+    let mut poured: Vec<u32> = board.zone_areas.iter().map(|z| z.net).collect();
+    poured.sort_unstable();
+    poured.dedup();
+    let was = amiss(board, plan, &drawing);
+    for leave in [&[][..], &poured[..]] {
+        let (less, taken) = spare::spare(board, plan, &drawing, leave);
+        if taken == 0 {
+            continue;
+        }
+        let now = amiss(board, plan, &less);
+        if now.0 <= was.0 && now.1 <= was.1 {
+            return less;
+        }
     }
+    drawing
 }
 
 /// [`route`] one way: with the fine-pitch parts' ways out settled first, or without. None

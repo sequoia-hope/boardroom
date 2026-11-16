@@ -102,6 +102,29 @@ def kicad(src, out):
     return open_, bare[0], new
 
 
+# KiCad's own colours for copper, on its own dark ground.
+GROUND = "#001023"
+
+
+def copper(pcb, layer, stem):
+    """One layer of a board as KiCad shows it: its copper in the layer's colour, pours filled,
+    as STEM.svg and STEM.png. True if drawn."""
+    svg = Path(f"{stem}.svg")
+    for mode in ("2", "0"):
+        r = subprocess.run(["kicad-cli", "pcb", "export", "svg", "--mode-single", "--layers", f"{layer},Edge.Cuts", "--exclude-drawing-sheet",
+                            "--page-size-mode", mode, "-o", str(svg), str(pcb)], capture_output=True, text=True)
+        if r.returncode != 0 or not svg.exists():
+            continue
+        # Holes are plotted white, for paper: here they are the ground showing through.
+        svg.write_text(svg.read_text().replace("#FFFFFF", GROUND))
+        try:
+            cairosvg.svg2png(url=str(svg), write_to=str(Path(f"{stem}.png")), output_width=1800, background_color=GROUND)
+            return True
+        except Exception:
+            continue
+    return False
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--set", choices=["look", "ours"], default="look", help="the look boards, or our own")
@@ -143,26 +166,34 @@ def main():
             continue
         c = json.loads(r.stdout.strip().splitlines()[-1])
         (out / "counts.json").write_text(json.dumps(c, indent=1))
+        # KiCad's verdict first: it fills the routed board's pours again, and the picture of
+        # our copper is of that board.
+        k = None if a.no_kicad else kicad(board, out)
         figs = []
         for layer in c["layers"]:
             name = layer["layer"]
             for kind in ("plan", "wire"):
                 svg = out / f"{kind}.{name}.svg"
                 cairosvg.svg2png(url=str(svg), write_to=str(svg.with_suffix(".png")), output_width=1800)
-            # The designer's board: the look set's picture of it, or one drawn here from the
-            # designer's own file beside the bare board.
+            # The designer's board as KiCad shows it, drawn here from the designer's own file;
+            # failing that the look set's picture of it.
             look = f"../lookset/{a.look}/{bid}/designer-{name}"
             theirs = board if ours else board.parent / "designer.kicad_pcb"
-            if (ours or not (OUT / f"{look}.png").exists()) and theirs.exists():
-                import lookset
-                if lookset.draw(theirs, name, out / f"designer-{name}"):
-                    look = f"{bid}/designer-{name}"
-            designer = f"<a href='{e(look)}.svg'><img loading='lazy' src='{e(look)}.png'></a>" if (OUT / f"{look}.png").exists() else "<p class='none'>no track here</p>"
+            if theirs.exists() and copper(theirs, name, out / f"designer-{name}"):
+                look = f"{bid}/designer-{name}"
+            designer = f"<a href='{e(look)}.svg'><img class='cu' loading='lazy' src='{e(look)}.png'></a>" if (OUT / f"{look}.png").exists() else "<p class='none'>no track here</p>"
+            # Ours the same way: the routed board, with its pours filled again where KiCad
+            # has judged it.
+            routed = out / "routed.filled.kicad_pcb"
+            mine = "<p class='none'>not drawn</p>"
+            if copper(routed if routed.exists() else out / "routed.kicad_pcb", name, out / f"copper.{name}"):
+                mine = f"<a href='{e(bid)}/copper.{e(name)}.svg'><img class='cu' loading='lazy' src='{e(bid)}/copper.{e(name)}.png'></a>"
             note = f"{layer['wires']} of {layer['strands']} strands drawn, {layer['bends']} bends" + (", a layer the designer poured" if layer["plane"] else "")
             pic = lambda kind: f"<a href='{e(bid)}/{kind}.{e(name)}.svg'><img loading='lazy' src='{e(bid)}/{kind}.{e(name)}.png'></a>"
             figs.append(f"<h3>{e(name)}</h3><div class='pair'><figure><figcaption>the plan</figcaption>{pic('plan')}</figure>"
-                        f"<figure><figcaption>the plan drawn: {e(note)}</figcaption>{pic('wire')}</figure>"
-                        f"<figure><figcaption>{beside}</figcaption>{designer}</figure></div>")
+                        f"<figure><figcaption>the plan drawn, each net in a colour: {e(note)}</figcaption>{pic('wire')}</figure>"
+                        f"<figure><figcaption>the copper that makes, as KiCad shows it</figcaption>{mine}</figure>"
+                        f"<figure><figcaption>{beside}, the same way</figcaption>{designer}</figure></div>")
         why = "; ".join(f"{n}: {e(w)}" for w, n in c["why"].items())
         first = "<p class='bad'>The first pass only: the whole run was stopped unfinished, so nothing here was laid again and the nets with pours were not routed at all.</p>" if "WIRE_FIRST" in os.environ else ""
         faults = ", ".join(f"{n} {e(t)}" for t, n in c["faults"].items()) or "none"
@@ -170,10 +201,10 @@ def main():
                 f"The drawing: <b>{c['wires']}</b> strands drawn" + (f" ({c['as_planned']} of them at the plan's own angles)" if c.get('as_planned') else "")
                 + f", <b>{c['undrawn']}</b> not" + (f" ({why})" if why else "")
                 + (f", and <b>{c['ties']}</b> spokes drawn by hand from pads the wires left too few to their pour" if c.get('ties') else "")
+                + (f". <b>{c['spare']}</b> lengths of wire were spare and are taken out: each was a second way between two places its net's copper joins already" if c.get('spare') else "")
                 + f". Our checker's faults in what was drawn: {faults}. Still open by our count: <b>{c['open']}</b>. "
                 f"{c['seconds']['draw']:.1f} s in all.</p>")
-        if not a.no_kicad:
-            k = kicad(board, out)
+        if k is not None:
             if isinstance(k, str):
                 text += f"<p class='bad'>KiCad could not judge the drawn board: {e(k)}</p>"
             else:
@@ -190,7 +221,7 @@ def main():
     page = f"""<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Plan-then-draw prototype</title>
 <style>body{{font:16px/1.5 system-ui;margin:1.5rem auto;max-width:130rem;padding:0 1rem;background:#111;color:#ddd}}a{{color:#9cf}}
-.pair{{display:grid;grid-template-columns:repeat(auto-fit,minmax(20rem,1fr));gap:1rem}}figure{{margin:0}}img{{width:100%;background:#fff}}
+.pair{{display:grid;grid-template-columns:repeat(auto-fit,minmax(20rem,1fr));gap:1rem}}figure{{margin:0}}img{{width:100%;background:#fff}}img.cu{{background:{GROUND}}}
 figcaption,.m{{color:#999;font-size:14px}}.bad{{color:#f88}}.none{{color:#777}}</style>
 <p><a href="../">← Review pages</a></p>
 <h1>{'The new router on our own boards' if ours else 'Plan-then-draw prototype'}</h1>
@@ -211,8 +242,12 @@ pour</b>: the other nets are planned and drawn first, the pours are filled round
 leaves apart is planned, to the nearest pad or to a via standing in the pour; a connection whose via the wires laid after it cut off
 from its pour is laid again. A pad the pour joins by thermal spokes keeps as
 many as the board's rules ask: where the wires shut in the pour a spoke ends in, so that KiCad would not count it, the pad is drawn
-a spoke by hand (a short track straight out of it into open pour), or those wires are laid another way. A dashed red line is a strand still not drawn; a dashed
-yellow one a connection the plan has no strand for. <b>{beside.capitalize()}</b> (right) is the board as {'it was routed before, by hand or by the old router' if ours else 'its designer routed it'}.</p>
+a spoke by hand (a short track straight out of it into open pour), or those wires are laid another way. A wire is drawn from pad to pad and knows
+nothing of the copper its net has already: where it joins that copper a second time (it runs through a via of its net, or beside
+another wire of it), one of the two ways round is spare, and the narrower of them, or the longer, is taken out last of all. A dashed red line is a strand still not drawn; a dashed
+yellow one a connection the plan has no strand for. <b>The copper that makes</b> (third) is the routed board as KiCad shows it, in the
+layer's colour with its pours filled again: every track at its own width, so a track laid narrower than its net's class asks shows as
+a neck. <b>{beside.capitalize()}</b> (right), the same way, is the board as {'it was routed before, by hand or by the old router' if ours else 'its designer routed it'}.</p>
 {''.join(rows)}
 """
     OUT.mkdir(parents=True, exist_ok=True)

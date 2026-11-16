@@ -125,7 +125,8 @@ fn main() {
         layers.push(serde_json::json!({
             "layer": board.layers[l],
             "strands": sheet.laid().count(),
-            "wires": wires.len(),
+            // A strand is drawn though some or all of its wire was spare and is taken out.
+            "wires": sheet.laid().count() - drawing.undrawn.iter().filter(|u| u.layer == l).count(),
             "bends": wires.iter().map(|w| w.pts.len().saturating_sub(2)).sum::<usize>(),
             "plane": plan.planes.contains(&l),
         }));
@@ -135,7 +136,8 @@ fn main() {
         serde_json::json!({
             "layers": layers,
             "strands": plan.sheets.iter().map(|s| s.laid().count()).sum::<usize>(),
-            "wires": drawing.wires.len(),
+            "wires": plan.sheets.iter().map(|s| s.laid().count()).sum::<usize>() - drawing.undrawn.len(),
+            "spare": drawing.spare.len(),
             "as_planned": drawing.wires.iter().filter(|w| w.as_planned).count(),
             "undrawn": drawing.undrawn.len(),
             "why": drawing.undrawn.iter().fold(BTreeMap::new(), |mut m, u| {

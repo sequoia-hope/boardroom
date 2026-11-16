@@ -139,7 +139,13 @@ fn two_connections_of_one_net_go_through_a_narrow_gap_as_one_track() {
     assert_eq!(drawing.wires.len(), 2);
     assert!(plan.vias.is_empty(), "neither goes under the wall");
     assert!(plan.wants.iter().all(|w| w.narrow.is_none()), "both at their class's width");
-    for wire in &drawing.wires {
-        assert!(wire.pts.windows(2).any(|w| (w[0][0] - 10.0) * (w[1][0] - 10.0) <= 0.0), "through the door: {:?}", wire.pts);
+    // What the two share through the door is drawn once ([`wire::spare`]): one wire goes
+    // through, the other starts on it beyond the wall (whose far side is at 10.3).
+    let through = |w: &wire::Wire| w.pts.windows(2).any(|s| (s[0][0] - 10.0) * (s[1][0] - 10.0) <= 0.0);
+    assert_eq!(drawing.wires.iter().filter(|w| through(w)).count(), 1, "{:?}", drawing.wires);
+    for wire in drawing.wires.iter().filter(|w| !through(w)) {
+        assert!(wire.pts.iter().all(|p| p[0] > 10.3), "beyond the wall: {:?}", wire.pts);
     }
+    assert!(!drawing.spare.is_empty());
+    assert!(board::connectivity_without_pours(&wire::onto(&board, &plan, &drawing).0).airlines.is_empty(), "all joined");
 }
