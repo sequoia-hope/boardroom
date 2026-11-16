@@ -103,3 +103,24 @@ fn no_via_of_another_net_stands_in_the_way_out_of_a_fine_pitch_pin() {
     // Not where each pin's via has its own place, beside its neighbours'.
     assert!(plan::via_spots(&board, true).ways_out.is_empty());
 }
+
+/// What the checker says of a via alone on the bare board is asked once for a place and a
+/// net, and is the same the next time: on another net's pad it may not stand, in the open it
+/// may, and with no thermal spoke near the plan's other vias have no say in it.
+#[test]
+fn the_checkers_answer_for_a_via_alone_is_kept() {
+    let board = board(&part(&[pad(5.0, 5.0, 1.0, 1.0, "rect", "A")]));
+    let spots = Spots { at: vec![[10.0, 10.0], [5.2, 5.0]], ..plan::via_spots(&board, false) };
+    let asked = std::cell::Cell::new(0);
+    let via = |at: [f64; 2], net: u32| {
+        asked.set(asked.get() + 1);
+        let c = board::Point::new((at[0] * 1e6) as i64, (at[1] * 1e6) as i64);
+        board::Item { kind: board::Kind::Via, net, layers: 0b11, shape: board::Shape::Capsule { a: c, b: c, r: 150_000 }, hole: Some((c, 75_000)), locked: false, span: None }
+    };
+    assert_eq!(spots.alone(&board, 0, 2, &|| via([10.0, 10.0], 2)), (true, false));
+    assert!(!spots.alone(&board, 1, 2, &|| via([5.2, 5.0], 2)).0);
+    assert_eq!(asked.get(), 2);
+    assert_eq!(spots.alone(&board, 0, 2, &|| via([10.0, 10.0], 2)), (true, false));
+    assert!(!spots.alone(&board, 1, 2, &|| via([5.2, 5.0], 2)).0);
+    assert_eq!(asked.get(), 2, "asked again of a place it knew");
+}

@@ -275,7 +275,7 @@ pub fn via_spots(board: &Board, tight: bool) -> Spots {
     let apart = apart as f64 / 1e6;
     // Not for fan-outs: there each pad's via has its own place, beside its neighbours'.
     let ways_out = if tight { Vec::new() } else { ways_out(board, apart, pitch as f64 / 1e6) };
-    Spots { at, radius: r as f64 / 1e6, apart, hole, ways_out, out_keep: (r + keep) as f64 / 1e6 + width(board, 0) / 2.0 }
+    Spots { at, radius: r as f64 / 1e6, apart, hole, ways_out, out_keep: (r + keep) as f64 / 1e6 + width(board, 0) / 2.0, beside: (2 * r + board.max_rule_reach()) as f64 / 1e6 + 0.01, checked: Default::default() }
 }
 
 /// The way straight out of each pad that stands nearer another pad of its part than two vias
@@ -424,11 +424,8 @@ fn put(board: &Board, sheets: &[Sheet], connection: usize, want: &Want, way: &wa
     // via, past it, and back in on the other side.
     let mut pushes = way.pushes.clone();
     pushes.sort_by_key(|p| std::cmp::Reverse(p.3));
-    let out: Vec<Sheet> = sheets
-        .iter()
-        .enumerate()
-        .zip(fresh)
-        .map(|((l, sheet), fresh)| {
+    let layers: Vec<(usize, &Sheet, Vec<carry::Trace>)> = sheets.iter().enumerate().zip(fresh).map(|((l, sheet), fresh)| (l, sheet, fresh)).collect();
+    let out: Vec<Sheet> = side_by_side(layers, |(l, sheet, fresh)| {
             let mut traces = carry::traces(board, sheet, &Some)?;
             for &(spot, _, strand, k) in pushes.iter().filter(|p| p.1 == l) {
                 let trace = traces.get_mut(sheet.laid().position(|s| s == strand)?)?;
@@ -449,6 +446,7 @@ fn put(board: &Board, sheets: &[Sheet], connection: usize, want: &Want, way: &wa
             traces.extend(fresh);
             carry::sheet(board, sheet.space.layer, &vias, &known, &traces)
         })
+        .into_iter()
         .collect::<Option<_>>()?;
     stand(board, &out).then_some(out)
 }
@@ -546,7 +544,41 @@ fn lift(board: &Board, sheets: &[Sheet], connection: usize) -> Option<Vec<Sheet>
     let number = |k: usize| (!gone.contains(&k)).then(|| k - gone.iter().filter(|&&g| g < k).count());
     let vias: Vec<(space::P, u32)> = first.space.vias().into_iter().enumerate().filter(|(k, _)| !gone.contains(k)).map(|(_, v)| v).collect();
     let spots = first.space.spots.clone();
-    out.iter().map(|sheet| carry::sheet(board, sheet.space.layer, &vias, &spots, &carry::traces(board, sheet, &number)?)).collect()
+    side_by_side(out.iter().collect(), |sheet| carry::sheet(board, sheet.space.layer, &vias, &spots, &carry::traces(board, sheet, &number)?)).into_iter().collect()
+}
+
+/// A layer with fewer edges than this is not worth a thread of its own.
+const WORTH_A_THREAD: usize = 2000;
+
+/// `f` of each layer, the layers side by side on a thread each where they are big enough to
+/// be worth it: every layer is triangulated again when a via goes in or comes out, and one
+/// layer's work asks nothing of another's. The answers are in the layers' order.
+fn side_by_side<T: Send + Layer, R: Send>(layers: Vec<T>, f: impl Fn(T) -> R + Sync) -> Vec<R> {
+    if layers.len() < 2 || layers.iter().all(|l| l.edges() < WORTH_A_THREAD) {
+        return layers.into_iter().map(f).collect();
+    }
+    let f = &f;
+    std::thread::scope(|scope| {
+        let threads: Vec<_> = layers.into_iter().map(|layer| scope.spawn(move || f(layer))).collect();
+        threads.into_iter().map(|t| t.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))).collect()
+    })
+}
+
+/// What [`side_by_side`] is given for a layer: how many edges its triangles have.
+trait Layer {
+    fn edges(&self) -> usize;
+}
+
+impl Layer for &Sheet {
+    fn edges(&self) -> usize {
+        self.space.edges.len()
+    }
+}
+
+impl Layer for (usize, &Sheet, Vec<carry::Trace>) {
+    fn edges(&self) -> usize {
+        self.1.space.edges.len()
+    }
 }
 
 /// Whether another connection's strand ends in a via of connection `c`: for a stub, whether
@@ -1024,4 +1056,32 @@ fn place(board: &Board, plan: &mut Plan, which: &[usize]) {
     }
     plan.vias = vias_of(&sheets);
     plan.sheets = sheets;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Of(usize, usize);
+
+    impl Layer for Of {
+        fn edges(&self) -> usize {
+            self.1
+        }
+    }
+
+    /// Layers worked on side by side come back in their order, small ones (one after
+    /// another) and big ones (a thread each) alike.
+    #[test]
+    fn layers_side_by_side_come_back_in_their_order() {
+        for edges in [10, WORTH_A_THREAD] {
+            let layers: Vec<Of> = (0..8).map(|l| Of(l, edges)).collect();
+            let out = side_by_side(layers, |layer| {
+                // The later layers are done first.
+                std::thread::sleep(std::time::Duration::from_millis(8 - layer.0 as u64));
+                layer.0 * 10
+            });
+            assert_eq!(out, (0..8).map(|l| l * 10).collect::<Vec<_>>());
+        }
+    }
 }

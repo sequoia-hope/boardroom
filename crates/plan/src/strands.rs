@@ -48,15 +48,11 @@ pub struct Sheet {
 type Stand = Option<(usize, Region)>;
 
 /// What [`Sheet::stood`] has worked out, for each spot and net asked about. A copy of a sheet
-/// starts with none of it.
-#[derive(Debug, Default)]
-struct Stood(std::sync::Mutex<std::collections::HashMap<(usize, u32), Stand>>);
-
-impl Clone for Stood {
-    fn clone(&self) -> Stood {
-        Stood::default()
-    }
-}
+/// shares it for as long as both stay as they are: a sheet whose strands change starts with
+/// none ([`Sheet::lay`], [`Sheet::lift`]), and most copies are made to change one layer of
+/// several.
+#[derive(Debug, Default, Clone)]
+struct Stood(std::sync::Arc<std::sync::Mutex<crate::space::Map<(usize, u32), Stand>>>);
 
 /// A part of a free triangle, as its strands divide it: each strand cuts a corner off, so the
 /// parts are the bands between the strands round each corner and what is left in the middle.
@@ -79,6 +75,50 @@ pub const EPS: f64 = 1e-6;
 /// ([`Sheet::via_clear`]).
 const ROUND_A_VIA: f64 = 3.0;
 
+
+/// Marks on triangles and corners, for a walk that must not meet one twice: a mark is the
+/// walk's number, so nothing is cleared between walks. One set is kept for each thread.
+struct Marks {
+    tris: Vec<u32>,
+    corners: Vec<u32>,
+    walk: u32,
+}
+
+thread_local! {
+    static MARKS: std::cell::RefCell<Option<Marks>> = const { std::cell::RefCell::new(None) };
+}
+
+impl Marks {
+    /// The thread's marks, for a new walk over so many triangles and corners.
+    fn take(tris: usize, corners: usize) -> Marks {
+        let mut marks = MARKS.with(|m| m.borrow_mut().take()).unwrap_or(Marks { tris: Vec::new(), corners: Vec::new(), walk: 0 });
+        if marks.walk == u32::MAX {
+            marks = Marks { tris: Vec::new(), corners: Vec::new(), walk: 0 };
+        }
+        marks.walk += 1;
+        if marks.tris.len() < tris {
+            marks.tris.resize(tris, 0);
+        }
+        if marks.corners.len() < corners {
+            marks.corners.resize(corners, 0);
+        }
+        marks
+    }
+
+    /// Marks a triangle: whether it was not marked before on this walk.
+    fn tri(&mut self, t: usize) -> bool {
+        std::mem::replace(&mut self.tris[t], self.walk) != self.walk
+    }
+
+    /// Marks a corner: whether it was not marked before on this walk.
+    fn corner(&mut self, v: usize) -> bool {
+        std::mem::replace(&mut self.corners[v], self.walk) != self.walk
+    }
+
+    fn give_back(self) {
+        MARKS.with(|m| *m.borrow_mut() = Some(self));
+    }
+}
 
 impl Sheet {
     pub fn new(space: Space) -> Sheet {
@@ -550,8 +590,10 @@ impl Sheet {
         // The free triangles in reach of the spot, from its own outwards: their strands as
         // lines, their corners, and the sides that are walls.
         let mut seen = vec![t];
-        let mut met: std::collections::HashSet<usize> = std::collections::HashSet::from([t]);
-        let mut cornered: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        // Which triangles and corners have been met, as marks on each: this is asked of
+        // every spot a search comes by, and a set of them was half of what it took.
+        let mut marks = Marks::take(self.space.tris.len(), self.space.verts.len());
+        marks.tri(t);
         let mut chords: Vec<(P, P, usize)> = Vec::new();
         let mut walls: Vec<(P, P)> = Vec::new();
         let mut corners: Vec<usize> = Vec::new();
@@ -566,7 +608,7 @@ impl Sheet {
                     let [(s, k), (s2, k2)] = self.chord(x, c, q);
                     chords.push((self.point(self.strands[s].crossings[k], places[s][k]), self.point(self.strands[s2].crossings[k2], places[s2][k2]), s));
                 }
-                if !self.space.tris[t].v.contains(&tri.v[c]) && cornered.insert(tri.v[c]) {
+                if !self.space.tris[t].v.contains(&tri.v[c]) && marks.corner(tri.v[c]) {
                     corners.push(tri.v[c]);
                 }
             }
@@ -577,7 +619,7 @@ impl Sheet {
                 }
                 match edge.t.iter().flatten().copied().find(|&y| y != x) {
                     Some(y) if self.space.free(y) => {
-                        if met.insert(y) {
+                        if marks.tri(y) {
                             seen.push(y);
                         }
                     }
@@ -585,6 +627,7 @@ impl Sheet {
                 }
             }
         }
+        marks.give_back();
         if chords.is_empty() {
             return true;
         }

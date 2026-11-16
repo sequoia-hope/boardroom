@@ -23,6 +23,7 @@ pub mod convex;
 pub mod draw;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use board::{Board, Item, ItemId, Kind, Shape};
 use plan::space::{What, P};
@@ -229,7 +230,13 @@ pub fn course(board: &Board, sheet: &Sheet, s: usize) -> Option<Course> {
         gaps: held,
         stages,
         corners: Vec::new(),
-        holds: holds.into_values().collect(),
+        holds: {
+            // In the corners' order, not a hash map's: the lines a wire may take are tried in
+            // the order they are given, and two runs must draw the same wire.
+            let mut holds: Vec<(usize, Corner)> = holds.into_iter().collect();
+            holds.sort_by_key(|h| h.0);
+            holds.into_iter().map(|h| h.1).collect()
+        },
         fronts,
         beside: Vec::new(),
         walls,
@@ -828,6 +835,11 @@ fn left_by_pours(board: &Board, plan: &Plan, drawing: &Drawing, poured: &[u32]) 
             pads.entry(cluster).or_default().extend(middle(id).map(|m| (id, m)));
         }
     }
+    // (Each cluster's pads in their own order: which is the nearest of two as near is not to
+    // turn on the order a hash map gives them in.)
+    for of in pads.values_mut() {
+        of.sort_by_key(|p| p.0);
+    }
     // An end that is a wire or a via (one that stands in pour the wires have since cut off
     // from what it was to join, say) is taken as the pad of its copper nearest the other end.
     let pad_of = |end: ItemId, other: board::Point| -> Option<(ItemId, board::Point)> {
@@ -893,14 +905,14 @@ fn outcome(plan: &Plan, drawing: &Drawing, stuck: &[(usize, plan::space::GapKey)
 /// it does hold depends on
 /// what stands round it, and drawing is what finds that out. The plan is left as it was
 /// when fewest of its connections were open.
-fn settle(board: &Board, plan: &mut Plan, memo: &mut chain::Memo, said: &dyn Fn(&str, &Plan, Option<&Drawing>)) -> Drawing {
+fn settle(board: &Board, plan: &mut Plan, memo: &mut chain::Memo, said: &dyn Fn(&str, &Plan, Option<&Drawing>), stop: &AtomicBool) -> Drawing {
     let mut best: Option<(usize, Plan, Drawing)> = None;
     // A round that only made wires narrower is not counted: a few of those.
     let (mut rounds, mut more) = (0, NARROWER);
     // What the round before came to: a round that comes to the same has changed nothing, and
     // the next would be the same again.
     let mut before: Option<u64> = None;
-    while rounds < ROUNDS {
+    while rounds < ROUNDS && !stop.load(Ordering::Relaxed) {
         rounds += 1;
         // A stub nothing starts from is not drawn.
         plan::tidy(board, plan);
@@ -1052,25 +1064,40 @@ fn tied(board: &Board, plan: &Plan, mut drawing: Drawing, before: &[(ItemId, usi
 /// pour in are laid another way, if that leaves no more open than before.
 ///
 /// A board that is not whole that way, and has parts whose pins stand nearer each other than
-/// vias may, is routed again with those parts' ways out settled first ([`plan::escape`]): for
-/// each row of such a part's pads a row of vias a little way out, one for each pad in the
+/// vias may, is routed with those parts' ways out settled first as well ([`plan::escape`]):
+/// for each row of such a part's pads a row of vias a little way out, one for each pad in the
 /// pads' order, and the connections then from via to via. The one with fewer connections
-/// open is kept.
+/// open is kept. The two are worked out side by side, on a thread each, and the second is
+/// dropped where the first comes out whole.
 pub fn route(board: &Board) -> (Plan, Drawing) {
-    let Some(plain) = route_with(board, false) else { return (plan::start(board), Drawing::default()) };
-    let still = open(board, &plain.0, &plain.1);
-    if still == 0 || std::env::var("WIRE_FIRST").is_ok() {
-        return plain;
+    let never = AtomicBool::new(false);
+    if std::env::var("WIRE_FIRST").is_ok() {
+        return route_with(board, false, &never).unwrap_or_else(|| (plan::start(board), Drawing::default()));
     }
-    match route_with(board, true) {
-        Some(fanned) if open(board, &fanned.0, &fanned.1) < still => fanned,
+    // The two ways side by side, each on a thread of its own: neither asks anything of the
+    // other. The second is for a board the first leaves open, and is told to stop, at the
+    // end of what it is at, once the first has come out whole: what is kept is as it would
+    // be with one after the other.
+    let stop = AtomicBool::new(false);
+    let (plain, fanned) = std::thread::scope(|scope| {
+        let fanned = scope.spawn(|| route_with(board, true, &stop));
+        let plain = route_with(board, false, &never);
+        let still = plain.as_ref().map(|p| open(board, &p.0, &p.1));
+        if still.is_none_or(|open| open == 0) {
+            stop.store(true, Ordering::Relaxed);
+        }
+        (plain.zip(still), fanned.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
+    });
+    let Some((plain, still)) = plain else { return (plan::start(board), Drawing::default()) };
+    match fanned {
+        Some(fanned) if still > 0 && open(board, &fanned.0, &fanned.1) < still => fanned,
         _ => plain,
     }
 }
 
 /// [`route`] one way: with the fine-pitch parts' ways out settled first, or without. None
 /// where there is no such part.
-fn route_with(board: &Board, fan: bool) -> Option<(Plan, Drawing)> {
+fn route_with(board: &Board, fan: bool, stop: &AtomicBool) -> Option<(Plan, Drawing)> {
     let mut poured: Vec<u32> = board.zone_areas.iter().filter(|z| !z.kept && z.net != 0).map(|z| z.net).collect();
     poured.sort_unstable();
     poured.dedup();
@@ -1080,9 +1107,11 @@ fn route_with(board: &Board, fan: bool) -> Option<(Plan, Drawing)> {
     let clock = std::time::Instant::now();
     let said = |what: &str, plan: &Plan, drawing: Option<&Drawing>| {
         if times {
-            eprintln!("{:7.2} s  {what}: {} strands, {} vias, {} left{}", clock.elapsed().as_secs_f64(), plan.sheets.iter().map(|s| s.laid().count()).sum::<usize>(), plan.vias.len(), plan.left.len(), drawing.map_or(String::new(), |d| format!(", {} drawn, {} not", d.wires.len(), d.undrawn.len())));
+            eprintln!("{:7.2} s  {}{what}: {} strands, {} vias, {} left{}", clock.elapsed().as_secs_f64(), if fan { "ways out first, " } else { "" }, plan.sheets.iter().map(|s| s.laid().count()).sum::<usize>(), plan.vias.len(), plan.left.len(), drawing.map_or(String::new(), |d| format!(", {} drawn, {} not", d.wires.len(), d.undrawn.len())));
         }
     };
+    // Told to stop: at the end of each thing it does, it does no more.
+    let stopped = || stop.load(Ordering::Relaxed);
     let wants: Vec<plan::Want> = plan::wants(&lines).into_iter().filter(|w| !poured.contains(&w.net)).collect();
     let mut plan = if fan {
         let (spots, stubs) = plan::escape(board, &wants);
@@ -1096,6 +1125,9 @@ fn route_with(board: &Board, fan: bool) -> Option<(Plan, Drawing)> {
     } else {
         plan::start(board)
     };
+    if stopped() {
+        return None;
+    }
     plan::add(board, &mut plan, wants);
     said("planned", &plan, None);
     // WIRE_FIRST: the first plan and its drawing, with nothing laid again and no pours: what
@@ -1106,11 +1138,14 @@ fn route_with(board: &Board, fan: bool) -> Option<(Plan, Drawing)> {
         said("drawn", &plan, Some(&drawing));
         return Some((plan, drawing));
     }
-    let mut drawing = settle(board, &mut plan, &mut memo, &said);
+    let mut drawing = settle(board, &mut plan, &mut memo, &said, stop);
     if poured.is_empty() {
         return Some((plan, drawing));
     }
-    drawing = pour(board, &mut plan, drawing, &poured, &mut memo, &said);
+    drawing = pour(board, &mut plan, drawing, &poured, &mut memo, &said, stop);
+    if stopped() {
+        return None;
+    }
     let before: Vec<(ItemId, usize)> = board::Pours::likely(board).starved(board).iter().map(|s| (s.pad, s.layer)).collect();
     let (mut drawing, mut short) = tied(board, &plan, drawing, &before);
     for _ in 0..SPOKES {
@@ -1124,8 +1159,11 @@ fn route_with(board: &Board, fan: bool) -> Option<(Plan, Drawing)> {
         }
         let mut other = plan.clone();
         plan::bar(board, &mut other, &bars);
-        let redrawn = settle(board, &mut other, &mut memo, &said);
-        let redrawn = pour(board, &mut other, redrawn, &poured, &mut memo, &said);
+        let redrawn = settle(board, &mut other, &mut memo, &said, stop);
+        let redrawn = pour(board, &mut other, redrawn, &poured, &mut memo, &said, stop);
+        if stopped() {
+            return None;
+        }
         let (redrawn, left) = tied(board, &other, redrawn, &before);
         if (open(board, &other, &redrawn), left) >= (open(board, &plan, &drawing), short) {
             break;
@@ -1139,7 +1177,7 @@ fn route_with(board: &Board, fan: bool) -> Option<(Plan, Drawing)> {
 /// drawn: a wire laid to join one pad can cut the pour another was joined by, or the pour a
 /// connection laid before it ends in. A round may leave more open than it found: the plan and
 /// the drawing are left as they were when fewest connections were open.
-fn pour(board: &Board, plan: &mut Plan, mut drawing: Drawing, poured: &[u32], memo: &mut chain::Memo, said: &dyn Fn(&str, &Plan, Option<&Drawing>)) -> Drawing {
+fn pour(board: &Board, plan: &mut Plan, mut drawing: Drawing, poured: &[u32], memo: &mut chain::Memo, said: &dyn Fn(&str, &Plan, Option<&Drawing>), stop: &AtomicBool) -> Drawing {
     // The connection the plan has already for a pair of pads.
     let had = |plan: &Plan, w: &plan::Want| plan.wants.iter().position(|x| x.net == w.net && !x.stub && ((x.from, x.to) == (w.from, w.to) || (x.from, x.to) == (w.to, w.from)));
     // How many were found the round before: a round that finds no fewer is the last.
@@ -1150,6 +1188,9 @@ fn pour(board: &Board, plan: &mut Plan, mut drawing: Drawing, poured: &[u32], me
     // more open than it found.
     let mut best: Option<(usize, Plan, Drawing)> = None;
     for _ in 0..POURS {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
         let (mut wants, open) = left_by_pours(board, plan, &drawing, poured);
         if best.as_ref().is_none_or(|b| open < b.0) {
             best = Some((open, plan.clone(), drawing.clone()));
@@ -1194,7 +1235,7 @@ fn pour(board: &Board, plan: &mut Plan, mut drawing: Drawing, poured: &[u32], me
         plan::renew(board, plan, renewed);
         plan::add(board, plan, rest);
         said("planned", plan, None);
-        drawing = settle(board, plan, memo, said);
+        drawing = settle(board, plan, memo, said, stop);
         if stalled {
             break;
         }

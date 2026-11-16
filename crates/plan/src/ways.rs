@@ -7,11 +7,11 @@
 //! half-way round one corner.
 
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::BinaryHeap;
 
 use board::Board;
 
-use crate::space::{dist, End, P};
+use crate::space::{dist, End, Map, P};
 use crate::strands::{Region, Sheet, EPS};
 
 /// Where a leg ends: on something that is there, or at a via the way puts in at a spot.
@@ -128,17 +128,32 @@ pub struct Terms<'a> {
 /// the bare board; a via with a net may not stand there beside the plan's others, which can
 /// together cut more of a pad's spokes to its pour than may be cut.
 fn standing(board: &Board, sheets: &[Sheet], with: &mut Option<Board>, c: usize, net: u32) -> Option<Vec<(usize, Region)>> {
+    // What is known for good comes first: it costs nothing to ask again.
+    let beside = alone(board, sheets, c, net)?;
     let places: Vec<(usize, Region)> = sheets.iter().map(|s| standing_on(board, s, c, net)).collect::<Option<_>>()?;
-    exact(board, sheets, with, c, net).then_some(places)
+    (!beside || together(board, sheets, with, c, net)).then_some(places)
+}
+
+/// Whether a via of `net` may stand at spot `c` for all that is there before the plan: it
+/// shuts no other net's pin in, and the exact checker passes it alone on the bare board. None
+/// if not; else whether the plan's other vias have a say in it ([`Spots::alone`], or one of
+/// them stands near).
+fn alone(board: &Board, sheets: &[Sheet], c: usize, net: u32) -> Option<bool> {
+    let spots = &sheets.first()?.space.spots;
+    if spots.shuts(spots.at[c], net) {
+        return None;
+    }
+    let space = &sheets.first()?.space;
+    match spots.alone(board, c, net, &|| crate::via_item(board, spots.at[c], net)) {
+        (false, _) => None,
+        // And a via of the plan that stands near has a say.
+        (true, beside) => Some(beside || space.sites.iter().any(|s| dist(space.obstacles[s.obstacle].centre, spots.at[c]) < spots.beside)),
+    }
 }
 
 /// Whether the exact checker lets a via of `net` stand at spot `c` beside the plan's others.
-fn exact(board: &Board, sheets: &[Sheet], with: &mut Option<Board>, c: usize, net: u32) -> bool {
+fn together(board: &Board, sheets: &[Sheet], with: &mut Option<Board>, c: usize, net: u32) -> bool {
     let Some(first) = sheets.first() else { return false };
-    // Nor may it shut the way out of another net's pin.
-    if first.space.spots.shuts(first.space.spots.at[c], net) {
-        return false;
-    }
     let with = with.get_or_insert_with(|| {
         let mut with = board.clone();
         for (at, of) in first.space.vias() {
@@ -174,7 +189,8 @@ fn standing_past(board: &Board, sheets: &[Sheet], with: &mut Option<Board>, c: u
     if sheet.strands[strand].net == net || !sheet.via_fits(board, t, region, p, net) {
         return None;
     }
-    (sheets.iter().enumerate().all(|(m, s)| m == l || standing_on(board, s, c, net).is_some()) && exact(board, sheets, with, c, net)).then_some((strand, k))
+    let beside = alone(board, sheets, c, net)?;
+    (sheets.iter().enumerate().all(|(m, s)| m == l || standing_on(board, s, c, net).is_some()) && (!beside || together(board, sheets, with, c, net))).then_some((strand, k))
 }
 
 /// The cheapest way for a strand of `net` from `from` to `to`. A way's cost is its length pulled
@@ -190,14 +206,21 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
     // The least there is still to go from a place: to the nearest of its ends.
     let left = |p: P| goals.iter().map(|g| dist(p, g.1)).fold(f64::MAX, f64::min).min(if goals.is_empty() { 0.0 } else { f64::MAX });
     let spots = sheets.first()?.space.spots.clone();
-    let mut best: HashMap<Key, Seen> = HashMap::new();
+    let mut best: Map<Key, Seen> = Map::default();
     let mut heap = BinaryHeap::new();
-    let mut stands: HashMap<usize, Option<Vec<(usize, Region)>>> = HashMap::new();
+    let mut stands: Map<usize, Option<Vec<(usize, Region)>>> = Map::default();
     // For a spot, a layer, a triangle and a part of it: the strand a via there would push.
-    type Past = HashMap<(usize, usize, usize, Region), Option<(usize, usize)>>;
-    let mut pasts: Past = HashMap::new();
+    type Past = Map<(usize, usize, usize, Region), Option<(usize, usize)>>;
+    let mut pasts: Past = Map::default();
     // The board with the plan's vias on it, made when the first spot is asked about.
     let mut with: Option<Board> = None;
+    // For a layer and a spot: the part of its triangle the spot is in, as the strands lie.
+    let mut regions: Map<(usize, usize), Option<Region>> = Map::default();
+    // Whether spot `c`, which is in triangle `t` on layer `l`, is in `region` of it, and is
+    // not barred: where a via would stand if one may.
+    let sits = |sheet: &Sheet, regions: &mut Map<(usize, usize), Option<Region>>, l: usize, t: usize, region: Region, c: usize| {
+        !terms.ban.contains(&c) && *regions.entry((l, c)).or_insert_with(|| sheet.region_at(board, t, spots.at[c])) == Some(region)
+    };
     // With a pour to end in, the far end's middle is no bound on what is left to go.
     let barred = |sheet: &Sheet, e: usize| {
         !terms.avoid.is_empty() && {
@@ -228,7 +251,12 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
         }
     }
     // A via at spot `c`, come to on layer `l` at `cost`: it may be left on any other layer.
-    let arrive = |c: usize, l: usize, cost: f64, prev: Key, via: f64, push: Option<(usize, usize, usize)>, best: &mut HashMap<Key, Seen>, heap: &mut BinaryHeap<Open>| {
+    // Whether a via may stand there at all (`sure`) is asked when the search comes to leave
+    // by it, not here: most of the spots a search passes it never comes back to, and the
+    // answer is the dear part of a search. But where a via that pushes a strand round itself
+    // and one that does not come to the same spot, which of the two the spot is given to
+    // turns on whether the one that does not may stand, and that is asked at once.
+    let arrive = |c: usize, l: usize, cost: f64, prev: Key, via: f64, push: Option<(usize, usize, usize)>, best: &mut Map<Key, Seen>, heap: &mut BinaryHeap<Open>, sure: &mut dyn FnMut(usize) -> bool| {
         let p = spots.at[c];
         if terms.into.contains(&c) {
             let (key, cost) = ((l, VIA, c, GOAL), cost + terms.drop);
@@ -239,14 +267,32 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
         }
         for m in (0..sheets.len()).filter(|&m| m != l) {
             let (key, cost) = ((m, VIA, c, 0), cost + via);
-            if best.get(&key).is_none_or(|b| cost < b.cost && !through(best, prev, key)) {
+            let take = match best.get(&key) {
+                None => true,
+                Some(there) => {
+                    let cheaper = cost < there.cost && !through(best, prev, key);
+                    match (push.is_some(), there.push.is_some()) {
+                        // Alike: the cheaper.
+                        (false, false) | (true, true) => cheaper,
+                        // This pushes and the one there does not: the cheaper, or this one
+                        // if the one there may not stand, and so is not there.
+                        (true, false) => cheaper || !sure(c),
+                        // This does not push and the one there does: the cheaper, if it
+                        // may stand.
+                        (false, true) => cheaper && sure(c),
+                    }
+                }
+            };
+            if take {
                 best.insert(key, Seen { cost, prev: Some(prev), at: p, bend_at: p, bend_cost: cost, bend: None, starts: false, over: None, about: None, push, end: None });
                 heap.push(Open { order: cost + cheapest * left(p), cost, key });
             }
         }
     };
     while let Some(Open { cost, key, .. }) = heap.pop() {
-        if best.get(&key).is_some_and(|b| b.cost < cost) {
+        // (A place given since to another way: to a cheaper one, or, a via's, to one that
+        // may stand where the cheaper may not.)
+        if best.get(&key).is_some_and(|b| b.cost != cost) {
             continue;
         }
         let (l, edge, slot, into) = key;
@@ -261,6 +307,11 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
             // triangle it stands in, or straight to another spot in that part.
             let Some(via) = terms.via else { continue };
             let p = spots.at[slot];
+            // Whether a via may stand here at all, asked now that the search has come to
+            // leave by it (one that pushes a strand was asked as it was come to).
+            if best[&key].push.is_none() && stands.entry(slot).or_insert_with(|| if terms.ban.contains(&slot) { None } else { standing(board, sheets, &mut with, slot, net) }).is_none() {
+                continue;
+            }
             let Some((t, region)) = standing_on(board, sheet, slot, net) else { continue };
             for (e, s) in sheet.doors(t, region) {
                 let Some(next) = sheet.space.edges[e].t.iter().flatten().copied().find(|&x| x != t) else { continue };
@@ -277,8 +328,8 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
                 }
             }
             for &c in &sheet.space.tri_spots[t] {
-                if c != slot && stands.entry(c).or_insert_with(|| if terms.ban.contains(&c) { None } else { standing(board, sheets, &mut with, c, net) }).as_ref().is_some_and(|s| s[l] == (t, region)) {
-                    arrive(c, l, cost + terms.dear[l] * dist(p, spots.at[c]), key, via, None, &mut best, &mut heap);
+                if c != slot && sits(sheet, &mut regions, l, t, region, c) && (!terms.into.contains(&c) || stands.entry(c).or_insert_with(|| standing(board, sheets, &mut with, c, net)).is_some()) {
+                    arrive(c, l, cost + terms.dear[l] * dist(p, spots.at[c]), key, via, None, &mut best, &mut heap, &mut |c| stands.entry(c).or_insert_with(|| if terms.ban.contains(&c) { None } else { standing(board, sheets, &mut with, c, net) }).is_some());
                 }
             }
         } else {
@@ -288,12 +339,15 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
             if let Some(via) = terms.via {
                 let region = sheet.region(into, edge, slot);
                 for &c in &sheet.space.tri_spots[into] {
-                    if stands.entry(c).or_insert_with(|| if terms.ban.contains(&c) { None } else { standing(board, sheets, &mut with, c, net) }).as_ref().is_some_and(|s| s[l] == (into, region)) {
-                        arrive(c, l, cost + terms.dear[l] * dist(here, spots.at[c]), key, via, None, &mut best, &mut heap);
+                    if sits(sheet, &mut regions, l, into, region, c) {
+                        // A via that ends the way where it stands is asked about at once.
+                        if !terms.into.contains(&c) || stands.entry(c).or_insert_with(|| standing(board, sheets, &mut with, c, net)).is_some() {
+                            arrive(c, l, cost + terms.dear[l] * dist(here, spots.at[c]), key, via, None, &mut best, &mut heap, &mut |c| stands.entry(c).or_insert_with(|| if terms.ban.contains(&c) { None } else { standing(board, sheets, &mut with, c, net) }).is_some());
+                        }
                     } else if !terms.ban.contains(&c)
                         && let Some((strand, k)) = *pasts.entry((c, l, into, region)).or_insert_with(|| standing_past(board, sheets, &mut with, c, net, l, into, region))
                     {
-                        arrive(c, l, cost + terms.dear[l] * dist(here, spots.at[c]), key, via, Some((l, strand, k)), &mut best, &mut heap);
+                        arrive(c, l, cost + terms.dear[l] * dist(here, spots.at[c]), key, via, Some((l, strand, k)), &mut best, &mut heap, &mut |c| stands.entry(c).or_insert_with(|| if terms.ban.contains(&c) { None } else { standing(board, sheets, &mut with, c, net) }).is_some());
                     }
                 }
             }
@@ -385,7 +439,7 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
 /// through it: that would be a loop with no start. It can be offered one, because a way's cost
 /// is its length pulled tight, which can be less at a crossing than at the one before it, and
 /// so a way that goes on round a corner and back can come out cheaper than the way it began on.
-fn through(best: &HashMap<Key, Seen>, from: Key, key: Key) -> bool {
+fn through(best: &Map<Key, Seen>, from: Key, key: Key) -> bool {
     let mut at = Some(from);
     while let Some(k) = at {
         if k == key {
@@ -399,7 +453,7 @@ fn through(best: &HashMap<Key, Seen>, from: Key, key: Key) -> bool {
 /// The way that ends at `last`, as legs, a new leg at every via, and the connections it goes
 /// across.
 #[allow(clippy::type_complexity)]
-fn legs(best: &HashMap<Key, Seen>, last: Key) -> Option<(Vec<Leg>, Vec<usize>, Vec<(usize, usize, usize, usize)>)> {
+fn legs(best: &Map<Key, Seen>, last: Key) -> Option<(Vec<Leg>, Vec<usize>, Vec<(usize, usize, usize, usize)>)> {
     // Each leg's start is filled in when the way has been followed back to it.
     let from = End::Site(usize::MAX);
     let mut legs: Vec<Leg> = Vec::new();

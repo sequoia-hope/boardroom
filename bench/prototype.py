@@ -15,8 +15,8 @@ verdict on the routed board (after a refill) beside its verdict on the bare one.
 
 `--set ours` is the same on our own boards, into LAB/planned/ours/: each is stripped and routed
 from its pads, and the picture beside it is the board's copper as it is in its file. Boards are
-routed side by side, as many as $RESERVED_CORES (book them with `reserve`), each under a
-memory cap and stopped after --cap seconds.
+routed side by side, half as many as $RESERVED_CORES (book them with `reserve`; a board is
+routed two ways at once), each under a memory cap and stopped after --cap seconds.
 """
 import argparse
 import collections
@@ -129,7 +129,8 @@ def main():
         cmd = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=8G", "-p", "MemorySwapMax=0", "timeout", str(a.cap), WIRE, board, OUT / bid]
         return subprocess.run(cmd, capture_output=True, text=True, env=env)
 
-    with concurrent.futures.ThreadPoolExecutor(int(os.environ.get("RESERVED_CORES", "1"))) as pool:
+    # A board is routed two ways at once, on a thread each.
+    with concurrent.futures.ThreadPoolExecutor(max(1, int(os.environ.get("RESERVED_CORES", "2")) // 2)) as pool:
         ran = list(pool.map(route, boards))
     rows = {}
     for (bid, title, board), r in zip(boards, ran):

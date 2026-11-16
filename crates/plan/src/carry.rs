@@ -206,5 +206,11 @@ pub fn sheet(board: &Board, layer: usize, vias: &[(P, u32)], spots: &Arc<Spots>,
         there.sort_by(|a, b| a.0.total_cmp(&b.0));
         sheet.on[e] = there.into_iter().map(|(_, s, k)| (s, k)).collect();
     }
-    sheet.sound(board).then_some(sheet)
+    if !sheet.sound(board) {
+        return None;
+    }
+    // Where its strands lie, worked out here and now: the next search asks, and here the
+    // layers are side by side.
+    sheet.places(board);
+    Some(sheet)
 }

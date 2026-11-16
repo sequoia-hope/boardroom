@@ -9,6 +9,40 @@ use board::{Board, ItemId, Kind, Nm, Point, Shape};
 use serde::Serialize;
 use spade::{ConstrainedDelaunayTriangulation, Point2, Triangulation};
 
+/// A map whose keys are a few small numbers: hashed with a multiply and a turn each, which
+/// is all such keys need. A search looks its places up millions of times, and the standard
+/// hash, made to withstand keys chosen to collide, was a good part of what a search took.
+pub(crate) type Map<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<Quick>>;
+
+#[derive(Default)]
+pub(crate) struct Quick(u64);
+
+impl std::hash::Hasher for Quick {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u64(b as u64);
+        }
+    }
+    fn write_u64(&mut self, x: u64) {
+        self.0 = (self.0.rotate_left(5) ^ x).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+    fn write_u32(&mut self, x: u32) {
+        self.write_u64(x as u64);
+    }
+    fn write_u8(&mut self, x: u8) {
+        self.write_u64(x as u64);
+    }
+    fn write_usize(&mut self, x: usize) {
+        self.write_u64(x as u64);
+    }
+    fn write_isize(&mut self, x: isize) {
+        self.write_u64(x as u64);
+    }
+}
+
 /// Millimetres, KiCad's frame.
 pub type P = [f64; 2];
 
@@ -74,9 +108,66 @@ pub struct Spots {
     pub ways_out: Vec<(P, P, u32)>,
     /// How near the middle of a via of another net may be to a way out, mm.
     pub out_keep: f64,
+    /// A via of the plan nearer a spot than this, mm, may have a say in whether a via may
+    /// stand there: two vias' copper and the farthest any rule of the board reaches (a net
+    /// class may ask more clearance than the least two vias stand apart at).
+    pub beside: f64,
+    /// What the exact checker says of a via of each net at each spot on the bare board
+    /// ([`Spots::alone`]), for each asked about so far.
+    pub checked: Checked,
 }
 
+/// For a spot and a net: whether the exact checker lets a via of that net stand there on the
+/// bare board, and whether a thermal spoke is near it. And the bare board to try them on.
+/// A copy of the spots starts with none of it: its places may be others.
+#[derive(Debug, Default)]
+pub struct Checked(std::sync::Mutex<Alone>);
+
+/// What [`Checked`] holds: the answers so far, and the bare board to try a via on.
+#[derive(Debug, Default)]
+struct Alone {
+    known: Map<(usize, u32), (bool, bool)>,
+    bare: Option<Board>,
+}
+
+impl Clone for Checked {
+    fn clone(&self) -> Checked {
+        Checked::default()
+    }
+}
+
+/// How far from a via a thermal spoke is looked for, nm: farther than a via's copper and any
+/// clearance reach.
+const SPOKE_NEAR: Nm = 1_000_000;
+
 impl Spots {
+    /// Whether the exact checker lets `via`, a via of `net` at spot `c`, stand on the bare
+    /// board, and whether what it says could be otherwise with the plan's other vias on the
+    /// board wherever they stand: where a pad's thermal spoke is near, of which two vias can
+    /// together cut more than one may, where an opening drawn in the mask is near, which
+    /// takes copper of one net only, or where vias are bare in the mask, and keep more from
+    /// each other than their copper asks. (A via of the plan that stands within
+    /// [`Spots::beside`] has a say besides: that is for the asker to see to.) Worked out
+    /// once for each spot and net: a search asks it of every spot it comes by, and a plan
+    /// is thousands of searches.
+    pub fn alone(&self, board: &Board, c: usize, net: u32, via: &dyn Fn() -> board::Item) -> (bool, bool) {
+        let Ok(mut alone) = self.checked.0.lock() else { return (true, true) };
+        if let Some(&was) = alone.known.get(&(c, net)) {
+            return was;
+        }
+        let bare = alone.bare.get_or_insert_with(|| board.clone());
+        let item = via();
+        let about = item.shape.bbox().grow(SPOKE_NEAR);
+        let spoked = board.via_openings.0 != 0
+            || board.mask_areas.iter().any(|(shape, ..)| about.overlaps(shape.bbox()))
+            || (0..bare.layers.len()).any(|l| bare.near(l, about).into_iter().any(|id| bare.item(id).is_some_and(|i| matches!(i.kind, Kind::Spoke { .. }))));
+        let id = bare.insert(item);
+        let fits = board::check_item(bare, id).is_empty();
+        bare.discard(id);
+        alone.known.insert((c, net), (fits, spoked));
+        (fits, spoked)
+    }
+
     /// Whether a via of `net` at `p` would shut the way out of a pad of another net.
     pub fn shuts(&self, p: P, net: u32) -> bool {
         self.ways_out.iter().any(|&(a, b, of)| of != net && point_segment(p, a, b) < self.out_keep)
