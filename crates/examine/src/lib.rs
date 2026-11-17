@@ -12,28 +12,23 @@ pub mod svg;
 /// Synthetic boards for the checks' tests.
 #[cfg(test)]
 pub(crate) mod test_board {
-    use std::collections::BTreeMap;
-
     use board::pcb::geom::P;
-    use board::pcb::{Board, Fill, Pad, Part, Track};
+    use board::pcb::{Board, Fill, Pad, Track, Via};
 
-    /// A board of 1 mm square F.Cu pads, `(part, pin, net, at)`.
-    pub fn board(pads: &[(&str, &str, &str, P)], tracks: Vec<Track>, fills: Vec<Fill>) -> Board {
-        let mut parts: BTreeMap<String, Part> = BTreeMap::new();
+    /// A two-layer board of 1 mm square F.Cu pads, `(part, pin, net, at)`, with the copper given.
+    pub fn board_with(pads: &[(&str, &str, &str, P)], tracks: Vec<Track>, vias: Vec<Via>, fills: Vec<Fill>) -> Board {
         let pads: Vec<Pad> = pads
             .iter()
-            .enumerate()
-            .map(|(i, &(part, pin, net, at))| {
-                parts
-                    .entry(part.to_string())
-                    .or_insert_with(|| Part { reference: part.into(), value: String::new(), footprint: String::new(), at, rotation: 0.0, back: false, locked: false, courtyard: None, pads: vec![] })
-                    .pads
-                    .push(i);
+            .map(|&(part, pin, net, at)| {
                 let sq = vec![[at[0] - 0.5, at[1] - 0.5], [at[0] + 0.5, at[1] - 0.5], [at[0] + 0.5, at[1] + 0.5], [at[0] - 0.5, at[1] + 0.5]];
                 Pad { part: part.into(), pin: pin.into(), net: net.into(), layers: vec!["F.Cu".into()], centre: at, shape: vec![sq] }
             })
             .collect();
-        Board { layers: vec!["F.Cu".into(), "B.Cu".into()], parts, pads, tracks, vias: vec![], fills, outline: None }
+        Board::sketch(&["F.Cu", "B.Cu"], &pads, &tracks, &vias, &fills).expect("a sketched board reads")
+    }
+
+    pub fn board(pads: &[(&str, &str, &str, P)], tracks: Vec<Track>, fills: Vec<Fill>) -> Board {
+        board_with(pads, tracks, vec![], fills)
     }
 
     pub fn track(net: &str, a: P, b: P) -> Track {

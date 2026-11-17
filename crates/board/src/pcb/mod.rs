@@ -30,6 +30,11 @@ pub struct Board {
     /// closed outline.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outline: Option<Vec<P>>,
+    /// The board this was drawn from ([`Board::of`]): which copper joins which is asked of it
+    /// ([`graph`]), as the checker asks. None for a board put together by hand, which joins
+    /// nothing.
+    #[serde(skip)]
+    pub source: Option<std::sync::Arc<crate::Board>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -113,18 +118,19 @@ fn polygon(shape: &Shape) -> Vec<P> {
 
 impl Board {
     pub fn load(path: &Path) -> Result<Board, String> {
-        crate::Board::load(path).map(|(b, _)| Board::of(&b)).map_err(|e| e.to_string())
+        crate::Board::load(path).map(|(b, _)| Board::of(std::sync::Arc::new(b))).map_err(|e| e.to_string())
     }
 
     /// A board file's text, with KiCad's default rules.
     pub fn parse(text: &str) -> Result<Board, String> {
         let (pcb, copper) = kicad::parse_board(text).map_err(|e| e.to_string())?;
         let rules = kicad::Rules::parse("{}").map_err(|e| e.to_string())?;
-        Ok(Board::of(&crate::Board::new(&pcb, &copper, rules)))
+        Ok(Board::of(std::sync::Arc::new(crate::Board::new(&pcb, &copper, rules))))
     }
 
     /// The copper of `board` per net, as it stands (a routed board's routes included).
-    pub fn of(board: &crate::Board) -> Board {
+    pub fn of(source: std::sync::Arc<crate::Board>) -> Board {
+        let board = source.as_ref();
         let layers = board.layers.clone();
         let names = |mask: u64| -> Vec<String> { (0..layers.len()).filter(|l| mask & (1 << l) != 0).map(|l| layers[l].clone()).collect() };
         let mut parts: BTreeMap<String, Part> = BTreeMap::new();
@@ -184,7 +190,60 @@ impl Board {
             }
         }
         let outline = board.outline.first().filter(|l| l.len() >= 3).map(|l| l.iter().copied().map(mm).collect());
-        Board { layers, parts, pads, tracks, vias, fills, outline }
+        Board { layers, parts, pads, tracks, vias, fills, outline, source: Some(source.clone()) }
+    }
+
+    /// A board of the copper given, as KiCad would read it: written out as a board file and read
+    /// back, so that it is drawn from the main model like any other. Each pad is a rectangle the
+    /// size of its first shape's box, in a footprint at the origin named for its part; each fill
+    /// a zone of its net filled as given. For tests and sketches.
+    pub fn sketch(layers: &[&str], pads: &[Pad], tracks: &[Track], vias: &[Via], fills: &[Fill]) -> Result<Board, String> {
+        use std::fmt::Write;
+        let mut nets: Vec<&str> = pads.iter().map(|p| p.net.as_str()).chain(tracks.iter().map(|t| t.net.as_str())).chain(vias.iter().map(|v| v.net.as_str())).chain(fills.iter().map(|f| f.net.as_str())).filter(|n| !n.is_empty()).collect();
+        nets.sort_unstable();
+        nets.dedup();
+        let num = |n: &str| nets.iter().position(|m| *m == n).map_or(0, |k| k + 1);
+        let id = |l: &str| match l {
+            "F.Cu" => 0,
+            "B.Cu" => 31,
+            _ => l.trim_start_matches("In").trim_end_matches(".Cu").parse::<usize>().unwrap_or(30),
+        };
+        let pts = |ps: &[P]| ps.iter().map(|q| format!("(xy {} {})", q[0], q[1])).collect::<Vec<_>>().join(" ");
+        let quoted = |ls: &[String]| ls.iter().map(|l| format!("\"{l}\"")).collect::<Vec<_>>().join(" ");
+        let mut t = String::from("(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))\n(layers");
+        for l in layers {
+            let _ = write!(t, " ({} \"{l}\" signal)", id(l));
+        }
+        t.push_str(" (44 \"Edge.Cuts\" user))\n(net 0 \"\")");
+        for (k, n) in nets.iter().enumerate() {
+            let _ = write!(t, " (net {} \"{n}\")", k + 1);
+        }
+        let mut refs: Vec<&str> = pads.iter().map(|p| p.part.as_str()).collect();
+        refs.sort_unstable();
+        refs.dedup();
+        for r in refs {
+            let _ = write!(t, "\n(footprint \"sketch:{r}\" (layer \"F.Cu\") (at 0 0) (property \"Reference\" \"{r}\") (property \"Value\" \"\")");
+            for p in pads.iter().filter(|p| p.part == r) {
+                let Some((lo, hi)) = p.shape.first().and_then(|s| geom::bbox(s.iter().copied())) else { continue };
+                let _ = write!(t, " (pad \"{}\" smd rect (at {} {}) (size {} {}) (layers {}) (net {} \"{}\"))", p.pin, p.centre[0], p.centre[1], hi[0] - lo[0], hi[1] - lo[1], quoted(&p.layers), num(&p.net), p.net);
+            }
+            t.push(')');
+        }
+        for k in tracks {
+            let _ = write!(t, "\n(segment (start {} {}) (end {} {}) (width {}) (layer \"{}\") (net {}))", k.a[0], k.a[1], k.b[0], k.b[1], k.width, k.layer, num(&k.net));
+        }
+        for v in vias {
+            let _ = write!(t, "\n(via (at {} {}) (size {}) (drill {}) (layers {}) (net {}))", v.at[0], v.at[1], v.size, v.drill, quoted(&v.layers), num(&v.net));
+        }
+        for f in fills {
+            let _ = write!(
+                t,
+                "\n(zone (net {}) (net_name \"{}\") (layer \"{}\") (hatch edge 0.5) (connect_pads (clearance 0.2)) (min_thickness 0.1) (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5)) (polygon (pts {})) (filled_polygon (layer \"{}\") (pts {})))",
+                num(&f.net), f.net, f.layer, pts(&f.polygon), f.layer, pts(&f.polygon)
+            );
+        }
+        t.push_str("\n)\n");
+        Board::parse(&t)
     }
 
     /// The pad `REF.PIN`. Footprints with several pads of one number (exposed pads, connector

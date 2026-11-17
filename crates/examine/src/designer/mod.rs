@@ -80,8 +80,8 @@ mod tests {
             tracks,
             vias: vec![],
             fills: vec![],
-            
             outline: Some(vec![[0.0, 0.0], [40.0, 0.0], [40.0, 40.0], [0.0, 40.0]]),
+            source: None,
         }
     }
 

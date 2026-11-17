@@ -310,7 +310,7 @@ pub fn ideal_diode(board: &Board, block: &str, roles: &IdealDiodeRoles, limits: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_board::{board, track};
+    use crate::test_board::{board, board_with, track};
     use board::pcb::{Fill, Via};
 
     fn roles(kv: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -329,13 +329,12 @@ mod tests {
         if stub {
             tracks.push(track("N", [5.0, 0.0], [5.0, 2.0]));
         }
-        let mut b = board(
+        board_with(
             &[("J1", "1", "N", [0.0, 0.0]), ("J1", "2", "GND", [0.0, 3.0]), ("U1", "1", "N", [10.0, 0.0]), ("D1", "1", "N", tvs_at), ("D1", "2", "GND", [5.0, 3.0])],
             tracks,
+            vec![Via { at: [5.0, 3.9], size: 0.4, drill: 0.2, layers: vec!["F.Cu".into(), "B.Cu".into()], net: "GND".into() }],
             vec![],
-        );
-        b.vias.push(Via { at: [5.0, 3.9], size: 0.4, drill: 0.2, layers: vec!["F.Cu".into(), "B.Cu".into()], net: "GND".into() });
-        b
+        )
     }
 
     #[test]
