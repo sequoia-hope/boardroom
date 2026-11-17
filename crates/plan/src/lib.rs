@@ -201,9 +201,10 @@ impl Want {
     }
 }
 
-/// The default via's radius and drill radius, nm.
-pub fn via_size(board: &Board) -> (i64, i64) {
-    let class = board.rules.class_of("");
+/// The radius and drill radius of a via of `net`, nm: its class's (net 0: the default class's),
+/// no less than the board's least. A power class's via is bigger than a signal's.
+pub fn via_size(board: &Board, net: u32) -> (i64, i64) {
+    let class = board.rules.class_of(board.net_name(net)).or_else(|| board.rules.class_of(""));
     let d = class.as_ref().map_or(0.0, |c| c.via_diameter).max(board.rules.min_via_diameter);
     let drill = class.as_ref().map_or(0.0, |c| c.via_drill).max(board.rules.min_via_drill);
     (board::nm(d) / 2, board::nm(drill) / 2)
@@ -211,7 +212,7 @@ pub fn via_size(board: &Board) -> (i64, i64) {
 
 /// A via of `net` at `at`, through every layer.
 pub(crate) fn via_item(board: &Board, at: space::P, net: u32) -> board::Item {
-    let (r, drill) = via_size(board);
+    let (r, drill) = via_size(board, net);
     let at = board::Point::new((at[0] * 1e6).round() as i64, (at[1] * 1e6).round() as i64);
     board::Item { kind: Kind::Via, net, layers: (1u64 << board.layers.len()) - 1, shape: board::Shape::Capsule { a: at, b: at, r }, hole: Some((at, drill)), locked: false, span: None }
 }
@@ -228,7 +229,7 @@ fn for_some_net(board: &Board, id: ItemId) -> bool {
 }
 
 pub fn via_spots(board: &Board, tight: bool) -> Spots {
-    let (r, drill) = via_size(board);
+    let (r, drill) = via_size(board, 0);
     let centre = board::Point::new(0, 0);
     // What a track keeps from a via's copper: its clearance, or more where the via's ring is
     // narrower than the rules keep copper from a hole.
@@ -737,7 +738,7 @@ pub fn start_from(board: &Board, spots: Spots) -> Plan {
     let poured = poured(board);
     // On two layers a poured side is still routed on: the designers do (159 of the gate
     // tier's 253 two-layer boards have a side at least half poured).
-    let planes: Vec<usize> = if poured.len() <= 2 || poured.iter().all(|s| *s >= 0.5) { Vec::new() } else { (0..poured.len()).filter(|&l| poured[l] >= 0.5).collect() };
+    let planes: Vec<usize> = if poured.len() <= 2 || poured.iter().all(|s| *s >= board::PLANE_SHARE) { Vec::new() } else { (0..poured.len()).filter(|&l| poured[l] >= board::PLANE_SHARE).collect() };
     let stated = |l: usize| spots.bars.iter().any(|b| !b.nets[l].is_empty());
     let closed = planes.iter().copied().filter(|&l| l != 0 && l + 1 != board.layers.len() && !stated(l)).collect();
     Plan { sheets, planes, closed, vias: Vec::new(), left: Vec::new(), wants: Vec::new(), joined: Arc::new(joined(board)) }
@@ -948,7 +949,12 @@ pub fn tidy(board: &Board, plan: &mut Plan) {
 pub fn add(board: &Board, plan: &mut Plan, more: Vec<Want>) {
     let first = plan.wants.len();
     plan.wants.extend(more);
-    place(board, plan, &(first..plan.wants.len()).collect::<Vec<_>>());
+    // A net a custom rule holds to a length (a crystal's, a flash clock's) is laid first, while
+    // its straight way is open; the rest shortest first, as they come.
+    let mut bounded: std::collections::HashMap<u32, bool> = std::collections::HashMap::new();
+    let mut order: Vec<usize> = (first..plan.wants.len()).collect();
+    order.sort_by_key(|&c| !*bounded.entry(plan.wants[c].net).or_insert_with(|| board.net_maximum("length", plan.wants[c].net).is_some()));
+    place(board, plan, &order);
 }
 
 /// Lays again the connections a wire could not be drawn for (each the connection's number and

@@ -606,7 +606,7 @@ impl Space {
                 let a = std::f64::consts::PI * (0.5 + 2.0 * i as f64 / 3.0);
                 [at[0] + VIA_CORNER * a.cos(), at[1] + VIA_CORNER * a.sin()]
             });
-            obstacles.push(Obstacle { what: What::Pad, net, item: None, centre: at, poly: poly.collect(), reach: spots.radius + VIA_CORNER, mask: opened(Some(board.via_openings)), hole: spots.hole, past: 0.0 });
+            obstacles.push(Obstacle { what: What::Pad, net, item: None, centre: at, poly: poly.collect(), reach: crate::via_size(board, net).0 as f64 / 1e6 + VIA_CORNER, mask: opened(Some(board.via_openings)), hole: spots.hole, past: 0.0 });
         }
 
         // Corners, one vertex per place (to a nanometre), and each polygon's sides as constraints.

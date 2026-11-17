@@ -32,8 +32,8 @@ pub struct LayerUse {
     pub role: Role,
 }
 
-/// A layer is a plane when a pour covers this share of the board.
-pub const POURED: f64 = 0.5;
+/// A layer is a plane when a pour covers this share of the board (the router's threshold too).
+pub const POURED: f64 = board::PLANE_SHARE;
 /// A poured layer is still a plane with up to this share of the track an even split would give
 /// it (an escape or a jumper on a plane layer does not make it a signal layer).
 pub const PLANE_TRACK: f64 = 0.25;

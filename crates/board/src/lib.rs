@@ -18,3 +18,7 @@ pub use check::{check, check_item, check_item_with_pours, intrudes, mask_gap, ma
 pub use connect::{anchors, connectivity, connectivity_poured, connectivity_without_pours, joined, net_connectivity, Airline, Connectivity};
 pub use fill::{fill_zones, fill_zones_until, Fill, Pours, Starved};
 pub use geom::{inside, nm, point_segment, BBox, Nm, Point, Shape};
+
+/// A layer is a plane when its pours cover at least this share of the board: the one threshold
+/// the router (`plan`) and the judge (`examine`) both use.
+pub const PLANE_SHARE: f64 = 0.5;

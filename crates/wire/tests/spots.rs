@@ -39,7 +39,7 @@ fn a_via_may_stand_in_the_middle_of_four_pins_where_the_grid_has_no_point() {
 #[test]
 fn every_spot_passes_the_checker() {
     let board = pocket();
-    let (r, drill) = plan::via_size(&board);
+    let (r, drill) = plan::via_size(&board, 0);
     for p in &plan::via_spots(&board, false).at {
         let mut with = board.clone();
         let at = board::Point::new((p[0] * 1e6).round() as i64, (p[1] * 1e6).round() as i64);

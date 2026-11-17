@@ -460,13 +460,13 @@ fn draw_with(board: &Board, plan: &Plan, watch: Option<(usize, usize)>, memo: &m
     // The board as it fills: every wire is put to the exact checker as it is drawn, and one it
     // faults is not kept.
     let mut work = board.clone();
-    let (r, drill) = plan::via_size(board);
     let all = (1u64 << board.layers.len()) - 1;
     // Which wire of the drawing each track on the board is a piece of.
     let mut tracks: HashMap<ItemId, usize> = HashMap::new();
     let mut vias: HashMap<ItemId, usize> = HashMap::new();
     for v in &plan.vias {
         let c = nm(v.at);
+        let (r, drill) = plan::via_size(board, v.net);
         let id = work.insert(Item { kind: Kind::Via, net: v.net, layers: all, shape: Shape::Capsule { a: c, b: c, r }, hole: Some((c, drill)), locked: false, span: None });
         vias.insert(id, v.site);
     }
@@ -811,7 +811,7 @@ fn left_by_pours(board: &Board, plan: &Plan, drawing: &Drawing, poured: &[u32]) 
     let pours = board::Pours::of(&with);
     let joined = board::connectivity_poured(&with, &pours);
     let Some(spots) = plan.sheets.first().map(|s| s.space.spots.clone()) else { return (Vec::new(), joined.airlines.len()) };
-    let (r, _) = plan::via_size(board);
+    let (r, _) = plan::via_size(board, 0);
     // The cluster of copper each piece of pour is part of.
     let mut cluster_of: HashMap<usize, usize> = HashMap::new();
     for (&id, &cluster) in &joined.cluster {
@@ -1304,10 +1304,10 @@ pub fn onto(board: &Board, plan: &Plan, drawing: &Drawing) -> (Board, Vec<ItemId
             new.push(out.insert(Item { kind: Kind::Track, net: w.net, layers: 1 << w.layer, shape, hole: None, locked: false, span: None }));
         }
     }
-    let (r, drill) = plan::via_size(board);
     let all = (1u64 << board.layers.len()) - 1;
     for v in &plan.vias {
         let c = at(v.at);
+        let (r, drill) = plan::via_size(board, v.net);
         new.push(out.insert(Item { kind: Kind::Via, net: v.net, layers: all, shape: Shape::Capsule { a: c, b: c, r }, hole: Some((c, drill)), locked: false, span: None }));
     }
     for t in &drawing.ties {
@@ -1330,9 +1330,9 @@ pub fn write(text: &str, original: &Board, plan: &Plan, drawing: &Drawing) -> St
     for t in &drawing.ties {
         edit.tracks.push(kicad::write::NewTrack { start: m(t.pts[0]), end: m(t.pts[1]), width: t.width / 1e3, layer: original.layers[t.layer].clone(), net: original.file_net(t.net), locked: false });
     }
-    let (r, drill) = plan::via_size(original);
     let (Some(top), Some(bottom)) = (original.layers.first(), original.layers.last()) else { return kicad::write::apply(text, &edit) };
     for v in &plan.vias {
+        let (r, drill) = plan::via_size(original, v.net);
         edit.vias.push(kicad::write::NewVia { at: m(v.at), size: 2.0 * r as f64 / 1e9, drill: 2.0 * drill as f64 / 1e9, layers: [top.clone(), bottom.clone()], net: original.file_net(v.net), locked: false });
     }
     kicad::write::apply(text, &edit)

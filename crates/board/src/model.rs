@@ -1037,34 +1037,6 @@ impl Board {
         }
     }
 
-    /// Inner copper layers that are planes in all but name: one net's pours cover at least
-    /// `share` of the board there. The layer index and the net, for each.
-    pub fn plane_layers(&self, share: f64) -> Vec<(usize, u32)> {
-        let area = |p: &[Point]| {
-            (0..p.len()).map(|i| (p[i].x as f64) * (p[(i + 1) % p.len()].y as f64) - (p[(i + 1) % p.len()].x as f64) * (p[i].y as f64)).sum::<f64>().abs() / 2.0
-        };
-        let Some(outer) = self.outline.first() else { return Vec::new() };
-        let board_area = area(outer) - self.outline.iter().skip(1).map(|h| area(h)).sum::<f64>();
-        let mut out = Vec::new();
-        for l in 1..self.layers.len().saturating_sub(1) {
-            let mut by_net: HashMap<u32, f64> = HashMap::new();
-            for (_, it) in self.items() {
-                if let (Kind::Pour { .. }, Shape::Polygon(p)) = (&it.kind, &it.shape) {
-                    if it.net != 0 && it.on(l) && !it.drawn() {
-                        *by_net.entry(it.net).or_default() += area(p);
-                    }
-                }
-            }
-            // Equal areas go to the lower net, not to the hash map's order.
-            if let Some((&net, &a)) = by_net.iter().max_by(|x, y| x.1.total_cmp(y.1).then(y.0.cmp(x.0))) {
-                if board_area > 0.0 && a >= share * board_area {
-                    out.push((l, net));
-                }
-            }
-        }
-        out
-    }
-
     /// Whether a via of radius `r` at `p` would reach into a via-avoid area.
     pub fn in_via_avoid(&self, p: Point, r: Nm) -> bool {
         let via = Shape::Capsule { a: p, b: p, r };
