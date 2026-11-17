@@ -216,9 +216,22 @@ impl Item {
 
 pub type ItemId = usize;
 
+/// A pad as the file has it: its footprint, number and centre, and its copper, one item per
+/// polygon (none on any copper layer for a bare hole).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PadInfo {
+    pub footprint: usize,
+    pub number: String,
+    pub centre: Point,
+    pub items: Vec<ItemId>,
+}
+
 #[derive(Debug, Clone)]
 pub struct FootprintInfo {
     pub reference: String,
+    pub value: String,
+    /// Its library name (`Resistor_SMD:R_0402_1005Metric`).
+    pub library_id: String,
     pub at: Point,
     pub rotation_deg: f64,
     pub back: bool,
@@ -285,6 +298,8 @@ pub struct Board {
     /// Each net's number in the board file, for the writer.
     file_nets: Vec<u32>,
     pub footprints: Vec<FootprintInfo>,
+    /// Every pad, in file order.
+    pub pads: Vec<PadInfo>,
     pub blocks: Vec<Block>,
     pub outline: Vec<Vec<Point>>,
     /// Precomputed outline edge segments `(a, b, BBox::of([a, b]), clearance)` for fast
@@ -514,6 +529,8 @@ impl Board {
                 .enumerate()
                 .map(|(i, (((f, locked), at_span), yard))| FootprintInfo {
                     reference: f.reference.clone(),
+                    value: f.value.clone(),
+                    library_id: f.library_id.clone(),
                     at: Point::from_m(f.at),
                     rotation_deg: f.rotation_deg,
                     back: matches!(f.side, kicad::Side::Back),
@@ -522,6 +539,7 @@ impl Board {
                     courtyard: yard.as_ref().map(|y| y.iter().copied().map(Point::from_m).collect()),
                 })
                 .collect(),
+            pads: Vec::new(),
             blocks: blocks.clone(),
             outline: Vec::new(),
             outline_edges: Vec::new(),
@@ -682,6 +700,7 @@ impl Board {
             let id = board.insert(base);
             ids.push(id);
             pad_items.push((k, id));
+            board.pads.push(PadInfo { footprint: pad.footprint, number: model.number.clone(), centre: Point::from_m(model.position), items: ids.clone() });
             if let Some(ends) = model.drill.and_then(|d| slot_ends(model.position, model.rotation_deg, d)) {
                 board.hole_ends.insert(id, ends);
             }

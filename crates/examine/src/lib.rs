@@ -33,7 +33,7 @@ pub(crate) mod test_board {
                 Pad { part: part.into(), pin: pin.into(), net: net.into(), layers: vec!["F.Cu".into()], centre: at, shape: vec![sq] }
             })
             .collect();
-        Board { layers: vec!["F.Cu".into(), "B.Cu".into()], parts, pads, tracks, vias: vec![], fills, rules: None, outline: None }
+        Board { layers: vec!["F.Cu".into(), "B.Cu".into()], parts, pads, tracks, vias: vec![], fills, outline: None }
     }
 
     pub fn track(net: &str, a: P, b: P) -> Track {

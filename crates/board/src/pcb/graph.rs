@@ -265,7 +265,7 @@ mod tests {
             tracks: vec![Track { a: [0.0, 0.0], b: [10.0, 0.0], width: 0.2, layer: "F.Cu".into(), net: "N".into(), locked: false }],
             vias: vec![],
             fills: vec![],
-            rules: None,
+            
             outline: None,
         };
         let p = copper_path(&board, "N", "P.1", "B.1").expect("P joins the track");
@@ -283,7 +283,7 @@ mod tests {
             parts.insert(r.to_string(), Part { reference: r.to_string(), value: String::new(), footprint: String::new(), at: pads[i].centre, rotation: 0.0, back: false, locked: false, courtyard: None, pads: vec![i] });
         }
         let t = |a: P, b: P| Track { a, b, width: 0.1, layer: "F.Cu".into(), net: "N".into(), locked: false };
-        let mut board = Board { layers: vec!["F.Cu".into()], parts, pads, tracks: vec![t([0.0, 0.0], [1.0, 0.0]), t([1.0, 0.099], [2.0, 0.099])], vias: vec![], fills: vec![], rules: None, outline: None };
+        let mut board = Board { layers: vec!["F.Cu".into()], parts, pads, tracks: vec![t([0.0, 0.0], [1.0, 0.0]), t([1.0, 0.099], [2.0, 0.099])], vias: vec![], fills: vec![], outline: None };
         assert!(copper_path(&board, "N", "A.1", "B.1").is_some());
         // 0.101 mm apart they do not touch.
         board.tracks[1] = t([1.0, 0.101], [2.0, 0.101]);
@@ -311,7 +311,7 @@ mod tests {
             tracks: vec![Track { a: [0.0, 0.1], b: [5.0, 0.1], width: 0.2, layer: "B.Cu".into(), net: "N".into(), locked: false }],
             vias: vec![via(0.0), via(5.0)],
             fills: vec![],
-            rules: None,
+            
             outline: None,
         };
         let p = copper_path(&board, "N", "A.1", "B.1").expect("the vias join the pads");
@@ -334,7 +334,7 @@ mod tests {
             tracks: vec![Track { a: [0.0, 2.0], b: [5.0, 2.0], width: 0.2, layer: "F.Cu".into(), net: "N".into(), locked: false }],
             vias: vec![],
             fills: vec![],
-            rules: None,
+            
             outline: None,
         };
         let p = copper_path(&board, "N", "Q.1", "B.1").expect("the second pad of Q.1 is joined");
@@ -360,7 +360,7 @@ mod tests {
             tracks: vec![Track { a: [0.0, 0.0], b: [2.0, 0.0], width: 0.1, layer: "F.Cu".into(), net: "N".into(), locked: false }],
             vias: vec![mk_via("F.Cu", "In1.Cu"), mk_via("In1.Cu", "In2.Cu"), mk_via("In2.Cu", "B.Cu")],
             fills: vec![],
-            rules: None,
+            
             outline: None,
         };
         let p = copper_path(&board, "N", "J.1", "D.1").expect("stacked HDI vias connect B.Cu to F.Cu");

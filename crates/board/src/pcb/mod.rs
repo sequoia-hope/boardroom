@@ -1,5 +1,9 @@
 //! A KiCad board as copper per net: what the fast verifier checks measure and what the block
 //! generators place against. Millimetres, KiCad's frame (Y down).
+//!
+//! It is drawn from [`crate::Board`], the board the router lays copper on and the checker judges
+//! ([`Board::of`]), so the judge measures the copper as they see it: arcs as the same chords,
+//! pads joined on the layers KiCad joins them on, a routed board as routed.
 
 pub mod geom;
 pub mod graph;
@@ -9,6 +13,8 @@ use std::path::Path;
 
 use geom::P;
 use serde::Serialize;
+
+use crate::{Kind, Point, Shape, DRAWN};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Board {
@@ -20,9 +26,6 @@ pub struct Board {
     pub vias: Vec<Via>,
     /// Zone fills as KiCad last computed them.
     pub fills: Vec<Fill>,
-    /// Net classes and clearances from the `.kicad_pro` (and `.kicad_dru`) beside the board.
-    #[serde(skip)]
-    pub rules: Option<kicad::Rules>,
     /// The board's outer Edge.Cuts loop, arcs as chords within 5 um; none when it has no
     /// closed outline.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -82,115 +85,106 @@ pub struct Fill {
     pub polygon: Vec<P>,
 }
 
-const MM: f64 = 1e3;
+/// Nanometres to millimetres.
+fn mm(p: Point) -> P {
+    [p.x as f64 / 1e6, p.y as f64 / 1e6]
+}
 
-fn mm(p: [f64; 2]) -> P {
-    [p[0] * MM, p[1] * MM]
+/// Chord error allowed when a round pad becomes a polygon, mm: as the main model's arcs.
+const ROUND_ERROR: f64 = 0.005;
+
+/// A shape as one polygon, mm: a round pad as a polygon within [`ROUND_ERROR`] of its circle,
+/// with its corners on it.
+fn polygon(shape: &Shape) -> Vec<P> {
+    match shape {
+        Shape::Polygon(p) => p.iter().copied().map(mm).collect(),
+        Shape::Capsule { a, b, r } => {
+            let r = *r as f64 / 1e6;
+            let step = 2.0 * (1.0 - (ROUND_ERROR / r.max(ROUND_ERROR)).min(1.0)).acos();
+            let n = ((std::f64::consts::TAU / step.max(1e-3)).ceil() as usize).clamp(24, 1024);
+            if a == b {
+                geom::circle(mm(*a), r, n)
+            } else {
+                geom::capsule(mm(*a), mm(*b), 2.0 * r)
+            }
+        }
+    }
 }
 
 impl Board {
     pub fn load(path: &Path) -> Result<Board, String> {
-        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let mut board = Board::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-        board.rules = kicad::Rules::read(&path.with_extension("kicad_pro")).ok();
-        Ok(board)
+        crate::Board::load(path).map(|(b, _)| Board::of(&b)).map_err(|e| e.to_string())
     }
 
-    /// The copper clearance KiCad requires between two nets, mm: the larger of their classes'
-    /// and the board minimum. `None` without a project file.
-    pub fn clearance(&self, a: &str, b: &str) -> Option<f64> {
-        self.rules.as_ref().map(|r| r.clearance(a, b) * MM)
-    }
-
+    /// A board file's text, with KiCad's default rules.
     pub fn parse(text: &str) -> Result<Board, String> {
         let (pcb, copper) = kicad::parse_board(text).map_err(|e| e.to_string())?;
-        let net_name: BTreeMap<u32, String> = pcb.nets.iter().map(|n| (n.number, n.name.clone())).collect();
-        let name = |n: u32| net_name.get(&n).cloned().unwrap_or_default();
-        let layers: Vec<String> = copper.layers.iter().map(|l| l.name.clone()).collect();
+        let rules = kicad::Rules::parse("{}").map_err(|e| e.to_string())?;
+        Ok(Board::of(&crate::Board::new(&pcb, &copper, rules)))
+    }
 
-        let mut parts = BTreeMap::new();
-        for (i, fp) in pcb.footprints.iter().enumerate() {
+    /// The copper of `board` per net, as it stands (a routed board's routes included).
+    pub fn of(board: &crate::Board) -> Board {
+        let layers = board.layers.clone();
+        let names = |mask: u64| -> Vec<String> { (0..layers.len()).filter(|l| mask & (1 << l) != 0).map(|l| layers[l].clone()).collect() };
+        let mut parts: BTreeMap<String, Part> = BTreeMap::new();
+        for f in &board.footprints {
             parts.insert(
-                fp.reference.clone(),
+                f.reference.clone(),
                 Part {
-                    reference: fp.reference.clone(),
-                    value: fp.value.clone(),
-                    footprint: fp.library_id.clone(),
-                    at: mm(fp.at),
-                    rotation: fp.rotation_deg,
-                    back: fp.side == kicad::Side::Back,
-                    locked: copper.locked_footprints.get(i).copied().unwrap_or(false),
-                    courtyard: copper.courtyards.get(i).cloned().flatten().map(|c| c.into_iter().map(mm).collect()),
+                    reference: f.reference.clone(),
+                    value: f.value.clone(),
+                    footprint: f.library_id.clone(),
+                    at: mm(f.at),
+                    rotation: f.rotation_deg,
+                    back: f.back,
+                    locked: f.locked,
+                    courtyard: f.courtyard.as_ref().map(|c| c.iter().copied().map(mm).collect()),
                     pads: Vec::new(),
                 },
             );
         }
-
         let mut pads = Vec::new();
-        for pc in &copper.pads {
-            let pad_layers = copper.expand(&pc.layers);
-            if pad_layers.is_empty() {
-                continue;
+        for info in &board.pads {
+            let items: Vec<_> = info.items.iter().filter_map(|&id| board.item(id)).filter(|it| it.layers != 0).collect();
+            let Some(first) = items.first() else { continue };
+            let reference = &board.footprints[info.footprint].reference;
+            if let Some(p) = parts.get_mut(reference) {
+                p.pads.push(pads.len());
             }
-            let fp = &pcb.footprints[pc.footprint];
-            let pad = &fp.pads[pc.pad];
-            let shape = match &pc.outline {
-                kicad::Outline::Circle { centre, radius } => vec![geom::circle(mm(*centre), radius * MM, 24)],
-                kicad::Outline::Polygons(ps) => ps.iter().map(|p| p.iter().copied().map(mm).collect()).collect(),
-            };
-            let index = pads.len();
             pads.push(Pad {
-                part: fp.reference.clone(),
-                pin: pad.number.clone(),
-                net: pad.net.as_ref().map(|n| n.name.clone()).unwrap_or_default(),
-                layers: pad_layers,
-                centre: mm(pad.position),
-                shape,
+                part: reference.clone(),
+                pin: info.number.clone(),
+                net: board.net_name(first.net).to_string(),
+                layers: names(first.layers),
+                centre: mm(info.centre),
+                shape: items.iter().map(|it| polygon(&it.shape)).collect(),
             });
-            if let Some(p) = parts.get_mut(&fp.reference) {
-                p.pads.push(index);
+        }
+        let (mut tracks, mut vias, mut fills) = (Vec::new(), Vec::new(), Vec::new());
+        let unfilled: std::collections::HashSet<usize> = board.unfilled.iter().map(|u| u.0).collect();
+        for (_, it) in board.items() {
+            let net = board.net_name(it.net).to_string();
+            match (&it.kind, &it.shape) {
+                (Kind::Track, Shape::Capsule { a, b, r }) => {
+                    let layer = names(it.layers).into_iter().next().unwrap_or_default();
+                    tracks.push(Track { a: mm(*a), b: mm(*b), width: 2.0 * *r as f64 / 1e6, layer, net, locked: it.locked });
+                }
+                (Kind::Via, Shape::Capsule { a, r, .. }) => {
+                    let drill = it.hole.map_or(0.0, |(_, h)| 2.0 * h as f64 / 1e6);
+                    vias.push(Via { at: mm(*a), size: 2.0 * *r as f64 / 1e6, drill, layers: names(it.layers), net });
+                }
+                // A zone's fill; an unfilled zone's outline standing in for it is not KiCad's fill.
+                (Kind::Pour { zone, .. }, Shape::Polygon(_)) if *zone != DRAWN && !unfilled.contains(zone) => {
+                    for layer in names(it.layers) {
+                        fills.push(Fill { net: net.clone(), layer, polygon: polygon(&it.shape) });
+                    }
+                }
+                _ => {}
             }
         }
-
-        let mut tracks: Vec<Track> = copper
-            .tracks
-            .iter()
-            .map(|t| Track { a: mm(t.start), b: mm(t.end), width: t.width * MM, layer: t.layer.clone(), net: name(t.net), locked: t.locked })
-            .collect();
-        // Arcs as two chords through their midpoint: close enough for loop areas and gaps.
-        for a in &copper.arcs {
-            for (s, e) in [(a.start, a.mid), (a.mid, a.end)] {
-                tracks.push(Track { a: mm(s), b: mm(e), width: a.width * MM, layer: a.layer.clone(), net: name(a.net), locked: a.locked });
-            }
-        }
-
-        let vias = copper
-            .vias
-            .iter()
-            .map(|v| {
-                let (i, j) = (layers.iter().position(|l| *l == v.layers[0]), layers.iter().position(|l| *l == v.layers[1]));
-                let span = match (i, j) {
-                    (Some(i), Some(j)) => layers[i.min(j)..=i.max(j)].to_vec(),
-                    _ => layers.clone(),
-                };
-                Via { at: mm(v.at), size: v.size * MM, drill: v.drill * MM, layers: span, net: name(v.net) }
-            })
-            .collect();
-
-        let fills = copper
-            .zones
-            .iter()
-            .filter(|z| z.keepout.is_none())
-            .flat_map(|z| {
-                // KiCad <= 9 writes `(net N) (net_name "...")`; KiCad 10 writes `(net "...")` with
-                // no `net_name` child, which `kicad_pcb` numbers into `z.net`.
-                let net = if z.net_name.is_empty() { name(z.net) } else { z.net_name.clone() };
-                z.filled.iter().map(move |(layer, poly)| Fill { net: net.clone(), layer: layer.clone(), polygon: poly.iter().copied().map(mm).collect() })
-            })
-            .collect();
-
-        let outline = pcb.outline_loops().ok().map(|l| l.outer.points(5e-6).into_iter().map(mm).collect());
-        Ok(Board { layers, parts, pads, tracks, vias, fills, rules: None, outline })
+        let outline = board.outline.first().filter(|l| l.len() >= 3).map(|l| l.iter().copied().map(mm).collect());
+        Board { layers, parts, pads, tracks, vias, fills, outline }
     }
 
     /// The pad `REF.PIN`. Footprints with several pads of one number (exposed pads, connector
