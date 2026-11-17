@@ -1,5 +1,7 @@
 # Boardroom app — spec (draft)
 
+> Superseded by [one-system-spec.md](one-system-spec.md) (2026-11-12).
+
 Status: draft, 2026-10-29. Boardroom's half of [`platform-spec.md`](platform-spec.md), the
 counterpart of `circuit-composer/docs/app-spec.md`. It says what the Boardroom app shows, what
 you do in it, how it holds the suite together (windows, selection, AI jobs), and how it is
