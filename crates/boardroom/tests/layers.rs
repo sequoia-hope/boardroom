@@ -20,7 +20,7 @@ fn group(name: &str) -> Option<Group> {
     Some(match name {
         // kicad-text is the GPL program the reader runs; only its tests use the reader.
         "kicad" | "kicad-text" | "board" | "check" | "shape" | "scene" => Foundation,
-        "intent" | "recognise" | "library" | "interfaces" => Understanding,
+        "intent" | "recognise" | "library" | "interfaces" | "packages" => Understanding,
         "examine" => Judging,
         "compose" | "pinsolve" | "floorplan" | "blockgen" => Composer,
         "plan" | "wire" | "route" | "reshape" => UltraRoute,

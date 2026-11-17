@@ -159,6 +159,7 @@ fn copper_written_back_reads_the_same() {
             .collect(),
         arcs: Vec::new(),
         replace: Vec::new(),
+        zones: Vec::new(),
         uuid_seed: None,
     };
     let written = apply(&text, &edit);

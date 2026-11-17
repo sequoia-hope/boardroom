@@ -290,7 +290,10 @@ by `.github/workflows/pages.yml` from snapshots of the projects in `examples.tom
 pcbview lives in this repository as `view/` and is edited here; `scripts/view.sh` runs it. The
 new router is being written here (`crates/plan`, `crates/wire`, `crates/route`; a prototype):
 `boardroom route <board.kicad_pcb>` routes a board into `route/<board>/` and `boardroom check`
-reports our checker's faults; `bench/prototype.py` judges it with KiCad's DRC. Board repos'
+reports our checker's faults; `bench/prototype.py` judges it with KiCad's DRC.
+`boardroom blocks <board.kicad_pcb>` compares each chip a board pins (`<board>.blocks.json`)
+with its package's copper and rule areas and lets each change be accepted or declined;
+`boardroom blocks --behind <dir>` lists the boards behind their packages. Board repos'
 `scripts/route.sh` still runs the old router (`$ULTRAROUTE`), and board repos made so far keep
 their `vendor/pcbview` and `vendor/ultraroute` submodules at their pins.
 

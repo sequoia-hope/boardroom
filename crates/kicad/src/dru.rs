@@ -671,10 +671,98 @@ impl Parser<'_> {
     }
 }
 
+/// Each top-level `(rule "name" …)` in a rules file's text: its name and its byte range, the
+/// comment lines just above it included (they say where it came from).
+pub fn rule_spans(text: &str) -> Vec<(String, std::ops::Range<usize>)> {
+    let b = text.as_bytes();
+    let mut out = Vec::new();
+    let (mut i, mut depth, mut start, mut in_str) = (0, 0usize, 0, false);
+    while i < b.len() {
+        let c = b[i];
+        if in_str {
+            if c == b'\\' {
+                i += 1;
+            } else if c == b'"' {
+                in_str = false;
+            }
+        } else if c == b'#' && depth == 0 {
+            while i < b.len() && b[i] != b'\n' {
+                i += 1;
+            }
+        } else if c == b'"' {
+            in_str = true;
+        } else if c == b'(' {
+            if depth == 0 {
+                start = i;
+            }
+            depth += 1;
+        } else if c == b')' && depth > 0 {
+            depth -= 1;
+            if depth == 0 {
+                let item = &text[start..=i];
+                if let Some(rest) = item.strip_prefix("(rule") {
+                    let name = rest.trim_start().strip_prefix('"').and_then(|r| r.split('"').next()).unwrap_or("").to_string();
+                    // Comment lines directly above belong to the rule.
+                    let mut from = text[..start].rfind('\n').map_or(0, |n| n + 1);
+                    while from > 0 {
+                        let prev = text[..from - 1].rfind('\n').map_or(0, |n| n + 1);
+                        if text[prev..from - 1].trim_start().starts_with('#') {
+                            from = prev;
+                        } else {
+                            break;
+                        }
+                    }
+                    let end = if text[i + 1..].starts_with('\n') { i + 2 } else { i + 1 };
+                    out.push((name, from.min(start)..end));
+                }
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// `text` with every rule named in `remove` taken out and `add` (whole rules, comments allowed)
+/// put at the end, where KiCad lets the last matching rule win. A file that is empty gets the
+/// `(version 1)` line first.
+pub fn put_rules(text: &str, remove: &[String], add: &[String]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut kept = 0;
+    for (name, span) in rule_spans(text) {
+        if remove.contains(&name) {
+            out.push_str(&text[kept..span.start]);
+            kept = span.end;
+        }
+    }
+    out.push_str(&text[kept..]);
+    if out.trim().is_empty() {
+        out = "(version 1)\n".to_string();
+    }
+    for rule in add {
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(rule.trim_end());
+        out.push('\n');
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn rules_are_replaced_by_name_with_their_comments() {
+        let text = "(version 1)\n# keep\n(rule \"a\"\n  (constraint clearance (min 1mm)))\n# from x 1\n(rule \"b\" (condition \"A.NetName == ')'\")\n  (constraint disallow via))\n(rule \"c\" (constraint clearance (min 2mm)))\n";
+        let names: Vec<_> = rule_spans(text).into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, ["a", "b", "c"]);
+        let out = put_rules(text, &["b".into()], &["# from x 2\n(rule \"b\" (constraint disallow track))".into()]);
+        assert_eq!(out, "(version 1)\n# keep\n(rule \"a\"\n  (constraint clearance (min 1mm)))\n(rule \"c\" (constraint clearance (min 2mm)))\n# from x 2\n(rule \"b\" (constraint disallow track))\n");
+        assert!(RuleSet::parse(&out).unwrap().errors.is_empty());
+        assert_eq!(put_rules("", &[], &["(rule \"z\" (constraint disallow via))".into()]), "(version 1)\n(rule \"z\" (constraint disallow via))\n");
+    }
 
     /// An object of named properties; anything else unknown.
     struct Obj(HashMap<&'static str, Value>);

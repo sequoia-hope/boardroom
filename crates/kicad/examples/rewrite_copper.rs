@@ -21,6 +21,7 @@ fn main() {
             .collect(),
         arcs: Vec::new(),
         replace: Vec::new(),
+        zones: Vec::new(),
         uuid_seed: None,
     };
     std::fs::write(&args[2], apply(&text, &edit)).expect("write the board");

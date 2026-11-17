@@ -219,7 +219,22 @@ circuitry is no longer built out of loose parts on each board.
   block where the pour comes from one. **Fallback where nothing is stated: an inner layer one
   net mostly covers is solid.** Each routed board's report names the pours that fell back.
 
-**Where it stands (2026-11-16).** `packages/rp2350` 0.2.0 has the 1.1 V core regulator
+**Built (2026-11-17).** A layout's `areas.json` holds the block's pours and rule areas in the
+layout's frame, nets named by the chip's pins, each with why and the version it came in
+(`packages/rp2350/layouts/qfn60-reference/areas.json`, rp2350 0.3.0, lifted from p2-132-usb6).
+`boardroom blocks <board> --pin U3=rp2350/qfn60-reference` pins a chip; the chip is matched pad
+for pad with the layout's fixture (either side, any turn). Listing compares each entry with the
+board (by name, else by shape, so hand-drawn copies under other names are found) and says how it
+differs; `--accept U3[:name]` writes it from the source (zones and `.kicad_dru` rules, tagged
+`# rp2350@0.3.0 qfn60-reference`, the board's own copies taken out), `--decline U3:name` records
+it. **The pin is `<board>.blocks.json` beside the board**, not intent's `Block.package`, so it
+works on boards with no intent (every round-pendant board); intent's pin is to be read from it
+when boards carry intent. On a copy of p2-132-usb6, accepting every entry renames 16 of 17 and
+changes no copper (KiCad DRC clean before and after, every pour's filled area the same); on the
+other 293 round-pendant boards with a QFN-60 RP2350 it lists the drift above. Not built yet: the parts' places relative to the
+chip, optional parts left out, other packages' blocks, QFN-80.
+
+**Where it stood (2026-11-16).** `packages/rp2350` 0.2.0 had the 1.1 V core regulator
 (inductor, input and output capacitors) as generated, checked layouts for QFN-60/80 on 2 and 4
 layers, plus crystal, USB, flash and decoupling as intent blocks. Only easy2350's Composer files
 pin it (`examples/easy2350/compose/easy2350/compose.json`, `rp2350@0.2.0`; its `intent.json`

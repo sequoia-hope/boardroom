@@ -42,6 +42,91 @@ pub struct NewVia {
     pub locked: bool,
 }
 
+/// A zone to add: a pour of `net` when `keepout` is `None`, else a rule area (no net) that bars
+/// what its keepout says; a rule area that bars nothing is there to be named by `.kicad_dru`
+/// rules (`A.intersectsArea('<name>')`). Written unfilled: KiCad pours it at the next refill.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewZone {
+    pub name: String,
+    /// The net's number in the file (see `Pcb::file_net`) and its name; 0 and "" for a rule area.
+    pub net: u32,
+    pub net_name: String,
+    pub layers: Vec<String>,
+    /// Metres, board frame.
+    pub outline: Vec<[f64; 2]>,
+    pub priority: u32,
+    pub keepout: Option<crate::Keepout>,
+    /// How the pour joins its net's pads.
+    pub pads: PadJoin,
+    /// Metres; the pour's gap to other nets.
+    pub clearance: f64,
+    pub min_thickness: f64,
+    pub thermal_gap: f64,
+    pub thermal_bridge_width: f64,
+    pub locked: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PadJoin {
+    /// Thermal spokes (KiCad's default).
+    #[default]
+    Reliefs,
+    /// Solid, no spokes.
+    Solid,
+    /// Spokes for through-hole pads, solid for SMD ones.
+    ReliefsThroughHole,
+    /// Joins no pad.
+    None,
+}
+
+fn zone_text(z: &NewZone, named_nets: bool, uuids: &mut UuidSource) -> String {
+    let quote = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+    let net = if named_nets {
+        format!("\t\t(net \"{}\")\n", quote(&z.net_name))
+    } else {
+        format!("\t\t(net {})\n\t\t(net_name \"{}\")\n", z.net, quote(&z.net_name))
+    };
+    let layers = if z.layers.len() == 1 {
+        format!("\t\t(layer \"{}\")\n", z.layers[0])
+    } else {
+        format!("\t\t(layers {})\n", z.layers.iter().map(|l| format!("\"{l}\"")).collect::<Vec<_>>().join(" "))
+    };
+    let join = match z.pads {
+        PadJoin::Reliefs => "",
+        PadJoin::Solid => " yes",
+        PadJoin::ReliefsThroughHole => " thru_hole_only",
+        PadJoin::None => " no",
+    };
+    let mut s = format!(
+        "\t(zone\n{net}{}{layers}\t\t(uuid \"{}\")\n\t\t(name \"{}\")\n\t\t(hatch edge 0.5)\n",
+        if z.locked { "\t\t(locked yes)\n" } else { "" },
+        uuids.draw(),
+        quote(&z.name)
+    );
+    if z.priority > 0 {
+        s += &format!("\t\t(priority {})\n", z.priority);
+    }
+    s += &format!("\t\t(connect_pads{join}\n\t\t\t(clearance {})\n\t\t)\n", mm(z.clearance));
+    s += &format!("\t\t(min_thickness {})\n\t\t(filled_areas_thickness no)\n", mm(z.min_thickness));
+    if let Some(k) = z.keepout {
+        let a = |no: bool| if no { "not_allowed" } else { "allowed" };
+        s += &format!(
+            "\t\t(keepout\n\t\t\t(tracks {})\n\t\t\t(vias {})\n\t\t\t(pads {})\n\t\t\t(copperpour {})\n\t\t\t(footprints {})\n\t\t)\n",
+            a(k.tracks),
+            a(k.vias),
+            a(k.pads),
+            a(k.copperpour),
+            a(k.footprints)
+        );
+    }
+    s += &format!("\t\t(fill\n\t\t\t(thermal_gap {})\n\t\t\t(thermal_bridge_width {})\n\t\t)\n", mm(z.thermal_gap), mm(z.thermal_bridge_width));
+    s += "\t\t(polygon\n\t\t\t(pts\n\t\t\t\t";
+    s += &z.outline.iter().map(|p| format!("(xy {} {})", mm(p[0]), mm(p[1]))).collect::<Vec<_>>().join(" ");
+    s += "\n\t\t\t)\n\t\t)\n\t)\n";
+    s
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Edit {
     pub remove: Vec<Span>,
@@ -50,6 +135,7 @@ pub struct Edit {
     pub tracks: Vec<NewTrack>,
     pub arcs: Vec<NewArc>,
     pub vias: Vec<NewVia>,
+    pub zones: Vec<NewZone>,
     /// The new items' uuids drawn from this seed, the same every run; random when `None`.
     pub uuid_seed: Option<u64>,
 }
@@ -137,6 +223,9 @@ pub fn apply(text: &str, edit: &Edit) -> String {
             net(v.net),
             uuids.draw()
         ));
+    }
+    for z in &edit.zones {
+        out.push_str(&zone_text(z, names.is_some(), &mut uuids));
     }
     out.push_str(&text[close..]);
     out

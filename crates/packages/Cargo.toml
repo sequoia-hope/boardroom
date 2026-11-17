@@ -1,0 +1,15 @@
+[package]
+name = "packages"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+
+# The packages in `packages/` as sources boards take blocks from: each package's manifest and
+# version, its layouts' copper and rule areas round the chip, placed on a board as zones and
+# `.kicad_dru` rules, compared with what the board has, and the board's pins and declines.
+
+[dependencies]
+kicad = { path = "../kicad" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"

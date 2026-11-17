@@ -17,6 +17,8 @@
 //!     boardroom snapshot [--ccomp P] <out> <dir>... a static copy for the web-only build
 //!     boardroom route <board.kicad_pcb> [--out DIR]  route a board (into DIR, else route/<board>/ in its project)
 //!     boardroom check <board.kicad_pcb> [--json]    the checker's faults and open connections
+//!     boardroom blocks <board.kicad_pcb> [--pin REF=PACKAGE/LAYOUT] [--accept REF[:NAME]|all] [--decline REF:NAME]  each chip's block against its package
+//!     boardroom blocks --behind <dir>               the boards under dir behind their packages
 //!
 //! The port comes from --port, then $PORT, then `proj port`; with none the
 //! command fails rather than guessing (see docs/shell-spec.md).
@@ -44,6 +46,7 @@ pub fn run(args: Vec<String>) -> i32 {
         "snapshot" => snapshot::write(rest),
         "route" => route_cmd(rest),
         "check" => check_cmd(rest),
+        "blocks" => blocks_cmd(rest),
         "help" | "-h" | "--help" => {
             // The usage is the module comment's command list.
             let usage: Vec<&str> = include_str!("cli.rs")
@@ -675,6 +678,143 @@ fn check_cmd(args: &[String]) -> Result<(), String> {
     } else {
         Err("the board is not clean".into())
     }
+}
+
+const BLOCKS_USAGE: &str = "usage: boardroom blocks <board.kicad_pcb> [--pin REF=PACKAGE/LAYOUT] [--accept REF[:NAME]|all] [--decline REF:NAME] [--packages DIR]\n       boardroom blocks --behind <dir> [--packages DIR]";
+
+/// Each pinned chip of a board against its package: what differs, accepted (written from the
+/// source) or declined (recorded beside the board, not asked again until the source changes it).
+fn blocks_cmd(args: &[String]) -> Result<(), String> {
+    let root = flag(args, "packages").map(PathBuf::from).unwrap_or_else(|| repo_dir().join("packages"));
+    if let Some(dir) = flag(args, "behind") {
+        return blocks_behind(&PathBuf::from(dir), &root);
+    }
+    let words = positionals(args, &["pin", "accept", "decline", "packages"], &[])?;
+    let board = PathBuf::from(words.first().ok_or(BLOCKS_USAGE)?);
+    let files = packages::BoardFiles::load(&board)?;
+    let mut pins = packages::Pins::load(&board)?;
+    if let Some(pin) = flag(args, "pin") {
+        let (chip, source) = pin.split_once('=').ok_or(BLOCKS_USAGE)?;
+        let (package, layout) = source.split_once('/').ok_or(BLOCKS_USAGE)?;
+        // Placing it once checks the chip matches the layout before the pin is recorded.
+        let p = packages::Package::load(&root.join(package))?;
+        packages::place(&p, layout, &files.pcb, chip)?;
+        pins.chips.insert(chip.to_string(), packages::Pin { package: package.into(), version: String::new(), layout: layout.into(), declined: Default::default() });
+        pins.save(&board)?;
+    }
+    let mut chips = packages::chips(&files, &pins, &root)?;
+    let pick = |spec: &str, chips: &std::collections::BTreeMap<String, packages::Chip>| -> Result<Vec<(String, usize)>, String> {
+        let (chip, name) = spec.split_once(':').map_or((spec, None), |(c, n)| (c, Some(n)));
+        let mut out = Vec::new();
+        for (c, ch) in chips.iter().filter(|(c, _)| chip == "all" || c.as_str() == chip) {
+            for i in ch.outstanding() {
+                if name.is_none_or(|n| ch.placed.entries[i].name == n) {
+                    out.push((c.clone(), i));
+                }
+            }
+        }
+        if out.is_empty() {
+            return Err(format!("nothing waiting matches {spec}"));
+        }
+        Ok(out)
+    };
+    if let Some(spec) = flag(args, "decline") {
+        for (c, i) in pick(&spec, &chips)? {
+            let ch = chips.get_mut(&c).unwrap();
+            let e = &ch.placed.entries[i];
+            ch.pin.declined.insert(e.name.clone(), e.since.clone());
+            pins.chips.insert(c.clone(), ch.pin.clone());
+            eprintln!("{c}: declined {}", e.name);
+        }
+    }
+    if let Some(spec) = flag(args, "accept") {
+        let chosen = pick(&spec, &chips)?;
+        let (mut text, mut dru) = (files.text.clone(), files.dru.clone());
+        // One chip at a time, each against the files as the last left them.
+        for c in chosen.iter().map(|(c, _)| c.clone()).collect::<std::collections::BTreeSet<_>>() {
+            let ch = &chips[&c];
+            let mine: Vec<usize> = chosen.iter().filter(|(x, _)| *x == c).map(|(_, i)| *i).collect();
+            let zones = packages::zones_of(&text)?;
+            let found = packages::compare(&ch.placed, &zones, &dru);
+            (text, dru) = packages::accept(&text, &zones, &dru, &ch.placed, &found, &mine);
+            for &i in &mine {
+                eprintln!("{c}: wrote {} from {}@{}", ch.placed.entries[i].name, ch.placed.package, ch.placed.version);
+            }
+        }
+        files.write(&text, &dru)?;
+        let files = packages::BoardFiles::load(&board)?;
+        chips = packages::chips(&files, &pins, &root)?;
+    }
+    // A chip with nothing waiting has taken its source's version.
+    for (c, ch) in chips.iter_mut() {
+        if ch.outstanding().is_empty() && ch.pin.version != ch.placed.version {
+            ch.pin.version = ch.placed.version.clone();
+            pins.chips.insert(c.clone(), ch.pin.clone());
+        }
+    }
+    if pins != packages::Pins::load(&board)? {
+        pins.save(&board)?;
+    }
+    if chips.is_empty() {
+        println!("no chip of {} is pinned to a package (pin one with --pin U3=rp2350/qfn60-reference)", board.display());
+    }
+    for (c, ch) in &chips {
+        let p = &ch.placed;
+        let pinned = if ch.pin.version.is_empty() { "nothing taken yet".to_string() } else { format!("at {}", ch.pin.version) };
+        println!("{c}: {} {} ({pinned}; source {})", p.package, p.layout, p.version);
+        for (i, e) in p.entries.iter().enumerate() {
+            let what = if e.is_pour() { "copper" } else { "rule area" };
+            let mark = match &ch.found[i].state {
+                packages::State::Same => continue,
+                _ if ch.pin.declines(e) => "declined",
+                packages::State::Missing => "missing",
+                packages::State::Differs(_) => "differs",
+            };
+            println!("  {mark:8} {} ({what}, since {}): {}", e.name, e.since, e.why);
+            if let packages::State::Differs(d) = &ch.found[i].state {
+                for d in d {
+                    println!("           - {d}");
+                }
+            }
+        }
+        let waiting = ch.outstanding().len();
+        let same = ch.found.iter().filter(|f| f.state == packages::State::Same).count();
+        println!("  {same} of {} as the source has them, {waiting} waiting", p.entries.len());
+    }
+    Ok(())
+}
+
+/// Every board under `dir` with pins, and whether it is behind its sources.
+fn blocks_behind(dir: &std::path::Path, root: &std::path::Path) -> Result<(), String> {
+    fn walk(d: &std::path::Path, out: &mut Vec<PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(d) else { return };
+        let mut entries: Vec<PathBuf> = rd.filter_map(|e| e.ok().map(|e| e.path())).collect();
+        entries.sort();
+        for p in entries {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if p.is_dir() && !name.starts_with('.') && !matches!(name, "target" | "node_modules" | "vendor") {
+                walk(&p, out);
+            } else if name.ends_with(".blocks.json") {
+                out.push(p);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(dir, &mut found);
+    let mut behind = 0;
+    for pins_file in &found {
+        let board = PathBuf::from(pins_file.to_string_lossy().replace(".blocks.json", ".kicad_pcb"));
+        let files = packages::BoardFiles::load(&board)?;
+        let chips = packages::chips(&files, &packages::Pins::load(&board)?, root)?;
+        for (c, ch) in &chips {
+            if ch.behind() {
+                behind += 1;
+                println!("{} {c}: {} at {} (source {}), {} waiting", board.display(), ch.placed.package, if ch.pin.version.is_empty() { "-" } else { &ch.pin.version }, ch.placed.version, ch.outstanding().len());
+            }
+        }
+    }
+    println!("{} boards with pins, {behind} chips behind their sources", found.len());
+    Ok(())
 }
 
 #[cfg(test)]

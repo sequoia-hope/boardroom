@@ -1,5 +1,10 @@
 # Circuit Composer package: Raspberry Pi RP2350 family.
 #
+# 0.3.0: the block's copper and rule areas round the QFN-60 chip (layouts/qfn60-reference/areas.json):
+# the DVDD ring and IOVDD band poured round the chip, the regulator's own copper, the rule areas
+# saying which nets may cross each, and no plane or track under the switch node on inner layers.
+# Lifted from round-pendant p2-132-usb6, where they had been drawn by hand on each board.
+#
 # 0.2.0: the core regulator, generated and verified for both packages on 2 and 4 layers; the
 # crystal, USB, QSPI flash, boot/reset buttons and decoupling as intent blocks, with rules from
 # the datasheet and design guide and measurements of Raspberry Pi's two minimal boards; pin
@@ -7,7 +12,7 @@
 
 [package]
 name = "rp2350"
-version = "0.2.0"
+version = "0.3.0"
 family = "RP2350"
 license = "MIT"
 summary = "RP2350A/B: verified core-regulator layouts (QFN-60/80, 2 and 4 layers), interface blocks, ports, cited rules"
