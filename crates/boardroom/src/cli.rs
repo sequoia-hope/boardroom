@@ -122,22 +122,7 @@ fn positionals<'a>(
 }
 
 fn port(args: &[String]) -> Result<u16, String> {
-    let from_proj = || {
-        let out = std::process::Command::new("proj")
-            .arg("port")
-            .current_dir(repo_dir())
-            .output()
-            .ok()?;
-        out.status
-            .success()
-            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
-    };
-    let text = flag(args, "port")
-        .or_else(|| std::env::var("PORT").ok().filter(|p| !p.is_empty()))
-        .or_else(from_proj)
-        .ok_or("no port. Pass --port N or set PORT (or register the project with `proj add`).")?;
-    text.parse()
-        .map_err(|_| format!("port '{text}' is not a number"))
+    ::project::port(flag(args, "port").as_deref())
 }
 
 fn serve(args: &[String]) -> Result<(), String> {

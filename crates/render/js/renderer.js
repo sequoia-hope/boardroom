@@ -1,4 +1,4 @@
-// Draws a board-draw mesh with WebGL2: every vertex carries its segment's ends and radius, and
+// Draws a scene mesh (crates/scene) with WebGL2: every vertex carries its segment's ends and radius, and
 // the fragment shader cuts each quad down to that capsule. A negative radius is a plain fill.
 // The interface (upload, clear, draw) is what a WebGPU version would keep.
 

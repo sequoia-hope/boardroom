@@ -1,6 +1,6 @@
-//! Circuit Composer's intent schema: the sidecar file beside a KiCad project that holds what
+//! The intent schema: the sidecar file beside a KiCad project that holds what
 //! KiCad cannot express. These types are the one definition; the JSON Schema is generated from
-//! them (`ccomp schema`), so the router, the tools and the agent's validator agree.
+//! them, so the router, the tools and the agent's validator agree.
 
 pub mod import;
 pub mod model;

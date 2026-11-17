@@ -126,7 +126,7 @@ impl Netlist {
 }
 
 fn export(sch: &Path) -> Result<String, NetlistError> {
-    let out_path = std::env::temp_dir().join(format!("ccomp-netlist-{}.net", std::process::id()));
+    let out_path = std::env::temp_dir().join(format!("boardroom-netlist-{}.net", std::process::id()));
     let out = Command::new("kicad-cli")
         .args(["sch", "export", "netlist", "--format", "kicadsexpr", "-o"])
         .arg(&out_path)
