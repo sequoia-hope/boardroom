@@ -437,12 +437,13 @@ fn read_gates(
 /// `<board>.kicad_pcb`, else the folder's only `.kicad_pcb`. Not the routing runs below it.
 pub fn board_pcb(root: &Path, board: &str, variant: &str) -> Option<String> {
     let dir = format!("hw/{board}/{variant}");
-    let files: Vec<String> = std::fs::read_dir(root.join(&dir))
+    let mut files: Vec<String> = std::fs::read_dir(root.join(&dir))
         .ok()?
         .flatten()
         .filter(|e| e.path().is_file())
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
+    files.sort();
     let pcbs: Vec<&String> = files.iter().filter(|f| f.ends_with(".kicad_pcb")).collect();
     let by_pro = files
         .iter()
@@ -462,21 +463,27 @@ fn find_boards(root: &Path) -> Vec<Board> {
     let Ok(hw) = std::fs::read_dir(root.join("hw")) else {
         return boards;
     };
-    for board in hw.flatten().filter(|e| e.path().is_dir()) {
+    let mut board_dirs: Vec<_> = hw.flatten().filter(|e| e.path().is_dir()).collect();
+    board_dirs.sort_by_key(|e| e.file_name());
+    for board in board_dirs {
         let Ok(variants) = std::fs::read_dir(board.path()) else {
             continue;
         };
-        for variant in variants.flatten().filter(|e| e.path().is_dir()) {
+        let mut variant_dirs: Vec<_> = variants.flatten().filter(|e| e.path().is_dir()).collect();
+        variant_dirs.sort_by_key(|e| e.file_name());
+        for variant in variant_dirs {
             let kicad_pro = std::fs::read_dir(variant.path()).ok().and_then(|files| {
-                files
+                let mut pros: Vec<PathBuf> = files
                     .flatten()
                     .map(|f| f.path())
-                    .find(|p| p.extension().is_some_and(|e| e == "kicad_pro"))
-                    .and_then(|p| {
-                        p.strip_prefix(root)
-                            .ok()
-                            .map(|r| r.to_string_lossy().into_owned())
-                    })
+                    .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "kicad_pro"))
+                    .collect();
+                pros.sort();
+                pros.into_iter().next().and_then(|p| {
+                    p.strip_prefix(root)
+                        .ok()
+                        .map(|r| r.to_string_lossy().into_owned())
+                })
             });
             let (name, var) = (
                 board.file_name().to_string_lossy().into_owned(),
@@ -537,4 +544,46 @@ fn read_git(root: &Path) -> Option<Git> {
         ahead,
         behind,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn two_kicad_pro_chooses_first_by_name() {
+        let root = std::env::temp_dir().join(format!(
+            "boardroom-two-kicad-pro-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let variant_dir = root.join("hw/main/rev_a");
+        std::fs::create_dir_all(&variant_dir).unwrap();
+
+        std::fs::write(variant_dir.join("zeta.kicad_pro"), "{}").unwrap();
+        std::fs::write(variant_dir.join("zeta.kicad_pcb"), "(kicad_pcb)").unwrap();
+        std::fs::write(variant_dir.join("alpha.kicad_pro"), "{}").unwrap();
+        std::fs::write(variant_dir.join("alpha.kicad_pcb"), "(kicad_pcb)").unwrap();
+
+        assert_eq!(
+            board_pcb(&root, "main", "rev_a"),
+            Some("hw/main/rev_a/alpha.kicad_pcb".into())
+        );
+
+        let summary = summarize("id", &root, false);
+        assert_eq!(summary.boards.len(), 1);
+        assert_eq!(summary.boards[0].board, "main");
+        assert_eq!(summary.boards[0].variant, "rev_a");
+        assert_eq!(
+            summary.boards[0].kicad_pro.as_deref(),
+            Some("hw/main/rev_a/alpha.kicad_pro")
+        );
+        assert_eq!(
+            summary.boards[0].pcb.as_deref(),
+            Some("hw/main/rev_a/alpha.kicad_pcb")
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }

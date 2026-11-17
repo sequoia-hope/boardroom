@@ -149,6 +149,7 @@ name = "boardroom-gtk"
 version = "0.1.0"
 dependencies = [
  "gtk4",
+ "project",
  "webkit6",
 ]
 

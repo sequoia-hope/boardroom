@@ -131,11 +131,7 @@ fn options(args: &[String]) -> Result<Options, String> {
     let flag = |name: &str| {
         args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
     };
-    let port_text = flag("--port")
-        .or_else(|| std::env::var("PORT").ok().filter(|p| !p.is_empty()))
-        .or_else(proj_port)
-        .ok_or("no port. Pass --port N or set PORT (or register the project with `proj add`).")?;
-    let port = port_text.parse().map_err(|_| format!("port '{port_text}' is not a number"))?;
+    let port = project::port(flag("--port").as_deref())?;
     let size = match flag("--size") {
         Some(s) => {
             let (w, h) = s.split_once('x').ok_or("--size wants WxH")?;
@@ -304,18 +300,6 @@ fn show_notice(
     }
 }
 
-/// The repository this was built from: where `proj port` finds Boardroom's
-/// registered port, and where the server binary is.
-fn repo_dir() -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    std::fs::canonicalize(&dir).unwrap_or(dir)
-}
-
-fn proj_port() -> Option<String> {
-    let out = Command::new("proj").arg("port").current_dir(repo_dir()).output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
 fn answering(port: u16) -> bool {
     TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_millis(300)).is_ok()
 }
@@ -325,7 +309,7 @@ fn ensure_server(port: u16) -> Result<Option<Child>, String> {
     if answering(port) {
         return Ok(None);
     }
-    let bin = repo_dir().join("target/release/boardroom");
+    let bin = project::repo_dir().join("target/release/boardroom");
     if !bin.is_file() {
         return Err(format!("nothing answers on port {port}, and {} isn't built (./build.sh)", bin.display()));
     }
