@@ -30,14 +30,35 @@ fn group(name: &str) -> Option<Group> {
 }
 
 fn allowed(from: &str, to: &str) -> Result<(), String> {
+    allowed_dep(from, to, None)
+}
+
+fn allowed_dep(from: &str, to: &str, kind: Option<&str>) -> Result<(), String> {
     use Group::*;
     let (f, t) = (group(from).unwrap(), group(to).unwrap());
-    let ok = match f {
-        Foundation => t == Foundation,
-        Understanding => t <= Understanding,
-        Judging | UltraRoute => t <= Understanding || t == f,
-        Composer => t <= Composer && !(from == "blockgen" && to == "examine"),
-        Program => true,
+    let ok = if to == "kicad-text" {
+        false
+    } else if from == "kicad-text" {
+        to == "kicad" && kind == Some("dev")
+    } else {
+        match f {
+            Foundation => match from {
+                "scene" | "shape" | "kicad" => false,
+                "board" => to == "kicad",
+                "check" => to == "board" || to == "kicad",
+                _ => false,
+            },
+            Understanding => t <= Understanding,
+            Judging | UltraRoute => t <= Understanding || t == f,
+            Composer => t <= Composer && !(from == "blockgen" && to == "examine"),
+            Program => {
+                if from == "render" {
+                    t < Program
+                } else {
+                    true
+                }
+            }
+        }
     };
     if ok { Ok(()) } else { Err(format!("{from} ({f:?}) may not depend on {to} ({t:?})")) }
 }
@@ -51,14 +72,19 @@ fn crates_depend_only_where_the_spec_allows() {
         .expect("cargo metadata");
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let meta: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    let packages: BTreeMap<String, Vec<String>> = meta["packages"]
+    let packages: BTreeMap<String, Vec<(String, Option<String>)>> = meta["packages"]
         .as_array()
         .unwrap()
         .iter()
         .map(|p| {
             let deps = p["dependencies"].as_array().unwrap().iter();
             // Only the workspace's own crates (path dependencies) are ruled on.
-            let local = deps.filter(|d| d["path"].is_string()).map(|d| d["name"].as_str().unwrap().to_string());
+            let local = deps.filter(|d| d["path"].is_string()).map(|d| {
+                (
+                    d["name"].as_str().unwrap().to_string(),
+                    d["kind"].as_str().map(str::to_string),
+                )
+            });
             (p["name"].as_str().unwrap().to_string(), local.collect())
         })
         .collect();
@@ -68,8 +94,8 @@ fn crates_depend_only_where_the_spec_allows() {
             wrong.push(format!("{name} is in no group: add it to tests/layers.rs and the spec's layout"));
             continue;
         }
-        for dep in deps.iter().filter(|d| packages.contains_key(*d)) {
-            if let Err(e) = allowed(name, dep) {
+        for (dep, kind) in deps.iter().filter(|(d, _)| packages.contains_key(d)) {
+            if let Err(e) = allowed_dep(name, dep, kind.as_deref()) {
                 wrong.push(e);
             }
         }
@@ -89,4 +115,18 @@ fn the_rules_themselves() {
     assert!(allowed("blockgen", "examine").is_err());
     assert!(allowed("floorplan", "examine").is_ok());
     assert!(allowed("server", "route").is_ok());
+}
+
+#[test]
+fn foundation_gpl_and_render_rules() {
+    assert!(allowed("kicad", "kicad-text").is_err());
+    assert!(allowed("kicad-text", "kicad").is_err());
+    assert!(allowed_dep("kicad-text", "kicad", Some("dev")).is_ok());
+    assert!(allowed("scene", "kicad").is_err());
+    assert!(allowed("board", "scene").is_err());
+    assert!(allowed("board", "kicad").is_ok());
+    assert!(allowed("check", "board").is_ok());
+    assert!(allowed("check", "kicad").is_ok());
+    assert!(allowed("render", "server").is_err());
+    assert!(allowed("boardroom-gtk", "project").is_ok());
 }
