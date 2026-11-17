@@ -136,7 +136,7 @@ GATE_SPECS: dict[int, GateSpec] = {
 #
 # A record keys an aspect hash as `<path>#<aspect>` (e.g.
 # `hw/a/b/b.kicad_pcb#placement`); a key without `#` is a sha256 of the bytes.
-# Shared verbatim with `app/server/src/gates.rs` (`pcb_aspect_hash_text`):
+# Shared verbatim with `crates/project/src/gates.rs` (`pcb_aspect_hash_text`):
 #
 # 1. Tokenize the `.kicad_pcb` UTF-8 text into S-expression lists and string
 #    atoms. Whitespace (`' '`, `'\t'`, `'\n'`, `'\r'`) separates tokens outside

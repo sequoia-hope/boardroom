@@ -1,5 +1,7 @@
 # Boardroom: an AI-forward EDA suite — spec (draft)
 
+> Superseded by [one-system-spec.md](one-system-spec.md) (2026-11-12).
+
 Status: draft, 2026-10-29. Written from the owner's description for the three sibling projects
 (Boardroom, circuit-composer, ultraroute) to read and push back on. Where this spec guesses, it
 says so under **Open questions**.

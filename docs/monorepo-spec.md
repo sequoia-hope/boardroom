@@ -1,5 +1,7 @@
 # One repo, one app: Boardroom, Circuit Composer, pcbview and UltraRoute — spec (draft)
 
+> Superseded by [one-system-spec.md](one-system-spec.md) (2026-11-12).
+
 **Superseded 2026-11-12** by the owner's new direction (no history import, no old structure, one
 program with many crates, router rewritten, Claude executes): see `one-system-spec.md`. Do not
 execute the stages below. "What exists today" is still a useful inventory.

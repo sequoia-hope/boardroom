@@ -1,5 +1,7 @@
 # The working demo: Boardroom, Composer and Route on GitHub Pages
 
+> Superseded by [one-system-spec.md](one-system-spec.md) (2026-11-12).
+
 Status: **decided** (2026-10-30; the answers are under Decisions). Built so far: milestones
 0–4, the Pages workflow from Boardroom through Composer and Route, milestone 5 (the stale bar, and the Board tab
 drawing from the `.kicad_pcb`) and milestone 6 (the same Composer workflow on this machine).

@@ -1,5 +1,7 @@
 # Boardroom for KiCad: a standalone KiCad extension — spec (draft)
 
+> Superseded by [one-system-spec.md](one-system-spec.md) (2026-11-12).
+
 Status: draft, 2026-11-07. Written from the owner's question "how would we package Boardroom
 into a KiCad extension?" and their answer that it is **for KiCad users who don't have Boardroom**,
 accepting that this is more work. Nothing here is built. Choices the owner has not confirmed are

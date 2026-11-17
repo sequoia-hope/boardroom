@@ -1,21 +1,26 @@
-# board-draw
+# scene
 
-Draws printed circuit boards in the browser with WebGL2. It is shared by
-[UltraRoute Studio](https://github.com/sequoia-hope/ultraroute) and Circuit Composer, so both
-apps draw a board the same way. MIT licensed.
+A printed circuit board picture in board millimetres: plain drawing data (`Scene`, `Item`,
+`Geom`, `Prim`, `AreaKind`, `Pose`, `Fill`, `Style`, `Layer`), meshed (`Drawing`, `Mesh`,
+`STRIDE`) for a WebGL2 capsule shader, with hit testing (`part_at`, `part_ids_at`, `net_at`,
+`item_at`, `part_box`), part labels (`labels`, `Label`, `LABEL_MAX_MM`), and cheap pose updates
+(`redraw`).
 
-It has two halves:
+`scene` has zero dependencies so every stage crate in Boardroom can offer a picture (`Scene`) of
+its work without depending on `render`:
 
-- **A Rust crate.** It holds a scene in board millimetres, builds the mesh, and does hit testing.
-  It compiles to WASM and has JS bindings behind the `wasm` feature.
-- **`js/renderer.js`.** A WebGL2 renderer of about 120 lines. Each vertex carries a segment's two
-  ends and its radius, and the fragment shader cuts the quad to an anti-aliased capsule. A
-  negative radius means a plain fill.
+- **`crates/scene`** (this crate): the scene in board millimetres, its triangle mesh (`STRIDE` =
+  11 floats per vertex: position, the segment's two ends, its radius, and an RGBA colour; a
+  negative radius means a plain fill), hit testing, and label sizing.
+- **`crates/render`**: `render::view(board)` (turning a `board::Board` into a `Scene`) and the
+  WebGL2 capsule renderer in `crates/render/js/renderer.js`.
+- **`crates/wasm`**: the browser WASM bindings (`SceneBoard` for building and updating a scene
+  from JS, alongside `BoardView`).
 
 ## The scene
 
 ```rust
-use board_draw::{Scene, Item, Geom, Prim, AreaKind, Pose, Fill, Mesh};
+use scene::{AreaKind, Fill, Geom, Item, Layer, Mesh, Pose, Prim, Scene, Style};
 
 let mut s = Scene::new();
 s.set_layers(&["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);   // front to back, KiCad colours
@@ -57,7 +62,7 @@ for things like adding a fixed keep-out part at runtime. Use `set_pose` for anyt
 moves.
 
 Shapes (`Prim`) are a disc `[x, y, r]` or a convex polygon `[x0, y0, x1, y1, ...]`. Polygons
-with more than 24 corners are drawn as their edge.
+with more than 24 corners (`LARGE_POLYGON`) are drawn as their edge.
 
 ## Drawing
 
@@ -67,12 +72,12 @@ Every drawing call takes two arguments:
 - `mask`: one bit per layer, starting at the front.
 
 ```rust
-let mut drawing = s.draw(px, mask);     // vertices in drawing.vertices
+let mut drawing = s.draw(px, mask);     // vertices in drawing.vertices (STRIDE floats per vertex)
 s.set_pose(7, new_pose);                // cheap: no rebuild
 s.redraw(&mut drawing, px, mask);       // rewrites only the moved parts' vertices
 ```
 
-`redraw` rebuilds the whole drawing when anything other than a pose has changed since it was
+`redraw` rebuilds the whole `Drawing` when anything other than a pose has changed since it was
 built: items, layers, fills, style, `px` or `mask`. It also rebuilds when a part changes side.
 Otherwise it re-emits only the vertices of the parts that moved, in place. A patched drawing is
 byte-for-byte the drawing a rebuild gives, and a test checks that.
@@ -110,7 +115,7 @@ Within a pass, items are drawn in id order.
 For `net_at` and `item_at`:
 
 - a track counts by its edge, and only on a visible layer;
-- a pad or via counts as a disc of 0.3 mm about its centre.
+- a pad or via counts as a disc of 0.3 mm (`PICK_RADIUS`) about its centre.
 
 Part extents are cached in the part's own frame. A pose change is therefore free for picking.
 
@@ -139,7 +144,7 @@ There is no text in WebGL. The app writes references itself, on a 2D canvas over
 - It gives one `Label` per named, pickable part: `{ part, name, at, size }`.
 - `at` is the centre of the part's box, in board millimetres.
 - `size` is a suggested text height in millimetres. It is as large as fits the box and at most
-  2.5 mm.
+  2.5 mm (`LABEL_MAX_MM`).
 - A part is left out when its text would be shorter than `min_px` at `px_per_mm`, unless it is
   in `selected`. A selected part is always included, and its text is raised to `min_px`.
 
@@ -148,9 +153,9 @@ To draw a label, put its centre on screen with your view transform and set the f
 
 ## Timing
 
-`cargo run --release --example pose_update` builds a board of 200 parts. Each part has 16
-pads, a body and a courtyard. The board also has 2,000 tracks and 300 vias, 52,800 vertices in
-all. Native timings on a Ryzen desktop:
+`cargo run --release -p scene --example pose_update` builds a board of 200 parts. Each part has
+16 pads, a body and a courtyard. The board also has 2,000 tracks and 300 vias, 52,800 vertices
+in all. Native timings on a Ryzen desktop:
 
 | Step | Time |
 | --- | --- |
@@ -159,98 +164,9 @@ all. Native timings on a Ryzen desktop:
 | Turn and move every part, then `redraw` | 0.35 ms |
 | `part_at` with every part turned | 0.04 ms |
 
-The same board built through the WASM `Board` and run in Node 22 (without the vias):
-
-| Step | Time |
-| --- | --- |
-| `set_poses` for all 200 parts, then `update` | 0.48 ms |
-| Rebuild from scratch | 1.2 ms |
-| Copy the vertices out with `mesh()` | 0.8 ms |
-
-`update` with a view over the module's memory avoids that copy.
-
-## From JS
-
-Build with `wasm-pack build --target web -- --features wasm`. This gives a `Board` class:
-
-```js
-import init, { Board } from './pkg/board_draw.js';
-import { Renderer } from 'board-draw';
-
-await init();
-const board = new Board();
-board.set_layers(['F.Cu', 'B.Cu']);
-board.set_part(7, 'U1');
-board.set_item(10, JSON.stringify({ net: 3, part: 7, pad: { at: [-1, 0], pads: [[0, { circle: [-1, 0, 0.4] }]] } }));
-board.set_item(11, JSON.stringify({ part: 7, area: { kind: 'courtyard', tiles: [[0, [-2, -1, 2, -1, 2, 1, -2, 1]]] } }));
-board.set_poses(new Float32Array([7, 12, 4, 90, 0]));   // id, x, y, rotation, bottom: per part
-
-const renderer = new Renderer(canvas);
-renderer.upload(0, board.mesh(1 / zoom, 0xffffffff));      // kept between calls; patched on moves
-renderer.clear([0, 16 / 255, 35 / 255]);
-renderer.draw(0, { cx, cy, zoom }, { x: 0, y: 0, w: canvas.width, h: canvas.height }, false);
-board.part_at(x, y); board.part_ids_at(x, y); board.net_at(x, y, 0.3); board.item_at(x, y, 0.3); board.part_box(7);
-board.set_side_hidden(true, true);                          // back side off for picking and labels
-JSON.parse(board.labels(zoom, 7, new Int32Array([7])));     // [{id, name, x, y, size}]
-board.add_part(20, 'KO1', 30, 5, 0, false, JSON.stringify([[100, { area: { kind: 'keepout', tiles: [[0, [0, 0, 3, 0, 3, 3, 0, 3]]] } }]]));
-board.remove_part(20);                                      // with its items
-```
-
-`board.update(px, mask)` refreshes the drawing without copying it. You can then view it with
-`new Float32Array(memory.buffer, board.vertices_ptr(), board.vertices_len())`. The view is valid
-until the next call into the board.
-
-The `wasm.rs` module docs list the item JSON format.
-
-The renderer's API:
-
-- `new Renderer(canvas, { yDown })`: with `yDown: true` the board's y grows downwards on screen,
-  as in KiCad's frame; by default it grows upwards.
-- `upload(slot, vertices)`: one mesh per slot.
-- `clear(rgb)`.
-- `draw(slot, view, rect, mirror)`. The view is `{cx, cy, zoom}` in millimetres and pixels per
-  millimetre. The rect is the pane in device pixels, measured from the bottom left. `mirror`
-  shows the board from below.
-
-A WebGPU renderer could later sit behind the same three calls.
-
-## Pinning it
-
-Both apps pin one commit, the same one on the Rust side and the JS side.
-
-**Rust.** Add a Cargo git dependency by revision:
-
-```toml
-board-draw = { git = "https://github.com/sequoia-hope/board-draw", rev = "<commit>" }
-```
-
-**JS.** Add an npm git dependency at the same commit, in `package.json`:
-
-```json
-"board-draw": "github:sequoia-hope/board-draw#<commit>"
-```
-
-Then import it in your code:
-
-```js
-import { Renderer } from 'board-draw';
-```
-
-The package has no build step. Both kinds of dependency fetch over HTTPS from the public repo,
-so CI builds (GitHub Pages included) need no keys.
-
-To move to a new commit, change both pins together. Then run `cargo update -p board-draw` and
-`npm install`.
-
-To work on board-draw and an app together, point both pins at a local checkout:
-
-- In Cargo, use `[patch."https://github.com/sequoia-hope/board-draw"] board-draw = { path = "../board-draw" }`.
-- In npm, run `npm link` or install from `file:../board-draw`.
-
 ## Tests
 
 ```
-cargo test
-cargo check --features wasm --target wasm32-unknown-unknown
-cargo run --release --example pose_update
+cargo test -p scene
+cargo run --release -p scene --example pose_update
 ```

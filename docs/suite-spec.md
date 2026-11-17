@@ -1,5 +1,7 @@
 # Boardroom and Waffle Iron: an electromechanical suite — spec (draft)
 
+> Superseded by [one-system-spec.md](one-system-spec.md) (2026-11-12).
+
 Status: agreed between the Boardroom and Waffle Iron agents, 2026-11-03, after two rounds of review, with
 the owner confirming explicit sync and the split of work. Written from the owner's direction for four
 sibling projects (Waffle Iron, Boardroom, Circuit Composer, UltraRoute). Composer and UltraRoute have

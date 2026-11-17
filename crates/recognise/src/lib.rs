@@ -264,7 +264,7 @@ pub fn recognise(nl: &Netlist, board: &str, location: &str) -> Recognised {
     report.disputes = cx.disputes;
 
     let mut sources = BTreeMap::new();
-    sources.insert(SOURCE.to_string(), Source { title: format!("ccomp recognise v{VERSION}"), location: Some(location.into()), revision: None, sha256: None });
+    sources.insert(SOURCE.to_string(), Source { title: format!("boardroom recognise v{VERSION}"), location: Some(location.into()), revision: None, sha256: None });
     let intent = IntentFile {
         schema_version: SCHEMA_VERSION.into(),
         board: BoardInfo { name: board.into(), kicad_project: None, layers: None, packages: BTreeMap::new() },
@@ -918,6 +918,7 @@ mod tests {
     #[test]
     fn recognises_a_small_board() {
         let r = recognise(&board(), "t", "test");
+        assert_eq!(r.intent.sources[SOURCE].title, format!("boardroom recognise v{VERSION}"));
         let class = |n: &str| r.intent.nets.get(n).and_then(|n| n.class.clone()).unwrap_or_default();
         assert_eq!(class("GND"), "GROUND");
         assert_eq!(class("+5V"), "POWER");
