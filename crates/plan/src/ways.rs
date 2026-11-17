@@ -197,6 +197,15 @@ fn standing_past(board: &Board, sheets: &[Sheet], with: &mut Option<Board>, c: u
 /// tight: straight from its last bend for as long as the straight line stays inside every gap
 /// crossed since.
 pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64, from: &[End], to: &[End]) -> Option<Way> {
+    // A net a custom rule allows no vias (`via_count (max 0)`: a crystal's, a USB pair's) takes
+    // none, nor a via down into its pour.
+    let flat;
+    let terms = if board.no_vias(net) && terms.via.is_some() {
+        flat = Terms { via: None, into: &[], ..*terms };
+        &flat
+    } else {
+        terms
+    };
     let me = (net, width);
     let middle = |e: End| sheets.iter().find_map(|s| s.space.ends.get(&e).map(|&o| s.space.obstacles[o].centre));
     let goals: Vec<(End, P)> = to.iter().map(|&e| Some((e, middle(e)?))).collect::<Option<_>>()?;
@@ -240,7 +249,7 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
         for (e, edge) in sheet.space.edges.iter().enumerate() {
             let (Some(x), Some(y)) = (edge.t[0], edge.t[1]) else { continue };
             for (inner, outer) in [(x, y), (y, x)] {
-                if sheet.space.tris[inner].inside == Some(o) && sheet.space.free(outer) {
+                if sheet.space.tris[inner].inside == Some(o) && sheet.space.free(outer) && !sheet.space.barred(outer, net) {
                     for slot in 0..=sheet.on[e].len() {
                         let at = sheet.crossing(board, e, slot, me, start, goal);
                         let c = terms.dear[l] * dist(start, at);
@@ -320,11 +329,15 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
                 continue;
             }
             let Some((t, region)) = standing_on(board, sheet, slot, net) else { continue };
+            // A rule area that bars the net's tracks here: a via may stand in it, no track leave it.
+            if sheet.space.barred(t, net) {
+                continue;
+            }
             for (e, s) in sheet.doors(t, region) {
                 let Some(next) = sheet.space.edges[e].t.iter().flatten().copied().find(|&x| x != t) else { continue };
                 let end = goals.iter().find(|g| sheet.space.ends.get(&g.0).is_some_and(|&o| sheet.space.tris[next].inside == Some(o))).copied();
                 let ends = end.is_some();
-                if !ends && (!sheet.space.free(next) || barred(sheet, e) || sheet.need(board, e, Some((s, net, width))) > sheet.space.width(e) + EPS) {
+                if !ends && (!sheet.space.free(next) || sheet.space.barred(next, net) || barred(sheet, e) || sheet.need(board, e, Some((s, net, width))) > sheet.space.width(e) + EPS) {
                     continue;
                 }
                 let there = sheet.crossing(board, e, s, me, p, goal);
@@ -389,7 +402,7 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
                 let Some(next) = sheet.space.edges[e].t.iter().flatten().copied().find(|&x| x != into) else { continue };
                 let end = goals.iter().find(|g| sheet.space.ends.get(&g.0).is_some_and(|&o| sheet.space.tris[next].inside == Some(o))).copied();
                 let ends = end.is_some();
-                if !ends && (!sheet.space.free(next) || barred(sheet, e)) {
+                if !ends && (!sheet.space.free(next) || sheet.space.barred(next, net) || barred(sheet, e)) {
                     continue;
                 }
                 if !sheet.throat(board, into, corner, net, width) {

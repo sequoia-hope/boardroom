@@ -36,7 +36,8 @@ sys.path.insert(0, str(HERE))
 import paths
 
 LAB = paths.lab()
-WIRE = paths.REPO / "target" / "release" / "examples" / "wire"
+# The router: the release build, or another (`WIRE_BIN`) to try a change beside a run in progress.
+WIRE = Path(os.environ.get("WIRE_BIN", paths.REPO / "target" / "release" / "examples" / "wire"))
 # The boards shown, and where each comes from: the four the prototype started on (router brief,
 # section 7 item 5), and boards of other kinds from the corpus.
 BOARDS = [

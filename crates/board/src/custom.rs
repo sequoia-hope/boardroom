@@ -77,6 +77,24 @@ impl Board {
         out
     }
 
+    /// The nets whose new copper of disallow kind `word` (`track`, `via`) the custom rules forbid
+    /// in the named area `area` ([`Board::areas`]) on `layer`, for certain: a rule area that lets
+    /// some nets through (`A.intersectsArea('U3 ring') && A.NetName != '+1V1'`). Empty where no
+    /// rule forbids anything there. Net 0 is never in it.
+    pub fn nets_barred(&self, word: &str, area: usize, layer: usize) -> Vec<u32> {
+        if !self.custom.has("disallow") || area >= self.areas.len() {
+            return Vec::new();
+        }
+        let via = word == "via";
+        (1..self.nets.len() as u32)
+            .filter(|&net| {
+                let class = self.class_name(net);
+                let thing = Thing::New { board: self, via, net: Some(net), class, width: 0, drill: 0, layer: Some(layer), area: Area::In(area) };
+                self.disallowed(word, &thing, layer) == Tri::True
+            })
+            .collect()
+    }
+
     /// The minimum the custom rules set for a constraint `kind` between `a` and `b` (the edge for
     /// `edge_clearance`) on `layer`, where `implicit` is what the net classes and the board's own
     /// rules ask: the last rule that holds replaces it, as in KiCad, lower or higher; a rule

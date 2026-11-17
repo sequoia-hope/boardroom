@@ -25,6 +25,7 @@
 pub mod chain;
 pub mod convex;
 pub mod draw;
+pub mod loose;
 pub mod spare;
 
 use std::collections::HashMap;
@@ -1082,7 +1083,7 @@ pub fn route(board: &Board) -> (Plan, Drawing) {
     if std::env::var("WIRE_FIRST").is_ok() {
         let (plan, drawing) = route_with(board, false, &never).unwrap_or_else(|| (plan::start(board), Drawing::default()));
         let drawing = without_spare(board, &plan, drawing);
-        return (plan, drawing);
+        return loose::loose(board, &plan, &drawing);
     }
     // The two ways side by side, each on a thread of its own: neither asks anything of the
     // other. The second is for a board the first leaves open, and is told to stop, at the
@@ -1104,7 +1105,8 @@ pub fn route(board: &Board) -> (Plan, Drawing) {
         _ => plain,
     };
     let drawing = without_spare(board, &plan, drawing);
-    (plan, drawing)
+    // Vias and wires left joining nothing where a wire beside them could not be drawn.
+    loose::loose(board, &plan, &drawing)
 }
 
 /// `drawing` with the copper its nets have no need of taken out ([`spare::spare`]), where

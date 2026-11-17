@@ -58,6 +58,11 @@ pub struct Plan {
     /// Layers a pour covers at least half of, unless every layer is: inner ones are closed to
     /// strands (vias pass), outer ones cost more.
     pub planes: Vec<usize>,
+    /// The plane layers closed to strands because nothing on the board says what may cross
+    /// them (owner, 2026-11-16: an inner layer one net mostly pours is solid unless stated
+    /// otherwise). A plane layer with a rule area on it that bars some nets says it, and is
+    /// open, at a plane's cost, to the nets its areas let through.
+    pub closed: Vec<usize>,
     pub vias: Vec<Via>,
     pub left: Vec<Left>,
     /// Every connection asked for, in the order asked: a strand's `connection` is its number
@@ -158,7 +163,8 @@ fn narrower(board: &Board, want: &mut Want) -> bool {
 /// there. A plane is the designer's; a track across it cuts it (owner, 2026-11-16: both
 /// parallelogram boards had their In1 ground plane cut when this was 4). Vias still pass through.
 const ON_A_PLANE: f64 = f64::INFINITY;
-/// What a strand on a poured OUTER layer costs: it stays open, since its pads must get out.
+/// What a strand on a plane layer that is open costs: a poured outer side (its pads must get
+/// out) or an inner plane whose rule areas say what may cross it.
 const ON_A_POURED_SIDE: f64 = 4.0;
 /// What a via costs, as length, mm: one is worth a detour this long.
 const VIA: f64 = 8.0;
@@ -213,6 +219,14 @@ pub(crate) fn via_item(board: &Board, at: space::P, net: u32) -> board::Item {
 /// Places a via could stand: a grid over the board, at a pitch that lets a track pass between
 /// two neighbours, and the point farthest from the corners of each free triangle of the bare
 /// layers; each kept only where the exact checker lets a via of no net stand on the bare board.
+/// Whether via `id`, of no net, on `board` could stand there for some net: it breaks no rule but
+/// those a custom rule makes by net (`disallow via` in a rule area that lets some nets' vias
+/// through, the RP2350's ring). Those are asked again with the real net ([`Spots::alone`]) when
+/// a via is put in; tested as net 0 they took every spot in the area from every net.
+fn for_some_net(board: &Board, id: ItemId) -> bool {
+    board::check_item(board, id).iter().all(|v| v.rule == board::Rule::Keepout && v.b.is_none() && v.required == 0)
+}
+
 pub fn via_spots(board: &Board, tight: bool) -> Spots {
     let (r, drill) = via_size(board);
     let centre = board::Point::new(0, 0);
@@ -240,7 +254,7 @@ pub fn via_spots(board: &Board, tight: bool) -> Spots {
         while x < box_.max.x {
             let p = board::Point::new(x, y);
             let id = scratch.insert(via_item(board, space::mm(p), 0));
-            if outer.is_none_or(|o| board::inside(p, o)) && board::check_item(&scratch, id).is_empty() {
+            if outer.is_none_or(|o| board::inside(p, o)) && for_some_net(&scratch, id) {
                 at.push(space::mm(p));
             }
             scratch.remove(id);
@@ -271,7 +285,7 @@ pub fn via_spots(board: &Board, tight: bool) -> Spots {
             }
             let q = board::Point::new((p[0] * 1e6).round() as i64, (p[1] * 1e6).round() as i64);
             let id = scratch.insert(via_item(board, space::mm(q), 0));
-            if outer.is_none_or(|o| board::inside(q, o)) && board::check_item(&scratch, id).is_empty() {
+            if outer.is_none_or(|o| board::inside(q, o)) && for_some_net(&scratch, id) {
                 at.push(space::mm(q));
             }
             scratch.remove(id);
@@ -280,7 +294,7 @@ pub fn via_spots(board: &Board, tight: bool) -> Spots {
     let apart = apart as f64 / 1e6;
     // Not for fan-outs: there each pad's via has its own place, beside its neighbours'.
     let ways_out = if tight { Vec::new() } else { ways_out(board, apart, pitch as f64 / 1e6) };
-    Spots { at, radius: r as f64 / 1e6, apart, hole, ways_out, out_keep: (r + keep) as f64 / 1e6 + width(board, 0) / 2.0, beside: (2 * r + board.max_rule_reach()) as f64 / 1e6 + 0.01, checked: Default::default() }
+    Spots { at, radius: r as f64 / 1e6, apart, hole, ways_out, out_keep: (r + keep) as f64 / 1e6 + width(board, 0) / 2.0, beside: (2 * r + board.max_rule_reach()) as f64 / 1e6 + 0.01, checked: Default::default(), bars: space::bars(board) }
 }
 
 /// The way straight out of each pad that stands nearer another pad of its part than two vias
@@ -724,7 +738,9 @@ pub fn start_from(board: &Board, spots: Spots) -> Plan {
     // On two layers a poured side is still routed on: the designers do (159 of the gate
     // tier's 253 two-layer boards have a side at least half poured).
     let planes: Vec<usize> = if poured.len() <= 2 || poured.iter().all(|s| *s >= 0.5) { Vec::new() } else { (0..poured.len()).filter(|&l| poured[l] >= 0.5).collect() };
-    Plan { sheets, planes, vias: Vec::new(), left: Vec::new(), wants: Vec::new(), joined: Arc::new(joined(board)) }
+    let stated = |l: usize| spots.bars.iter().any(|b| !b.nets[l].is_empty());
+    let closed = planes.iter().copied().filter(|&l| l != 0 && l + 1 != board.layers.len() && !stated(l)).collect();
+    Plan { sheets, planes, closed, vias: Vec::new(), left: Vec::new(), wants: Vec::new(), joined: Arc::new(joined(board)) }
 }
 
 /// How far off the line through a row's pads one of them may stand, mm.
@@ -1016,12 +1032,11 @@ fn relay(board: &Board, plan: &mut Plan, mut which: Vec<usize>) {
 /// Lays the connections numbered `which`, none of which is in the sheets, in that order.
 fn place(board: &Board, plan: &mut Plan, which: &[usize]) {
     let mut sheets = std::mem::take(&mut plan.sheets);
-    let outer = |l: usize| l == 0 || l + 1 == sheets.len();
     let dear: Vec<f64> = (0..sheets.len())
-        .map(|l| match (plan.planes.contains(&l), outer(l)) {
+        .map(|l| match (plan.planes.contains(&l), plan.closed.contains(&l)) {
             (false, _) => 1.0,
-            (true, true) => ON_A_POURED_SIDE,
-            (true, false) => ON_A_PLANE,
+            (true, false) => ON_A_POURED_SIDE,
+            (true, true) => ON_A_PLANE,
         })
         .collect();
     // (Tried 2026-11-12: one search for every connection that weighs a via against the detour

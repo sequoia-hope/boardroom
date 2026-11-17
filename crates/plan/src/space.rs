@@ -115,6 +115,34 @@ pub struct Spots {
     /// What the exact checker says of a via of each net at each spot on the bare board
     /// ([`Spots::alone`]), for each asked about so far.
     pub checked: Checked,
+    /// The board's rule areas that bar the tracks of some nets and let others through, worked
+    /// out once for the plan: the triangulation is made again whenever a via goes in or out.
+    pub bars: Vec<Bar>,
+}
+
+/// A rule area that bars the tracks of some nets ([`Board::nets_barred`]): its outline, mm, and
+/// for each copper layer the nets it bars there (sorted; empty on a layer it is not on).
+#[derive(Debug, Clone)]
+pub struct Bar {
+    pub poly: Vec<P>,
+    pub nets: Vec<Vec<u32>>,
+}
+
+/// The rule areas of `board` that bar some net's tracks on some layer.
+pub fn bars(board: &Board) -> Vec<Bar> {
+    if !board.custom.has("disallow") {
+        return Vec::new();
+    }
+    board
+        .areas
+        .iter()
+        .enumerate()
+        .filter_map(|(k, (_, shape, layers))| {
+            let Shape::Polygon(outline) = shape else { return None };
+            let nets: Vec<Vec<u32>> = (0..board.layers.len()).map(|l| if layers & (1 << l) != 0 { board.nets_barred("track", k, l) } else { Vec::new() }).collect();
+            nets.iter().any(|n| !n.is_empty()).then(|| Bar { poly: outline.iter().map(|&p| mm(p)).collect(), nets })
+        })
+        .collect()
 }
 
 /// For a spot and a net: whether the exact checker lets a via of that net stand there on the
@@ -251,6 +279,8 @@ pub struct Tri {
     pub e: [usize; 3],
     /// The obstacle this triangle lies in, if any.
     pub inside: Option<usize>,
+    /// The rule areas ([`Spots::bars`], by bit, the first 64) this triangle lies in.
+    pub bars: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -293,7 +323,13 @@ pub struct Space {
     /// For each corner, the far corners of the obstacle sides that meet at it.
     #[serde(skip)]
     sides_at: Vec<Vec<usize>>,
+    /// For each corner, the rule areas ([`Spots::bars`], by bit) it is a corner of.
+    #[serde(skip)]
+    bar_of: Vec<u64>,
 }
+
+/// What a track keeps from a corner of a rule area that bars its net, mm.
+const AREA_KEEP: f64 = 0.01;
 
 /// How far out from everything on it a board with no edge drawn at all is taken to reach, nm.
 const FRAME: i64 = 2_000_000;
@@ -601,9 +637,38 @@ impl Space {
                 }
             }
         }
+        // The outlines of rule areas that bar some nets here, as sides of triangles, so that
+        // each triangle is wholly in or out of each. Their corners belong to no obstacle and
+        // nothing keeps a distance from them.
+        let bars_here: Vec<usize> = (0..spots.bars.len().min(64)).filter(|&k| !spots.bars[k].nets[layer].is_empty()).collect();
+        let mut bar_at: HashMap<(i64, i64), u64> = HashMap::new();
+        for &k in &bars_here {
+            for &p in &spots.bars[k].poly {
+                *bar_at.entry(key(p)).or_default() |= 1 << k;
+            }
+            let hs: Vec<_> = spots.bars[k]
+                .poly
+                .iter()
+                .filter_map(|&p| match at.get(&key(p)) {
+                    Some(&h) => Some(h),
+                    None => {
+                        let h = cdt.insert(Point2::new(p[0], p[1])).ok()?;
+                        at.insert(key(p), h);
+                        Some(h)
+                    }
+                })
+                .collect();
+            for i in 0..hs.len() {
+                let (a, b) = (hs[i], hs[(i + 1) % hs.len()]);
+                if a != b {
+                    cdt.add_constraint_and_split(a, b, |p| p);
+                }
+            }
+        }
 
         let verts: Vec<P> = cdt.vertices().map(|v| [v.position().x, v.position().y]).collect();
         let vert_of = verts.iter().map(|&p| owner.get(&key(p)).copied()).collect();
+        let bar_of = verts.iter().map(|&p| bar_at.get(&key(p)).copied().unwrap_or(0)).collect();
         let mut edges: Vec<Edge> = cdt
             .undirected_edges()
             .map(|e| {
@@ -649,7 +714,8 @@ impl Space {
                 let slot = if edges[x].t[0].is_none() { 0 } else { 1 };
                 edges[x].t[slot] = Some(tris.len());
             }
-            tris.push(Tri { v, e, inside });
+            let bars = bars_here.iter().filter(|&&k| self::inside(c, &spots.bars[k].poly)).fold(0u64, |m, &k| m | 1 << k);
+            tris.push(Tri { v, e, inside, bars });
         }
         let sites: Vec<Site> = (0..vias.len()).map(|k| Site { obstacle: first_site + k }).collect();
         // Each spot in its triangle, found by walking the triangulation: there are many of both.
@@ -675,7 +741,7 @@ impl Space {
                 tri_spots[t].push(k);
             }
         }
-        let mut space = Space { layer, obstacles, verts, vert_of, tris, edges, ends, sites, spots: spots.clone(), spot_tri, tri_spots, cap: Vec::new(), sides_at: Vec::new() };
+        let mut space = Space { layer, obstacles, verts, vert_of, tris, edges, ends, sites, spots: spots.clone(), spot_tri, tri_spots, cap: Vec::new(), sides_at: Vec::new(), bar_of };
         space.cap = (0..space.edges.len()).map(|e| space.leant_on(e)).collect();
         let mut sides_at = vec![Vec::new(); space.verts.len()];
         for (e, edge) in space.edges.iter().enumerate() {
@@ -804,10 +870,40 @@ impl Space {
         self.tris[t].inside.is_none()
     }
 
+    /// Whether `v` is a corner of a rule area that bars tracks of `net` on this layer.
+    fn corner_bars(&self, v: usize, net: u32) -> bool {
+        let mut bits = self.bar_of.get(v).copied().unwrap_or(0);
+        while bits != 0 {
+            let k = bits.trailing_zeros() as usize;
+            if self.spots.bars[k].nets[self.layer].binary_search(&net).is_ok() {
+                return true;
+            }
+            bits &= bits - 1;
+        }
+        false
+    }
+
+    /// Whether a rule area this triangle lies in bars tracks of `net` on this layer.
+    pub fn barred(&self, t: usize, net: u32) -> bool {
+        let mut bits = self.tris[t].bars;
+        while bits != 0 {
+            let k = bits.trailing_zeros() as usize;
+            if self.spots.bars[k].nets[self.layer].binary_search(&net).is_ok() {
+                return true;
+            }
+            bits &= bits - 1;
+        }
+        false
+    }
+
     /// What copper of `net` must keep from the corner `v`, edge to edge, mm.
     pub fn keep(&self, board: &Board, v: usize, net: u32) -> f64 {
-        // A corner where two obstacles' sides were found to cross is no object.
-        let Some(k) = self.vert_of[v] else { return 0.0 };
+        // A corner where two obstacles' sides were found to cross is no object; a corner of
+        // a rule area that bars the net is kept a hair off, so that a track pulled tight round
+        // it does not lie along the area's edge (the checker counts that as in it).
+        let Some(k) = self.vert_of[v] else {
+            return if self.corner_bars(v, net) { AREA_KEEP } else { 0.0 };
+        };
         let o = &self.obstacles[k];
         match o.what {
             What::Edge => board.rules.min_copper_edge_clearance * 1e3,

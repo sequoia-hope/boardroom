@@ -128,7 +128,7 @@ fn main() {
             // A strand is drawn though some or all of its wire was spare and is taken out.
             "wires": sheet.laid().count() - drawing.undrawn.iter().filter(|u| u.layer == l).count(),
             "bends": wires.iter().map(|w| w.pts.len().saturating_sub(2)).sum::<usize>(),
-            "plane": plan.planes.contains(&l),
+            "plane": plan.planes.contains(&l), "closed": plan.closed.contains(&l),
         }));
     }
     println!(
