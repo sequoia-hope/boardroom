@@ -185,6 +185,53 @@ not KiCad's, which is why the benchmark judge refills zones through KiCad before
 - **Every action is a function first,** then a CLI command and an HTTP route over it, so a person
   in the window and Claude in a terminal drive the same code, and tests call the function.
 
+## Every circuit has a source (owner, 2026-11-16)
+
+Why the projects were merged: a board's circuits must know where they came from and take that
+source's later corrections. **Every chip we use is a block:** the chip with its supporting parts
+(decoupling, a regulator's inductor and capacitors, a crystal's load capacitors, a switcher's
+feedback divider), and the rules for laying them out. A board takes a block whole, leaving out
+any of its optional parts by name; what it keeps is laid out by the block's rules. Supporting
+circuitry is no longer built out of loose parts on each board.
+
+- **The source is the package** (`packages/<chip>/`, versioned in `manifest.toml`). Besides
+  today's circuit, ports, cited rules and generated layouts, a package carries the block's
+  **layout rules relative to the chip**, per stackup: copper areas and the nets each lets
+  through (e.g. the RP2350's +1V1 ring and +3V3 band round U3, the regulator corner, the LX
+  window), which layer must be a plane and of what net, cutouts under the switch node, track
+  widths and lengths, a preferred layout where one exists. Placed on a board it becomes zones,
+  rule areas and `.kicad_dru` rules written by `kicad`, each tagged with the block and version
+  it came from.
+- **A board pins each block** (`Block.package = "name@version"` in intent, already in the
+  schema) and records what it left out and what it declined.
+- **Rebuilding a board compares its pins with the packages** and lists each change in plain
+  words ("+3V3 band: no foreign track may cross, added in 0.3.0"). Each change is accepted (the
+  board's copy is written again from the source) or declined (recorded, not asked again until
+  the source changes again). `boardroom` lists every board that is behind its sources.
+- **A correction is made in the package, never in one board.** The version goes up and the
+  package records why.
+- **The router honours what the block asks:** rule areas with net conditions are obstacles for
+  the nets they bar (the checker already enforces them, `board::custom`; the plan does not yet
+  see them).
+- **Every pour says what may cross it** (owner, 2026-11-16): solid (no tracks, vias pass), open
+  to named nets, or open to all at a cost; and which nets' vias may pass. It is stated as KiCad
+  rule areas and `.kicad_dru` rules on that layer, so KiCad's DRC enforces it too, written by the
+  block where the pour comes from one. **Fallback where nothing is stated: an inner layer one
+  net mostly covers is solid.** Each routed board's report names the pours that fell back.
+
+**Where it stands (2026-11-16).** `packages/rp2350` 0.2.0 has the 1.1 V core regulator
+(inductor, input and output capacitors) as generated, checked layouts for QFN-60/80 on 2 and 4
+layers, plus crystal, USB, flash and decoupling as intent blocks. Only easy2350's Composer files
+pin it (`examples/easy2350/compose/easy2350/compose.json`, `rp2350@0.2.0`; its `intent.json`
+does not); no board repo does. On the
+round-pendant boards the RP2350 power copper (ring, band, `vendor` zones, rule areas) was drawn
+by hand in each board and has drifted: p2-132-usb6 alone among the parallelograms has the
+`U3 band` rule; p3-162, p3-198 and p4-264 lack the `vendor … area` rules; sunflower
+s2-110-usbc-s3d adds paste keepouts and an LX guard; round-pendant f/g use another stackup. The
+first work: the RP2350 block's layout rules into its package from the newest board, checked
+against the others; then the pin, the comparison and accept/decline in `boardroom`; then each
+other package's block, chip by chip, as boards use them.
+
 ## The program
 
 - **One server, one port** (`--port`, `$PORT`, `proj port`, else fail). Waffle Iron's static
@@ -302,7 +349,8 @@ Heavy builds and suites go through `~/.claude/bin/reserve`.
    defines what the router is judged by.
 5. **Composer.** `shape`, `compose`, `pinsolve`, `floorplan`, `blockgen`; `boardroom compose …`;
    the Compose mode; `wasm` with the live floorplanner; `packages/` and the Composer skill; Python
-   board writers replaced as `kicad` learns to write.
+   board writers replaced as `kicad` learns to write. Packages gain block layout rules, boards
+   pin their blocks, and a rebuild offers each source change (see "Every circuit has a source").
 6. **UltraRoute.** `plan`, `wire`, `route` written here from zero; the Route mode; then `reshape`.
 7. **Projects and retirement.** `boardroom.toml`, `boardroom new` and friends, the template
    without submodules; `sequoia-hope/circuit-composer`, `board-draw` and `pcbview` archived with a

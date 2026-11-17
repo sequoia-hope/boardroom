@@ -55,7 +55,8 @@ pub struct Via {
 pub struct Plan {
     /// One sheet per copper layer, in the board's order.
     pub sheets: Vec<Sheet>,
-    /// Layers a pour covers at least half of, unless every layer is: strands there cost more.
+    /// Layers a pour covers at least half of, unless every layer is: inner ones are closed to
+    /// strands (vias pass), outer ones cost more.
     pub planes: Vec<usize>,
     pub vias: Vec<Via>,
     pub left: Vec<Left>,
@@ -153,8 +154,12 @@ fn narrower(board: &Board, want: &mut Want) -> bool {
     true
 }
 
-/// What a strand on a plane layer costs, as a multiple of its length.
-const ON_A_PLANE: f64 = 4.0;
+/// What a strand on an inner plane layer costs, as a multiple of its length: nothing is laid
+/// there. A plane is the designer's; a track across it cuts it (owner, 2026-11-16: both
+/// parallelogram boards had their In1 ground plane cut when this was 4). Vias still pass through.
+const ON_A_PLANE: f64 = f64::INFINITY;
+/// What a strand on a poured OUTER layer costs: it stays open, since its pads must get out.
+const ON_A_POURED_SIDE: f64 = 4.0;
 /// What a via costs, as length, mm: one is worth a detour this long.
 const VIA: f64 = 8.0;
 
@@ -633,7 +638,8 @@ impl Job<'_> {
     /// What a plan costs: its strands' lengths, each on a layer as dear as that layer is, and
     /// its vias.
     fn cost(&self, sheets: &[Sheet]) -> f64 {
-        sheets.iter().zip(self.dear).map(|(s, dear)| dear * s.length(self.board)).sum::<f64>() + VIA * sheets.first().map_or(0, |s| s.space.sites.len()) as f64
+        // A closed layer (dear without end) holds nothing, and nothing times its cost is nothing.
+        sheets.iter().zip(self.dear).map(|(s, dear)| match s.length(self.board) { len if len > 0.0 => dear * len, _ => 0.0 }).sum::<f64>() + VIA * sheets.first().map_or(0, |s| s.space.sites.len()) as f64
     }
 
     /// What the cheapest way for `c` would cost if it might go across other connections'
@@ -1010,7 +1016,14 @@ fn relay(board: &Board, plan: &mut Plan, mut which: Vec<usize>) {
 /// Lays the connections numbered `which`, none of which is in the sheets, in that order.
 fn place(board: &Board, plan: &mut Plan, which: &[usize]) {
     let mut sheets = std::mem::take(&mut plan.sheets);
-    let dear: Vec<f64> = (0..sheets.len()).map(|l| if plan.planes.contains(&l) { ON_A_PLANE } else { 1.0 }).collect();
+    let outer = |l: usize| l == 0 || l + 1 == sheets.len();
+    let dear: Vec<f64> = (0..sheets.len())
+        .map(|l| match (plan.planes.contains(&l), outer(l)) {
+            (false, _) => 1.0,
+            (true, true) => ON_A_POURED_SIDE,
+            (true, false) => ON_A_PLANE,
+        })
+        .collect();
     // (Tried 2026-11-12: one search for every connection that weighs a via against the detour
     // it saves put 19 vias on Shift-in 32, where the designer has none. And vias only as the
     // last thing tried made a connection take any way round, however long.)

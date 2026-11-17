@@ -231,6 +231,10 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
     let cheapest = if terms.into.is_empty() || terms.via.is_none() { terms.dear.iter().copied().fold(f64::MAX, f64::min) } else { 0.0 };
     // The first crossings of the leg that leaves `from`, on each layer it is on.
     for (l, sheet, src) in sheets.iter().enumerate().flat_map(|(l, sheet)| from.iter().map(move |&src| (l, sheet, src))) {
+        // A closed layer (a plane) is never laid on.
+        if !terms.dear[l].is_finite() {
+            continue;
+        }
         let Some(&o) = sheet.space.ends.get(&src) else { continue };
         let start = sheet.space.obstacles[o].centre;
         for (e, edge) in sheet.space.edges.iter().enumerate() {
@@ -306,6 +310,9 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
             // Out of the via at this spot, on this layer: by a side of the part of its
             // triangle it stands in, or straight to another spot in that part.
             let Some(via) = terms.via else { continue };
+            if !terms.dear[l].is_finite() {
+                continue;
+            }
             let p = spots.at[slot];
             // Whether a via may stand here at all, asked now that the search has come to
             // leave by it (one that pushes a strand was asked as it was come to).
