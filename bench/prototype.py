@@ -8,7 +8,7 @@ rubber-band sketch (crates/plan), the plan drawn as copper (crates/wire), and th
 the router stops at its first plan and drawing (nothing laid again, no pours), and the page says
 so of each board run that way: for a board the whole run does not finish.
 
-Needs `cargo build --release -p wire --example wire` and `cargo build --release -p kicad-text`. The designer's pictures are the look set's
+Needs `cargo build --release -p boardroom -p kicad-text`: boards are routed by `boardroom route`. The designer's pictures are the look set's
 (lookset.py RUN, by default the baseline's). Writes LAB/planned/prototype/: index.html and, per
 board, wires.json, routed.kicad_pcb, one plan.LAYER and wire.LAYER picture per layer, and KiCad's
 verdict on the routed board (after a refill) beside its verdict on the bare one.
@@ -36,8 +36,9 @@ sys.path.insert(0, str(HERE))
 import paths
 
 LAB = paths.lab()
-# The router: the release build, or another (`WIRE_BIN`) to try a change beside a run in progress.
-WIRE = Path(os.environ.get("WIRE_BIN", paths.REPO / "target" / "release" / "examples" / "wire"))
+# The router, `boardroom route`: the release build, or another (`BOARDROOM_BIN`) to try a change
+# beside a run in progress.
+ROUTER = Path(os.environ.get("BOARDROOM_BIN", paths.REPO / "target" / "release" / "boardroom"))
 # The boards shown, and where each comes from: the four the prototype started on (router brief,
 # section 7 item 5), and boards of other kinds from the corpus.
 BOARDS = [
@@ -134,8 +135,8 @@ def main():
     ap.add_argument("--look", default="truth-base-9512c88", help="the look-set page the designer's pictures come from")
     ap.add_argument("--no-kicad", action="store_true", help="leave KiCad's verdict out")
     a = ap.parse_args()
-    if not WIRE.exists():
-        sys.exit("prototype: build it first: cargo build --release -p wire --example wire")
+    if not ROUTER.exists():
+        sys.exit("prototype: build it first: cargo build --release -p boardroom -p kicad-text")
     only = set(a.only.split(",")) if a.only else None
     e = html.escape
     ours = a.set == "ours"
@@ -150,7 +151,7 @@ def main():
 
     def route(job):
         bid, _, board = job
-        cmd = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=8G", "-p", "MemorySwapMax=0", "timeout", str(a.cap), WIRE, board, OUT / bid]
+        cmd = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=8G", "-p", "MemorySwapMax=0", "timeout", str(a.cap), ROUTER, "route", board, "--out", OUT / bid]
         return subprocess.run(cmd, capture_output=True, text=True, env=env)
 
     # A board is routed two ways at once, on a thread each.

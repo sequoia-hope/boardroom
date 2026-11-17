@@ -287,10 +287,12 @@ by `.github/workflows/pages.yml` from snapshots of the projects in `examples.tom
 
 ## pcbview and the router
 
-pcbview lives in this repository as `view/` and is edited here; `scripts/view.sh` runs it. There
-is no router in this repository until the new one is written (`docs/one-system-spec.md`, step 6);
-`scripts/route.sh` uses `$ULTRAROUTE` when it is set. Board repos made so far keep their
-`vendor/pcbview` and `vendor/ultraroute` submodules at their pins.
+pcbview lives in this repository as `view/` and is edited here; `scripts/view.sh` runs it. The
+new router is being written here (`crates/plan`, `crates/wire`, `crates/route`; a prototype):
+`boardroom route <board.kicad_pcb>` routes a board into `route/<board>/` and `boardroom check`
+reports our checker's faults; `bench/prototype.py` judges it with KiCad's DRC. Board repos'
+`scripts/route.sh` still runs the old router (`$ULTRAROUTE`), and board repos made so far keep
+their `vendor/pcbview` and `vendor/ultraroute` submodules at their pins.
 
 ## The skill learns
 

@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 project = { path = "../project" }
 server = { path = "../server" }
+route = { path = "../route" }
 axum = { version = "0.8", features = ["ws"] }
 board-interface = { git = "https://github.com/sequoia-hope/board-interface", tag = "v0.2.2" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "net", "fs", "io-util", "time"] }

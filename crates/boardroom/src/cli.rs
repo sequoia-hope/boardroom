@@ -15,6 +15,8 @@
 //!     boardroom link remove <project-path> <id>
 //!     boardroom push <project-path>                 push the current branch to its upstream
 //!     boardroom snapshot [--ccomp P] <out> <dir>... a static copy for the web-only build
+//!     boardroom route <board.kicad_pcb> [--out DIR]  route a board (into DIR, else route/<board>/ in its project)
+//!     boardroom check <board.kicad_pcb> [--json]    the checker's faults and open connections
 //!
 //! The port comes from --port, then $PORT, then `proj port`; with none the
 //! command fails rather than guessing (see docs/shell-spec.md).
@@ -40,6 +42,8 @@ pub fn run(args: Vec<String>) -> i32 {
         "link" => link_cmd(rest),
         "push" => push_cmd(rest),
         "snapshot" => snapshot::write(rest),
+        "route" => route_cmd(rest),
+        "check" => check_cmd(rest),
         "help" | "-h" | "--help" => {
             // The usage is the module comment's command list.
             let usage: Vec<&str> = include_str!("cli.rs")
@@ -636,5 +640,66 @@ fn format_change_line(c: &board_interface::Change) -> String {
             }
             format!("{label} moved {}", parts.join(", "))
         }
+    }
+}
+
+/// The folder a board's routing goes in: `route/<board>/` in its project, the folder above its
+/// `hw/` (`hw/<board>/<variant>/<board>.kicad_pcb`), else beside the board.
+fn route_dir(board: &std::path::Path) -> PathBuf {
+    let stem = board.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "board".into());
+    let root = board.ancestors().find(|a| a.file_name().is_some_and(|n| n == "hw")).and_then(|hw| hw.parent()).or_else(|| board.parent()).unwrap_or(std::path::Path::new("."));
+    root.join("route").join(stem)
+}
+
+fn route_cmd(args: &[String]) -> Result<(), String> {
+    // The board: the first word that is neither a flag nor the value after `--out`.
+    let board = args.iter().enumerate().find(|(i, a)| !a.starts_with("--") && (*i == 0 || args[i - 1] != "--out")).map(|(_, a)| a).ok_or("usage: boardroom route <board.kicad_pcb> [--out DIR]")?;
+    let board = PathBuf::from(board);
+    let out = flag(args, "out").map(PathBuf::from).unwrap_or_else(|| route_dir(&board));
+    let report = route::route(&board, &out)?;
+    // The report on stdout, one line, for scripts; what matters on stderr, for people.
+    println!("{report}");
+    for note in report["notes"].as_array().into_iter().flatten() {
+        eprintln!("note: {}", note.as_str().unwrap_or(""));
+    }
+    for s in report["solid"].as_array().into_iter().flatten() {
+        eprintln!("{} ({}) taken as solid: {}", s["layer"].as_str().unwrap_or(""), s["net"].as_str().unwrap_or(""), s["why"].as_str().unwrap_or(""));
+    }
+    eprintln!("{} connections open, {} faults; written to {}", report["open"], report["faults"].as_object().map_or(0, |f| f.values().filter_map(|v| v.as_u64()).sum::<u64>()), out.display());
+    Ok(())
+}
+
+fn check_cmd(args: &[String]) -> Result<(), String> {
+    let board = args.iter().find(|a| !a.starts_with("--")).ok_or("usage: boardroom check <board.kicad_pcb> [--json]")?;
+    let report = route::check(std::path::Path::new(board))?;
+    if has_switch(args, "json") {
+        println!("{report}");
+    } else {
+        for f in report["fault_list"].as_array().into_iter().flatten() {
+            let at = f["at"].as_array().map(|a| format!(" at ({:.3}, {:.3})", a[0].as_f64().unwrap_or(0.0), a[1].as_f64().unwrap_or(0.0))).unwrap_or_default();
+            let items: Vec<&str> = f["items"].as_array().into_iter().flatten().filter_map(|i| i.as_str()).collect();
+            println!("{} on {}{at}: {}", f["rule"].as_str().unwrap_or(""), f["layer"].as_str().unwrap_or("all layers"), items.join(", "));
+        }
+        for o in report["open_list"].as_array().into_iter().flatten() {
+            println!("open: {} from ({:.3}, {:.3}) to ({:.3}, {:.3})", o["net"].as_str().unwrap_or(""), o["from"][0].as_f64().unwrap_or(0.0), o["from"][1].as_f64().unwrap_or(0.0), o["to"][0].as_f64().unwrap_or(0.0), o["to"][1].as_f64().unwrap_or(0.0));
+        }
+        println!("{} faults, {} connections open", report["faults"], report["open"]);
+    }
+    if report["faults"].as_u64() == Some(0) && report["open"].as_u64() == Some(0) {
+        Ok(())
+    } else {
+        Err("the board is not clean".into())
+    }
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::route_dir;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn a_board_in_hw_routes_into_its_projects_route_folder() {
+        assert_eq!(route_dir(Path::new("/p/hw/pendant/a/pendant.kicad_pcb")), PathBuf::from("/p/route/pendant"));
+        assert_eq!(route_dir(Path::new("/x/y/board.kicad_pcb")), PathBuf::from("/x/y/route/board"));
     }
 }

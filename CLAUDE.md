@@ -12,6 +12,7 @@ This repository holds the Cargo workspace (`crates/`: `project`, a board project
 `intent`, `recognise`, `library`, `interfaces` and `examine` (the judge, from Composer's verifier);
 `plan`, the new router's first stage, a prototype: each connection as a strand through the gaps between obstacles, before any copper, two of one net beside each other as one track;
 `wire`, its second: each strand drawn alone as 0/45/90 pieces held by the corners it passes, kept only if the checker passes it (wires drawn earlier that are in its way drawn again round it where they can be), a connection that cannot be drawn laid again narrower and then another way, a poured net left to its pour (and a connection the pours leave open again laid again), a pad the wires leave too few thermal spokes given one drawn by hand or those wires laid another way, and a board routed a second way beside the first, with each fine-pitch part's way out settled first, a row of vias for each row of its pads, kept where the first way is not whole and it leaves less open (`wire::route`, on two threads and one more for each layer);
+`route`, the router's top level: a board file in, routed copper, pictures and a report out (`boardroom route`), and the checker's verdict on a board (`boardroom check`);
 `scene`, plain drawing data and its mesh; `render`, a board as a scene, with the WebGL renderer in
 `crates/render/js`; `wasm`, the browser module, built by `web/scripts/wasm.sh`; `gtk`, the native
 window; `gpl/kicad-text`, the GPL text program that is run and never linked; `crates/boardroom/tests/layers.rs` enforces the spec's
@@ -29,8 +30,11 @@ a board project (`template/CLAUDE.md` is the board-repo version).
   (booked with `reserve`), and in `web/` `npm run test:store`, `test:stale` and `test:board`
   (after `scripts/wasm.sh` and `npm run build:pages`). `BOARD_SHOT=out.png npm run test:board`
   saves a picture of the Board tab: look at it after changing what is drawn.
-- **There is no router here yet.** `scripts/route.sh` needs `$ULTRAROUTE` (a built binary of the
-  old router) until the new one exists. The old router's code is never brought in or built here.
+- **The new router is `boardroom route <board.kicad_pcb> [--out DIR]`** (default `route/<board>/`
+  in the board's project); `boardroom check <board.kicad_pcb>` gives our checker's faults and open
+  connections. It is a prototype: judge it with `bench/prototype.py` (KiCad's DRC beside ours).
+  Board repos' `scripts/route.sh` still runs the old router (`$ULTRAROUTE`, a built binary); the
+  old router's code is never brought in or built here.
 - **Making a board repo:** run `scripts/new-board.sh <dir> [--name <title>] [--github <owner>/<repo> [--private]]`,
   which copies `template/`, the upstream skill and `scripts/{doctor,view,route}.sh`, and adds
   `vendor/pcbview` and `vendor/ultraroute` submodules at the last pins of the old repositories

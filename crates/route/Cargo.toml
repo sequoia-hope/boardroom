@@ -1,0 +1,16 @@
+[package]
+name = "route"
+description = "The router's top level: a board file in, its routed copper, pictures and report out"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+board = { path = "../board" }
+kicad = { path = "../kicad" }
+plan = { path = "../plan" }
+wire = { path = "../wire" }
+serde_json = "1"
+
+[lib]
+doctest = false
