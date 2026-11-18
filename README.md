@@ -295,8 +295,10 @@ reports our checker's faults; `bench/prototype.py` judges it with KiCad's DRC.
 with its package's copper and rule areas and lets each change be accepted or declined;
 `boardroom blocks --behind <dir>` lists the boards behind their packages.
 `boardroom pours <board.kicad_pcb> [--zone NAME]` refills each pour as our checker does and
-gives its pieces, the pads each joins, and its necks (narrowest copper between two broad parts,
-with what pinches it), to judge a block's band or ring that other nets' vias pass through. Board repos'
+gives its pieces, the pads each joins, its necks (narrowest copper between two broad parts,
+with what pinches it), and which pins of its net within it the copper inside joins, with the
+weakest link on the widest way between them: whether a block's band still joins the chip's
+supply pins once other nets' vias pass through it. Board repos'
 `scripts/route.sh` still runs the old router (`$ULTRAROUTE`), and board repos made so far keep
 their `vendor/pcbview` and `vendor/ultraroute` submodules at their pins.
 

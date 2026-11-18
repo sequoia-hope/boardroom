@@ -43,6 +43,21 @@ pub struct Neck {
     pub at_limit: bool,
 }
 
+/// The pins of a pour's net within it, and which the copper inside it joins: its fill and its
+/// net's own pads, tracks and vias there, not a way round outside it or through another layer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PinLinks {
+    pub zone: usize,
+    pub net: u32,
+    pub layer: usize,
+    /// The pads of its net on this layer with copper inside the zone's outline.
+    pub pins: Vec<ItemId>,
+    /// The pins the copper inside joins, a group each, largest first, with each group's
+    /// weakest link: where the copper on the widest way between its pins is narrowest (none
+    /// for a pin alone).
+    pub groups: Vec<(Vec<ItemId>, Option<Neck>)>,
+}
+
 /// Two broad parts are told from a spur by how much broader than the neck between them each
 /// is: at least this much on each side (so 2 steps of width).
 const BROADER: f64 = 1.0;
@@ -58,6 +73,59 @@ impl Pours {
                     out.push((r.center(c % r.w, c / r.w), k as usize - 1));
                 }
             }
+        }
+        out
+    }
+
+    /// Which pins of zone `zone`'s net within it its copper joins, on each of its layers, and
+    /// how narrow the widest way between them is.
+    pub fn links_of(&self, board: &Board, zone: usize) -> Vec<PinLinks> {
+        let Some(area) = board.zone_areas.iter().find(|z| z.zone == zone) else { return Vec::new() };
+        let limit = area.min_thickness + STEP;
+        let mut out = Vec::new();
+        for part in self.parts.iter().filter(|p| p.zone == zone) {
+            let r = &part.raster;
+            let mut copper = r.cells.clone();
+            let mut pin_at: Vec<u32> = vec![u32::MAX; copper.len()];
+            let mut pins = Vec::new();
+            let b = BBox::of([r.center(0, 0), r.center(r.w - 1, r.h - 1)]).grow(STEP);
+            for id in board.near(part.layer, b) {
+                let Some(item) = board.item(id) else { continue };
+                if item.net != part.net || !item.on(part.layer) {
+                    continue;
+                }
+                let cells: Vec<usize> = r.cells_in(&item.shape).into_iter().filter(|&c| area.covers(r.center(c % r.w, c / r.w))).collect();
+                match item.kind {
+                    Kind::Pad { .. } if !cells.is_empty() => {
+                        for &c in &cells {
+                            copper[c] = true;
+                            pin_at[c] = pins.len() as u32;
+                        }
+                        pins.push(id);
+                    }
+                    Kind::Track | Kind::Via => cells.iter().for_each(|&c| copper[c] = true),
+                    _ => {}
+                }
+            }
+            if pins.is_empty() {
+                continue;
+            }
+            let cells: Vec<usize> = (0..copper.len()).filter(|&c| copper[c]).collect();
+            let groups = links(r.w, r.h, &cells, &pin_at, pins.len());
+            let point = |c: usize| r.center(c % r.w, c / r.w);
+            let mut groups: Vec<(Vec<ItemId>, Option<Neck>)> = groups
+                .into_iter()
+                .map(|(members, weakest)| {
+                    let neck = weakest.map(|(c, half)| {
+                        let at = point(c);
+                        let width = ((2.0 * half - 1.0) * STEP as f64).max(STEP as f64) as Nm;
+                        Neck { width, at, by: pinching(board, part.net, part.layer, at, width), at_limit: width < limit }
+                    });
+                    (members.into_iter().map(|k| pins[k]).collect(), neck)
+                })
+                .collect();
+            groups.sort_by_key(|(m, _)| std::cmp::Reverse(m.len()));
+            out.push(PinLinks { zone, net: part.net, layer: part.layer, pins, groups });
         }
         out
     }
@@ -197,6 +265,65 @@ fn necks(w: usize, h: usize, cells: &[usize]) -> (Vec<(usize, f64)>, usize) {
     }
     out.sort_by(|x, y| x.1.total_cmp(&y.1).then(x.0.cmp(&y.0)));
     (out, order[0])
+}
+
+/// The pins the copper `cells` of a `w`×`h` raster joins, a group each, with the group's weakest
+/// link: the cell and depth at which its last two parts met, taking cells deepest first. That
+/// is the narrowest place on the widest way between its pins.
+#[allow(clippy::type_complexity)]
+fn links(w: usize, h: usize, cells: &[usize], pin_at: &[u32], pins: usize) -> Vec<(Vec<usize>, Option<(usize, f64)>)> {
+    let depth = distances(w, h, cells);
+    let mut order: Vec<usize> = cells.to_vec();
+    order.sort_by(|a, b| depth[*b].total_cmp(&depth[*a]).then(a.cmp(b)));
+    let mut parent: Vec<usize> = (0..w * h).collect();
+    let mut taken = vec![false; w * h];
+    let mut members: Vec<Vec<usize>> = vec![Vec::new(); w * h];
+    let mut weakest: Vec<Option<(usize, f64)>> = vec![None; w * h];
+    fn root(parent: &mut [usize], mut c: usize) -> usize {
+        while parent[c] != c {
+            parent[c] = parent[parent[c]];
+            c = parent[c];
+        }
+        c
+    }
+    let mut seen = vec![false; pins];
+    for &c in &order {
+        taken[c] = true;
+        let k = pin_at[c];
+        if k != u32::MAX && !seen[k as usize] {
+            seen[k as usize] = true;
+            members[c].push(k as usize);
+        }
+        let (i, j) = (c % w, c / w);
+        let around = [(i > 0).then(|| c - 1), (i + 1 < w).then(|| c + 1), (j > 0).then(|| c - w), (j + 1 < h).then(|| c + w)];
+        for n in around.into_iter().flatten() {
+            if !taken[n] {
+                continue;
+            }
+            let (a, b) = (root(&mut parent, c), root(&mut parent, n));
+            if a == b {
+                continue;
+            }
+            let both = !members[a].is_empty() && !members[b].is_empty();
+            parent[b] = a;
+            let moved = std::mem::take(&mut members[b]);
+            members[a].extend(moved);
+            let mut wk = [weakest[a], weakest[b].take()].into_iter().flatten().min_by(|x, y| x.1.total_cmp(&y.1));
+            if both {
+                wk = Some((c, depth[c]));
+            }
+            weakest[a] = wk;
+        }
+    }
+    let mut out = Vec::new();
+    for c in 0..w * h {
+        if taken[c] && parent[c] == c && !members[c].is_empty() {
+            let mut m = std::mem::take(&mut members[c]);
+            m.sort_unstable();
+            out.push((m, weakest[c]));
+        }
+    }
+    out
 }
 
 /// Each cell's distance in steps from the nearest cell centre outside the piece (outside the

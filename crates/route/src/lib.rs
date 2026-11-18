@@ -242,7 +242,28 @@ pub fn pours(path: &Path, zone: Option<&str>) -> Result<Value, String> {
         if pieces.is_empty() {
             continue;
         }
-        zones.push(json!({"zone": z.zone, "name": name, "net": board.net_name(z.net), "pieces": pieces}));
+        let pin = |id: board::ItemId| match board.item(id).map(|i| &i.kind) {
+            Some(board::Kind::Pad { footprint, number, .. }) => format!("{}.{number}", board.footprints[*footprint].reference),
+            _ => "?".into(),
+        };
+        let neck = |n: &board::Neck| json!({
+            "width_mm": mm(n.width as f64),
+            "at_limit": n.at_limit,
+            "at": at(n.at),
+            "by": n.by.iter().map(|&(id, gap)| json!({"item": describe(id), "gap_mm": mm(gap as f64)})).collect::<Vec<_>>(),
+        });
+        let links: Vec<Value> = pours
+            .links_of(&board, z.zone)
+            .iter()
+            .map(|l| {
+                json!({
+                    "layer": board.layers[l.layer],
+                    "pins": l.pins.len(),
+                    "groups": l.groups.iter().map(|(m, w)| json!({"pins": m.iter().map(|&id| pin(id)).collect::<Vec<_>>(), "weakest": w.as_ref().map(neck)})).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        zones.push(json!({"zone": z.zone, "name": name, "net": board.net_name(z.net), "pieces": pieces, "links": links}));
     }
     Ok(json!({"board": path.display().to_string(), "zones": zones}))
 }

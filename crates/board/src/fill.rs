@@ -174,7 +174,7 @@ impl Raster {
     }
 
     /// The cells whose centres are in `shape`.
-    fn cells_in(&self, shape: &Shape) -> Vec<usize> {
+    pub(crate) fn cells_in(&self, shape: &Shape) -> Vec<usize> {
         let mut out = Vec::new();
         let (_, rows) = self.span(shape.bbox());
         match shape {

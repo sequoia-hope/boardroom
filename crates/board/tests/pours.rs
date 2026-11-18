@@ -106,10 +106,20 @@ fn a_pour_narrowed_by_a_wall_has_a_neck_and_one_cut_through_is_two_pieces() {
     assert!(neck.by.iter().all(|&(id, _)| matches!(b.item(id).unwrap().kind, Kind::Track)) && neck.by.len() >= 2, "{neck:?}");
     assert!(!neck.at_limit);
     assert_eq!(pieces[0].pads.len(), 2);
+    // The two pads are joined inside the pour, the widest way between them through the gap.
+    let links = Pours::of(&b).links_of(&b, zone);
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0].pins.len(), 2);
+    assert_eq!(links[0].groups.len(), 1);
+    let weakest = links[0].groups[0].1.as_ref().unwrap();
+    assert!((weakest.width - 400_000).abs() <= 50_000, "{weakest:?}");
 
     let mut b = board("yes", 0.2, &pads);
     track(&mut b, (10.0, 0.5), (10.0, 19.5));
     let pieces = Pours::of(&b).pieces_of(&b, zone);
     assert_eq!(pieces.len(), 2);
     assert!(pieces.iter().all(|p| p.pads.len() == 1 && p.necks.is_empty()), "{pieces:?}");
+    let links = Pours::of(&b).links_of(&b, zone);
+    assert_eq!(links[0].groups.len(), 2);
+    assert!(links[0].groups.iter().all(|(m, w)| m.len() == 1 && w.is_none()));
 }

@@ -698,17 +698,40 @@ fn pours_cmd(args: &[String]) -> Result<(), String> {
         let pieces = z["pieces"].as_array().cloned().unwrap_or_default();
         let neck = pieces.iter().filter_map(narrowest).fold(None, |m: Option<f64>, w| Some(m.map_or(w, |m| m.min(w))));
         let name = z["name"].as_str().filter(|n| !n.is_empty()).map_or(format!("zone {}", z["zone"]), str::to_string);
-        println!("{name} ({}): {} piece{}{}", z["net"].as_str().unwrap_or(""), pieces.len(), if pieces.len() == 1 { "" } else { "s" }, neck.map_or(String::new(), |w| format!(", narrowest neck {w:.3} mm")));
+        let links = z["links"].as_array().cloned().unwrap_or_default();
+        let joined: Vec<String> = links
+            .iter()
+            .filter(|l| l["pins"].as_u64().unwrap_or(0) > 1)
+            .map(|l| {
+                let groups = l["groups"].as_array().map_or(0, Vec::len);
+                let weakest = l["groups"].as_array().into_iter().flatten().filter_map(|g| g["weakest"]["width_mm"].as_f64()).fold(f64::INFINITY, f64::min);
+                let how = if groups == 1 { "all joined inside".to_string() } else { format!("in {groups} groups inside") };
+                format!("{} pins on {} {how}{}", l["pins"], l["layer"].as_str().unwrap_or(""), if weakest.is_finite() { format!(", weakest link {weakest:.3} mm") } else { String::new() })
+            })
+            .collect();
+        println!("{name} ({}): {} piece{}{}{}", z["net"].as_str().unwrap_or(""), pieces.len(), if pieces.len() == 1 { "" } else { "s" }, neck.map_or(String::new(), |w| format!(", narrowest neck {w:.3} mm")), if joined.is_empty() { String::new() } else { format!("; {}", joined.join("; ")) });
         if zone.is_none() {
             continue;
+        }
+        let describe_neck = |n: &serde_json::Value| {
+            let by: Vec<String> = n["by"].as_array().into_iter().flatten().map(|b| format!("{} ({:.3} mm)", b["item"].as_str().unwrap_or(""), b["gap_mm"].as_f64().unwrap_or(0.0))).collect();
+            let limit = if n["at_limit"].as_bool() == Some(true) { " (at the pour's minimum width: KiCad may drop it)" } else { "" };
+            format!("{:.3} mm{limit} at ({:.2}, {:.2}), pinched by {}", n["width_mm"].as_f64().unwrap_or(0.0), n["at"][0].as_f64().unwrap_or(0.0), n["at"][1].as_f64().unwrap_or(0.0), if by.is_empty() { "the zone's edge".into() } else { by.join(", ") })
+        };
+        for l in &links {
+            for g in l["groups"].as_array().into_iter().flatten() {
+                let pins: Vec<&str> = g["pins"].as_array().into_iter().flatten().filter_map(|v| v.as_str()).collect();
+                match g["weakest"].is_null() {
+                    true => println!("  pins {} on {}: alone", pins.join(", "), l["layer"].as_str().unwrap_or("")),
+                    false => println!("  pins {} on {}: joined inside, weakest link {}", pins.join(", "), l["layer"].as_str().unwrap_or(""), describe_neck(&g["weakest"])),
+                }
+            }
         }
         for (i, p) in pieces.iter().enumerate() {
             let pads: Vec<&str> = p["pads"].as_array().into_iter().flatten().filter_map(|v| v.as_str()).collect();
             println!("  piece {} on {}: {:.2} mm² at ({:.2}, {:.2}); {} own vias, {} own tracks; pads: {}", i + 1, p["layer"].as_str().unwrap_or(""), p["area_mm2"].as_f64().unwrap_or(0.0), p["at"][0].as_f64().unwrap_or(0.0), p["at"][1].as_f64().unwrap_or(0.0), p["vias"], p["tracks"], if pads.is_empty() { "none".into() } else { pads.join(", ") });
             for n in p["necks"].as_array().into_iter().flatten().take(3) {
-                let by: Vec<String> = n["by"].as_array().into_iter().flatten().map(|b| format!("{} ({:.3} mm)", b["item"].as_str().unwrap_or(""), b["gap_mm"].as_f64().unwrap_or(0.0))).collect();
-                let limit = if n["at_limit"].as_bool() == Some(true) { " (at the pour's minimum width: KiCad may drop it)" } else { "" };
-                println!("    neck {:.3} mm{limit} at ({:.2}, {:.2}), pinched by {}", n["width_mm"].as_f64().unwrap_or(0.0), n["at"][0].as_f64().unwrap_or(0.0), n["at"][1].as_f64().unwrap_or(0.0), if by.is_empty() { "the zone's edge".into() } else { by.join(", ") });
+                println!("    neck {}", describe_neck(n));
             }
         }
     }
