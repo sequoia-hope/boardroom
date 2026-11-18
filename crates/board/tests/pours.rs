@@ -86,3 +86,30 @@ fn a_via_stands_in_the_pour_where_all_of_it_is_pour() {
     assert!(pours.piece(1, 0, at(10.0, 10.6), nm(0.3e-3)).is_none(), "within the clearance round the other net's pad");
     assert!(pours.piece(1, 1, at(15.0, 15.0), nm(0.3e-3)).is_none(), "no pour on the other layer");
 }
+
+/// A wall of net B down the middle of net A's pour, with a gap in it: the pour is one piece,
+/// narrow at the gap, where the wall's two ends pinch it; without the gap it is two pieces,
+/// each joining its own pad.
+#[test]
+fn a_pour_narrowed_by_a_wall_has_a_neck_and_one_cut_through_is_two_pieces() {
+    let pads = [pad("U1", 5.0, 10.0, A), pad("U2", 15.0, 10.0, A)].concat();
+    let mut b = board("yes", 0.2, &pads);
+    track(&mut b, (10.0, 1.0), (10.0, 9.5));
+    track(&mut b, (10.0, 10.5), (10.0, 19.0));
+    let zone = b.zone_areas[0].zone;
+    let pieces = Pours::of(&b).pieces_of(&b, zone);
+    assert_eq!(pieces.len(), 1);
+    let neck = &pieces[0].necks[0];
+    // 1 mm between the track ends, less 0.1 mm of track and 0.2 mm of clearance at each.
+    assert!((neck.width - 400_000).abs() <= 50_000, "{neck:?}");
+    assert!((neck.at.x - 10_000_000).abs() <= 100_000 && (neck.at.y - 10_000_000).abs() <= 300_000, "{neck:?}");
+    assert!(neck.by.iter().all(|&(id, _)| matches!(b.item(id).unwrap().kind, Kind::Track)) && neck.by.len() >= 2, "{neck:?}");
+    assert!(!neck.at_limit);
+    assert_eq!(pieces[0].pads.len(), 2);
+
+    let mut b = board("yes", 0.2, &pads);
+    track(&mut b, (10.0, 0.5), (10.0, 19.5));
+    let pieces = Pours::of(&b).pieces_of(&b, zone);
+    assert_eq!(pieces.len(), 2);
+    assert!(pieces.iter().all(|p| p.pads.len() == 1 && p.necks.is_empty()), "{pieces:?}");
+}

@@ -190,6 +190,63 @@ fn tell_pours(board: &board::Board, routed: &board::Board, pours: &board::Pours,
 
 /// The checker's verdict on the board at `path` as it stands, pours as filled in the file: each
 /// fault with its rule, layer, place and the items in it, and each connection still open.
+/// Each pour's pieces after a refill round the copper on the board, what each joins and where
+/// it is narrow ([`board::Pours::pieces_of`]): the zones whose name contains `zone`, else all.
+pub fn pours(path: &Path, zone: Option<&str>) -> Result<Value, String> {
+    let (board, text) = board::Board::load(path).map_err(|e| e.to_string())?;
+    let (_, copper) = kicad::parse_board(&text).map_err(|e| e.to_string())?;
+    let pours = board::Pours::likely(&board);
+    let mm = |v: f64| (v / 1e3).round() / 1e3;
+    let at = |p: board::Point| [mm(p.x as f64), mm(p.y as f64)];
+    let describe = |id: board::ItemId| -> String {
+        board.item(id).map_or("?".into(), |i| {
+            let what = match &i.kind {
+                board::Kind::Pad { footprint, number, .. } => format!("pad {}.{number}", board.footprints[*footprint].reference),
+                board::Kind::Track => "track".into(),
+                board::Kind::Via => "via".into(),
+                board::Kind::Pour { .. } => "pour".into(),
+                _ => "other".into(),
+            };
+            match board.net_name(i.net) {
+                "" => what,
+                net => format!("{what} of {net}"),
+            }
+        })
+    };
+    let mut zones = Vec::new();
+    for z in &board.zone_areas {
+        let name = copper.zones.get(z.zone).map_or("", |c| c.name.as_str());
+        if z.net == 0 || zone.is_some_and(|want| !name.contains(want)) {
+            continue;
+        }
+        let pieces: Vec<Value> = pours
+            .pieces_of(&board, z.zone)
+            .iter()
+            .map(|p| {
+                json!({
+                    "layer": board.layers[p.layer],
+                    "area_mm2": (p.area / 1e10).round() / 100.0,
+                    "at": at(p.at),
+                    "pads": p.pads.iter().map(|&id| describe(id)).collect::<Vec<_>>(),
+                    "vias": p.vias.len(),
+                    "tracks": p.tracks.len(),
+                    "necks": p.necks.iter().map(|n| json!({
+                        "width_mm": mm(n.width as f64),
+                        "at_limit": n.at_limit,
+                        "at": at(n.at),
+                        "by": n.by.iter().map(|&(id, gap)| json!({"item": describe(id), "gap_mm": mm(gap as f64)})).collect::<Vec<_>>(),
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        if pieces.is_empty() {
+            continue;
+        }
+        zones.push(json!({"zone": z.zone, "name": name, "net": board.net_name(z.net), "pieces": pieces}));
+    }
+    Ok(json!({"board": path.display().to_string(), "zones": zones}))
+}
+
 pub fn check(path: &Path) -> Result<Value, String> {
     let (board, _) = board::Board::load(path).map_err(|e| e.to_string())?;
     let describe = |id: board::ItemId| -> String {

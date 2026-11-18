@@ -43,13 +43,13 @@ impl Fill {
 
 /// Cells on a grid shared by every raster, so two rasters line up cell for cell.
 #[derive(Clone)]
-struct Raster {
+pub(crate) struct Raster {
     /// The first cell's column and row on the shared grid.
-    i0: i64,
-    j0: i64,
-    w: usize,
-    h: usize,
-    cells: Vec<bool>,
+    pub(crate) i0: i64,
+    pub(crate) j0: i64,
+    pub(crate) w: usize,
+    pub(crate) h: usize,
+    pub(crate) cells: Vec<bool>,
 }
 
 impl Raster {
@@ -63,7 +63,7 @@ impl Raster {
         Some(Raster { i0, j0, w, h, cells: vec![false; w * h] })
     }
 
-    fn center(&self, i: usize, j: usize) -> Point {
+    pub(crate) fn center(&self, i: usize, j: usize) -> Point {
         Point::new((self.i0 + i as i64) * STEP + STEP / 2, (self.j0 + j as i64) * STEP + STEP / 2)
     }
 
@@ -557,15 +557,15 @@ fn land(spoke: &Shape, depth: Nm) -> Option<Point> {
 }
 
 /// One zone's pour on one layer, each cell with the piece of copper it is in.
-struct Part {
-    zone: usize,
-    net: u32,
-    layer: usize,
+pub(crate) struct Part {
+    pub(crate) zone: usize,
+    pub(crate) net: u32,
+    pub(crate) layer: usize,
     /// How deep a spoke's land must be: the zone's minimum width.
     land: Nm,
-    raster: Raster,
+    pub(crate) raster: Raster,
     /// Per cell, the piece it is in, counted from 1 over every part; 0 for none.
-    piece: Vec<u32>,
+    pub(crate) piece: Vec<u32>,
 }
 
 /// A pad a refill leaves with too few thermal spokes on a layer ([`Pours::starved`]).
@@ -583,7 +583,7 @@ pub struct Starved {
 /// what each piece of pour joins. A block's kept pours are copper already and are not poured.
 /// Good to a raster step, as [`fill_zones`] is: the refill itself is KiCad's.
 pub struct Pours {
-    parts: Vec<Part>,
+    pub(crate) parts: Vec<Part>,
     pieces: usize,
     /// The spokes that meet another pad's, each with the piece the two are: where two pads of
     /// a net stand too near each other for pour between them, KiCad keeps the spokes they send

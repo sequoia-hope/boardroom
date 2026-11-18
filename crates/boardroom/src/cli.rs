@@ -17,6 +17,7 @@
 //!     boardroom snapshot [--ccomp P] <out> <dir>... a static copy for the web-only build
 //!     boardroom route <board.kicad_pcb> [--out DIR]  route a board (into DIR, else route/<board>/ in its project)
 //!     boardroom check <board.kicad_pcb> [--json]    the checker's faults and open connections
+//!     boardroom pours <board.kicad_pcb> [--zone NAME] [--json]  each pour's pieces after a refill and where each is narrow
 //!     boardroom blocks <board.kicad_pcb> [--pin REF=PACKAGE/LAYOUT] [--accept REF[:NAME]|all] [--decline REF:NAME]  each chip's block against its package
 //!     boardroom blocks --behind <dir>               the boards under dir behind their packages
 //!
@@ -46,6 +47,7 @@ pub fn run(args: Vec<String>) -> i32 {
         "snapshot" => snapshot::write(rest),
         "route" => route_cmd(rest),
         "check" => check_cmd(rest),
+        "pours" => pours_cmd(rest),
         "blocks" => blocks_cmd(rest),
         "help" | "-h" | "--help" => {
             // The usage is the module comment's command list.
@@ -678,6 +680,39 @@ fn check_cmd(args: &[String]) -> Result<(), String> {
     } else {
         Err("the board is not clean".into())
     }
+}
+
+/// Each pour's pieces after a refill: the pads each joins, its own vias and tracks, and its
+/// necks, narrowest first, with the copper that pinches each. Without `--zone`, one line a zone.
+fn pours_cmd(args: &[String]) -> Result<(), String> {
+    let words = positionals(args, &["zone"], &["json"])?;
+    let board = words.first().ok_or("usage: boardroom pours <board.kicad_pcb> [--zone NAME] [--json]")?;
+    let zone = flag(args, "zone");
+    let report = route::pours(std::path::Path::new(board), zone.as_deref())?;
+    if has_switch(args, "json") {
+        println!("{report}");
+        return Ok(());
+    }
+    let narrowest = |p: &serde_json::Value| p["necks"][0]["width_mm"].as_f64();
+    for z in report["zones"].as_array().into_iter().flatten() {
+        let pieces = z["pieces"].as_array().cloned().unwrap_or_default();
+        let neck = pieces.iter().filter_map(narrowest).fold(None, |m: Option<f64>, w| Some(m.map_or(w, |m| m.min(w))));
+        let name = z["name"].as_str().filter(|n| !n.is_empty()).map_or(format!("zone {}", z["zone"]), str::to_string);
+        println!("{name} ({}): {} piece{}{}", z["net"].as_str().unwrap_or(""), pieces.len(), if pieces.len() == 1 { "" } else { "s" }, neck.map_or(String::new(), |w| format!(", narrowest neck {w:.3} mm")));
+        if zone.is_none() {
+            continue;
+        }
+        for (i, p) in pieces.iter().enumerate() {
+            let pads: Vec<&str> = p["pads"].as_array().into_iter().flatten().filter_map(|v| v.as_str()).collect();
+            println!("  piece {} on {}: {:.2} mm² at ({:.2}, {:.2}); {} own vias, {} own tracks; pads: {}", i + 1, p["layer"].as_str().unwrap_or(""), p["area_mm2"].as_f64().unwrap_or(0.0), p["at"][0].as_f64().unwrap_or(0.0), p["at"][1].as_f64().unwrap_or(0.0), p["vias"], p["tracks"], if pads.is_empty() { "none".into() } else { pads.join(", ") });
+            for n in p["necks"].as_array().into_iter().flatten().take(3) {
+                let by: Vec<String> = n["by"].as_array().into_iter().flatten().map(|b| format!("{} ({:.3} mm)", b["item"].as_str().unwrap_or(""), b["gap_mm"].as_f64().unwrap_or(0.0))).collect();
+                let limit = if n["at_limit"].as_bool() == Some(true) { " (at the pour's minimum width: KiCad may drop it)" } else { "" };
+                println!("    neck {:.3} mm{limit} at ({:.2}, {:.2}), pinched by {}", n["width_mm"].as_f64().unwrap_or(0.0), n["at"][0].as_f64().unwrap_or(0.0), n["at"][1].as_f64().unwrap_or(0.0), if by.is_empty() { "the zone's edge".into() } else { by.join(", ") });
+            }
+        }
+    }
+    Ok(())
 }
 
 const BLOCKS_USAGE: &str = "usage: boardroom blocks <board.kicad_pcb> [--pin REF=PACKAGE/LAYOUT] [--accept REF[:NAME]|all] [--decline REF:NAME] [--packages DIR]\n       boardroom blocks --behind <dir> [--packages DIR]";
