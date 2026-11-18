@@ -225,7 +225,7 @@ pub(crate) fn via_item(board: &Board, at: space::P, net: u32) -> board::Item {
 /// through, the RP2350's ring). Those are asked again with the real net ([`Spots::alone`]) when
 /// a via is put in; tested as net 0 they took every spot in the area from every net.
 fn for_some_net(board: &Board, id: ItemId) -> bool {
-    board::check_item(board, id).iter().all(|v| v.rule == board::Rule::Keepout && v.b.is_none() && v.required == 0)
+    board::check_item(board, id).iter().all(|v| (v.rule == board::Rule::Keepout && v.b.is_none() && v.required == 0) || v.rule == board::Rule::KeptJoined)
 }
 
 pub fn via_spots(board: &Board, tight: bool) -> Spots {
@@ -295,7 +295,8 @@ pub fn via_spots(board: &Board, tight: bool) -> Spots {
     let apart = apart as f64 / 1e6;
     // Not for fan-outs: there each pad's via has its own place, beside its neighbours'.
     let ways_out = if tight { Vec::new() } else { ways_out(board, apart, pitch as f64 / 1e6) };
-    Spots { at, radius: r as f64 / 1e6, apart, hole, ways_out, out_keep: (r + keep) as f64 / 1e6 + width(board, 0) / 2.0, beside: (2 * r + board.max_rule_reach()) as f64 / 1e6 + 0.01, checked: Default::default(), bars: space::bars(board) }
+    let kept = Spots::kept_of(board, &at);
+    Spots { at, radius: r as f64 / 1e6, apart, hole, ways_out, out_keep: (r + keep) as f64 / 1e6 + width(board, 0) / 2.0, beside: (2 * r + board.max_rule_reach()) as f64 / 1e6 + 0.01, checked: Default::default(), bars: space::bars(board), kept }
 }
 
 /// The way straight out of each pad that stands nearer another pad of its part than two vias

@@ -374,6 +374,9 @@ pub struct Board {
     pub min_widths: HashMap<u32, Nm>,
     /// The copper zones, for what other nets' holes cut out of them.
     pub zone_areas: Vec<ZoneArea>,
+    /// Pours whose sections must stay joined ([`Board::keep_joined`]): a block's band round its
+    /// chip, which other nets' vias may pass through only while it does. Empty unless asked.
+    pub kept_joined: Vec<crate::necks::KeptJoined>,
     /// What crossing another net's pour (one refilled round new copper, not a plane) costs, as a
     /// multiple of the length inside: crossing cuts the pour into pieces. 0 for nothing.
     pub pour_cost: f64,
@@ -565,6 +568,7 @@ impl Board {
             opt_widths: HashMap::new(),
             min_widths: HashMap::new(),
             zone_areas: Vec::new(),
+            kept_joined: Vec::new(),
             pour_cost: 0.0,
             signals_at_min: false,
             pad_clearances_exact: false,

@@ -148,3 +148,39 @@ fn sections_are_cut_only_by_the_nets_let_cut_them() {
     assert_eq!(s.len(), 1);
     assert!(!s[0].ok && s[0].groups.len() == 2, "{s:?}");
 }
+
+/// A pour kept joined: once asked, a via of another net that closes the one gap left in a wall
+/// breaks its section and is faulted; one that stands clear of the gap is not.
+#[test]
+fn a_via_that_breaks_a_kept_section_is_a_fault() {
+    let pads = [pad("U1", 5.0, 10.0, A), pad("U2", 15.0, 10.0, A)].concat();
+    let mut b = board("yes", 0.2, &pads);
+    track(&mut b, (10.0, 1.0), (10.0, 9.5));
+    track(&mut b, (10.0, 10.5), (10.0, 19.0));
+    let zone = b.zone_areas[0].zone;
+    let now = b.keep_joined(zone, &[], 100_000);
+    assert!(now.len() == 1 && now[0].ok, "{now:?}");
+    let via = |b: &mut Board, x: f64, y: f64| {
+        let p = Point::new(nm(x * 1e-3), nm(y * 1e-3));
+        b.insert(Item { kind: Kind::Via, net: 2, layers: 3, shape: Shape::Capsule { a: p, b: p, r: nm(0.3e-3) }, hole: Some((p, nm(0.15e-3))), locked: false, span: None })
+    };
+    let kept = |b: &Board, id| check_item(b, id).iter().filter(|v| v.rule == Rule::KeptJoined).count();
+    let clear = via(&mut b, 5.0, 16.0);
+    assert_eq!(kept(&b, clear), 0);
+    let shut = via(&mut b, 10.0, 10.0);
+    assert_eq!(kept(&b, shut), 1);
+}
+
+/// Copper of a net let cut a kept pour, laid after it was asked, makes new sections: a wall of
+/// it across the pour splits it in two and is no fault.
+#[test]
+fn copper_of_a_net_let_cut_a_kept_pour_is_no_fault() {
+    let pads = [pad("U1", 5.0, 10.0, A), pad("U2", 15.0, 10.0, A)].concat();
+    let mut b = board("yes", 0.2, &pads);
+    let zone = b.zone_areas[0].zone;
+    assert_eq!(b.keep_joined(zone, &[2], 100_000).len(), 1);
+    let at = |p: (f64, f64)| Point::new(nm(p.0 * 1e-3), nm(p.1 * 1e-3));
+    let wall = b.insert(Item { kind: Kind::Track, net: 2, layers: 1, shape: Shape::Capsule { a: at((10.0, 0.5)), b: at((10.0, 19.5)), r: nm(0.1e-3) }, hole: None, locked: false, span: None });
+    assert!(!check_item(&b, wall).iter().any(|v| v.rule == Rule::KeptJoined));
+    assert_eq!(sections(&b, zone, &[2], 100_000).len(), 2);
+}

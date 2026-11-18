@@ -32,7 +32,8 @@ a board project (`template/CLAUDE.md` is the board-repo version).
   (after `scripts/wasm.sh` and `npm run build:pages`). `BOARD_SHOT=out.png npm run test:board`
   saves a picture of the Board tab: look at it after changing what is drawn.
 - **The new router is `boardroom route <board.kicad_pcb> [--out DIR]`** (default `route/<board>/`
-  in the board's project); `boardroom check <board.kicad_pcb>` gives our checker's faults and open
+  in the board's project; it keeps each pour the board's pinned blocks keep joined whole, from
+  `packages/` or `--packages DIR`); `boardroom check <board.kicad_pcb>` gives our checker's faults and open
   connections. It is a prototype: judge it with `bench/prototype.py` (KiCad's DRC beside ours).
   Board repos' `scripts/route.sh` still runs the old router (`$ULTRAROUTE`, a built binary); the
   old router's code is never brought in or built here.

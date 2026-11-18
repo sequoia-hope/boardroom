@@ -30,7 +30,7 @@ fn a_board_is_routed_and_its_report_names_the_solid_plane() {
     let pcb = d.join("t.kicad_pcb");
     std::fs::write(&pcb, BOARD).unwrap();
     let out = d.join("out");
-    let report = route::route(&pcb, &out).unwrap();
+    let report = route::route(&pcb, &out, None).unwrap();
     assert_eq!(report["open"], 0, "{report}");
     for f in ["routed.kicad_pcb", "bare.kicad_pcb", "wires.json", "report.json", "wire.F.Cu.svg", "plan.F.Cu.svg"] {
         assert!(out.join(f).exists(), "{f} written");

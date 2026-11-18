@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 board = { path = "../board" }
 kicad = { path = "../kicad" }
+packages = { path = "../packages" }
 plan = { path = "../plan" }
 wire = { path = "../wire" }
 serde_json = "1"

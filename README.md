@@ -290,7 +290,10 @@ by `.github/workflows/pages.yml` from snapshots of the projects in `examples.tom
 pcbview lives in this repository as `view/` and is edited here; `scripts/view.sh` runs it. The
 new router is being written here (`crates/plan`, `crates/wire`, `crates/route`; a prototype):
 `boardroom route <board.kicad_pcb>` routes a board into `route/<board>/` and `boardroom check`
-reports our checker's faults; `bench/prototype.py` judges it with KiCad's DRC.
+reports our checker's faults; `bench/prototype.py` judges it with KiCad's DRC. A pour the
+board's pinned blocks keep joined (below) is kept so by the router: a via of another net in it
+costs a long way round, and a track or via that breaks one of its sections, or narrows one
+below the fab's narrowest track, is a fault (`KeptJoined`) and is laid another way.
 `boardroom blocks <board.kicad_pcb>` compares each chip a board pins (`<board>.blocks.json`)
 with its package's copper and rule areas and lets each change be accepted or declined, and
 checks each pour the package keeps joined (the RP2350's band, in sections between its DVDD

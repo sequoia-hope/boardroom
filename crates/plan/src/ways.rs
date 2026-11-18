@@ -279,7 +279,7 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
             }
         }
         for m in (0..sheets.len()).filter(|&m| m != l) {
-            let (key, cost) = ((m, VIA, c, 0), cost + via);
+            let (key, cost) = ((m, VIA, c, 0), cost + via + spots.dearer(board, c, net));
             let take = match best.get(&key) {
                 None => true,
                 Some(there) => {

@@ -17,6 +17,8 @@ pub enum Rule {
     HoleClearance,
     HoleToHole,
     Keepout,
+    /// A pour that must stay joined ([`crate::Board::keep_joined`]) broken or narrowed by it.
+    KeptJoined,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -364,6 +366,14 @@ fn item_checks(
         let me = Thing::Item(board, id, item);
         if let Some(layer) = (0..board.layers.len()).find(|&l| item.on(l) && board.disallowed(word, &me, l) == kicad::dru::Tri::True) {
             found.push(Violation { rule: Rule::Keepout, a: id, b: None, layer: Some(layer), gap: 0.0, required: 0 });
+        }
+    }
+    // A pour that must stay joined, broken or narrowed below its width by this copper.
+    for kept in board.kept_joined.iter().filter(|k| k.touched_by(board, id, item)) {
+        if let Some(s) = kept.broken(board).first() {
+            let layer = s.layer;
+            let gap = s.weakest.as_ref().map_or(0.0, |n| n.width as f64);
+            found.push(Violation { rule: Rule::KeptJoined, a: id, b: None, layer: Some(layer), gap, required: kept.min_width });
         }
     }
     // A custom rule may allow a net no vias (`via_count (max 0)`).

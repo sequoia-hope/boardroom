@@ -1254,6 +1254,7 @@ version = "0.1.0"
 dependencies = [
  "board",
  "kicad",
+ "packages",
  "plan",
  "serde_json",
  "wire",

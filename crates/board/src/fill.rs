@@ -17,6 +17,10 @@ use crate::model::{Board, Item, ItemId, Kind, ZoneArea};
 /// Side of a raster cell: 25 µm, a sixth of the narrowest pour the boards here allow.
 pub const STEP: Nm = 25_000;
 
+/// How near another zone must come to one for its pour to shape that one's ([`Pours::likely_for`]):
+/// more than any clearance a pour keeps.
+const NEAR_ZONE: Nm = 2_000_000;
+
 /// KiCad's arc error, by which its filler shrinks a pour less than half the minimum width.
 const ARC_ERROR: Nm = 5_000;
 /// A raster larger than this many cells a side is not filled, so a stray coordinate cannot ask
@@ -408,7 +412,7 @@ pub fn fill_zones_until(board: &Board, stop: &dyn Fn() -> bool) -> Option<Vec<Fi
             if stop() {
                 return None;
             }
-            if let Some(r) = fill_one(board, zone, layer, &poured, false, false, stop)? {
+            if let Some(r) = fill_one(board, zone, layer, &poured, false, false, None, stop)? {
                 fills.push(Fill { zone: zone.zone, net: zone.net, layer, rects: r.rects(), pieces: r.pieces() });
                 poured.push((zone.net, layer, r));
             }
@@ -426,7 +430,11 @@ const STOP_EVERY: usize = 64;
 /// the lands of its spokes. Without, no pour on the board is looked at and every pad of the
 /// net is poured over. A strip of pour stays where it is surely as wide as the zone's minimum
 /// width; with `nearest`, where it is that wide to the nearest step.
-fn fill_one(board: &Board, zone: &ZoneArea, layer: usize, poured: &[(u32, usize, Raster)], as_joined: bool, nearest: bool, stop: &dyn Fn() -> bool) -> Option<Option<Raster>> {
+/// With `only`, the tracks and vias of the nets it names alone are poured round: the others are
+/// taken as not there.
+#[allow(clippy::too_many_arguments)]
+fn fill_one(board: &Board, zone: &ZoneArea, layer: usize, poured: &[(u32, usize, Raster)], as_joined: bool, nearest: bool, only: Option<&[u32]>, stop: &dyn Fn() -> bool) -> Option<Option<Raster>> {
+    let gone = |item: &crate::model::Item| matches!(item.kind, Kind::Track | Kind::Via) && only.is_some_and(|nets| !nets.contains(&item.net));
     let Shape::Polygon(outline) = &zone.outline else { return Some(None) };
     if outline.len() < 3 {
         return Some(None);
@@ -464,7 +472,7 @@ fn fill_one(board: &Board, zone: &ZoneArea, layer: usize, poured: &[(u32, usize,
             return None;
         }
         let Some(item) = board.item(id) else { continue };
-        if !item.on(layer) {
+        if !item.on(layer) || gone(item) {
             continue;
         }
         match &item.kind {
@@ -497,6 +505,9 @@ fn fill_one(board: &Board, zone: &ZoneArea, layer: usize, poured: &[(u32, usize,
             return None;
         }
         let Some(item) = board.item(id) else { continue };
+        if gone(item) {
+            continue;
+        }
         let Some(Shape::Capsule { a, b: end, r: radius }) = board.hole_shape(id, item) else { continue };
         if net != 0 && item.net == net && item.on(layer) {
             continue;
@@ -606,13 +617,42 @@ impl Pours {
         Pours::with(board, true)
     }
 
+    /// [`Pours::likely`] for zone `zone` alone, and only what it is poured round: the zones
+    /// poured before it on a layer of its that come near it. Quick enough to ask of every via
+    /// a router tries there. Its pieces are not numbered as [`Pours::likely`]'s, and spokes that
+    /// meet are not pieces of it.
+    pub fn likely_for(board: &Board, zone: usize) -> Pours {
+        Pours::likely_for_only(board, zone, None)
+    }
+
+    /// [`Pours::likely_for`] with the tracks and vias of the nets `only` names alone: the others
+    /// taken as not there.
+    pub fn likely_for_only(board: &Board, zone: usize, only: Option<&[u32]>) -> Pours {
+        let Some(me) = board.zone_areas.iter().find(|z| z.zone == zone) else { return Pours { parts: Vec::new(), pieces: 0, bridges: Default::default() } };
+        let near = me.outline.bbox().grow(NEAR_ZONE);
+        let mut before = true;
+        let zones: Vec<&ZoneArea> = order(board)
+            .into_iter()
+            .filter(|z| {
+                let take = before && z.layers & me.layers != 0 && z.outline.bbox().overlaps(near);
+                before &= z.zone != zone;
+                take
+            })
+            .collect();
+        Pours::over(board, true, zones, false, only)
+    }
+
     fn with(board: &Board, nearest: bool) -> Pours {
+        Pours::over(board, nearest, order(board), true, None)
+    }
+
+    fn over(board: &Board, nearest: bool, zones: Vec<&ZoneArea>, spokes: bool, only: Option<&[u32]>) -> Pours {
         let mut poured: Vec<(u32, usize, Raster)> = Vec::new();
         let mut parts = Vec::new();
         let mut pieces = 0u32;
-        for zone in order(board).into_iter().filter(|z| !z.kept) {
+        for zone in zones.into_iter().filter(|z| !z.kept) {
             for layer in (0..board.layers.len()).filter(|l| zone.layers & (1 << l) != 0) {
-                let Some(Some(r)) = fill_one(board, zone, layer, &poured, true, nearest, &|| false) else { continue };
+                let Some(Some(r)) = fill_one(board, zone, layer, &poured, true, nearest, only, &|| false) else { continue };
                 poured.push((zone.net, layer, r.clone()));
                 if zone.net == 0 {
                     continue;
@@ -649,7 +689,7 @@ impl Pours {
         }
         // Spokes that meet, uncut: each one's end in the other.
         let mut bridges = std::collections::HashMap::new();
-        for (s, spoke) in board.items() {
+        for (s, spoke) in board.items().filter(|_| spokes) {
             let layer = spoke.layers.trailing_zeros() as usize;
             if bridges.contains_key(&s) {
                 continue;

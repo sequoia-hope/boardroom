@@ -837,6 +837,39 @@ impl Chip {
     }
 }
 
+/// A pour a board's pinned blocks keep joined ([`Pour::keep_joined`]).
+pub struct KeptPour {
+    /// The zone, as numbered among the file's, and its name.
+    pub zone: usize,
+    pub name: String,
+    /// The nets that may cut it.
+    pub cut_by: Vec<u32>,
+    /// The fab's narrowest track on its layer.
+    pub min_width: board::Nm,
+}
+
+/// Each pour the board's pinned blocks keep joined, for a router to keep whole
+/// ([`board::Board::keep_joined`]). None when nothing is pinned.
+pub fn kept_joined(path: &Path, board: &board::Board, root: &Path) -> Result<Vec<KeptPour>, String> {
+    let pins = Pins::load(path)?;
+    if pins.chips.is_empty() {
+        return Ok(Vec::new());
+    }
+    let files = BoardFiles::load(path)?;
+    let mut out = Vec::new();
+    for chip in chips(&files, &pins, root)?.values() {
+        for (i, e) in chip.placed.entries.iter().enumerate() {
+            let Some(cut) = &e.keep_joined else { continue };
+            let cut: Vec<u32> = cut.iter().filter_map(|n| board.nets.iter().position(|b| b == n)).map(|n| n as u32).collect();
+            for &z in &chip.found[i].zones {
+                let name = files.zones.get(z).map(|zone| zone.name.clone()).unwrap_or_default();
+                out.push(KeptPour { zone: z, name, cut_by: cut.clone(), min_width: fab_min(board, &files.pcb, z) });
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Every chip `pins` names, placed from its package under `root` and compared with `board`.
 pub fn chips(board: &BoardFiles, pins: &Pins, root: &Path) -> Result<BTreeMap<String, Chip>, String> {
     let mut out = BTreeMap::new();

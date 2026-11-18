@@ -118,7 +118,15 @@ pub struct Spots {
     /// The board's rule areas that bar the tracks of some nets and let others through, worked
     /// out once for the plan: the triangulation is made again whenever a via goes in or out.
     pub bars: Vec<Bar>,
+    /// The spots that stand in a pour that must stay joined ([`Board::kept_joined`]), each with
+    /// those pours by their numbers there: a via of another net there costs [`KEPT_VIA`] more.
+    pub kept: std::collections::HashMap<usize, Vec<usize>>,
 }
+
+/// What a via of a net not let cut it costs in a pour that must stay joined, beyond any other
+/// via, as length, mm: a long way round, taken only where nothing else is (the checker still
+/// says whether the pour stays joined with it there).
+pub const KEPT_VIA: f64 = 30.0;
 
 /// A rule area that bars the tracks of some nets ([`Board::nets_barred`]): its outline, mm, and
 /// for each copper layer the nets it bars there (sorted; empty on a layer it is not on).
@@ -169,6 +177,27 @@ impl Clone for Checked {
 const SPOKE_NEAR: Nm = 1_000_000;
 
 impl Spots {
+    /// What a via of `net` at spot `c` costs beyond any via's: [`KEPT_VIA`] in a pour that must
+    /// stay joined and that the net may not cut.
+    pub fn dearer(&self, board: &Board, c: usize, net: u32) -> f64 {
+        let Some(kept) = self.kept.get(&c) else { return 0.0 };
+        if kept.iter().any(|&k| board.kept_joined.get(k).is_some_and(|j| j.net != net && !j.cut_by.contains(&net))) { KEPT_VIA } else { 0.0 }
+    }
+
+    /// The spots of `at` in each pour of the board's that must stay joined.
+    pub fn kept_of(board: &Board, at: &[P]) -> std::collections::HashMap<usize, Vec<usize>> {
+        let mut out: std::collections::HashMap<usize, Vec<usize>> = Default::default();
+        for (k, j) in board.kept_joined.iter().enumerate() {
+            for (c, p) in at.iter().enumerate() {
+                let q = board::Point::new((p[0] * 1e6).round() as i64, (p[1] * 1e6).round() as i64);
+                if j.outline.contains(q) {
+                    out.entry(c).or_default().push(k);
+                }
+            }
+        }
+        out
+    }
+
     /// Whether the exact checker lets `via`, a via of `net` at spot `c`, stand on the bare
     /// board, and whether what it says could be otherwise with the plan's other vias on the
     /// board wherever they stand: where a pad's thermal spoke is near, of which two vias can

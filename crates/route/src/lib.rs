@@ -22,7 +22,10 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 /// Routes the board at `path` and writes what [the module](self) says into `out`; the report.
-pub fn route(path: &Path, out: &Path) -> Result<Value, String> {
+/// With `packages` (Boardroom's `packages/`), each pour the board's pinned blocks keep joined
+/// is kept so: no track or via laid may break a section of it that is whole on the bare board,
+/// and a via in it costs dearly ([`board::Board::keep_joined`]).
+pub fn route(path: &Path, out: &Path, packages: Option<&Path>) -> Result<Value, String> {
     let (original, text) = board::Board::load(path).map_err(|e| e.to_string())?;
     let mut notes: Vec<String> = Vec::new();
     // Copper text taken as boxes covers pads its letters do not: say so.
@@ -31,6 +34,17 @@ pub fn route(path: &Path, out: &Path) -> Result<Value, String> {
     }
     let mut board = original.clone();
     plan::strip(&mut board);
+    let mut kept = Vec::new();
+    if let Some(root) = packages {
+        for packages::KeptPour { zone, name, cut_by, min_width } in packages::kept_joined(path, &board, root)? {
+            let sections = board.keep_joined(zone, &cut_by, min_width);
+            let whole = sections.iter().filter(|s| s.ok).count();
+            if whole < sections.len() {
+                notes.push(format!("{name}: {} of {} sections already broken on the bare board, by copper the router keeps; left as they are", sections.len() - whole, sections.len()));
+            }
+            kept.push(json!({"zone": name, "sections": sections.len(), "whole": whole, "min_width_mm": min_width as f64 / 1e6}));
+        }
+    }
     let started = std::time::Instant::now();
     // WIRE_WATCH=LAYER:STRAND writes that strand's course as watch.svg.
     let watch = std::env::var("WIRE_WATCH").ok().and_then(|w| {
@@ -131,6 +145,7 @@ pub fn route(path: &Path, out: &Path) -> Result<Value, String> {
         "open": lines.len(),
         "open_nets": open_nets,
         "notes": notes,
+        "kept_joined": kept,
         // Kept as "plan" and "draw" for the bench's pages: one stage, both ends of it.
         "seconds": {"plan": seconds, "draw": seconds},
     });

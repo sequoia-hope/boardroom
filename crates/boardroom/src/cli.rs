@@ -15,7 +15,7 @@
 //!     boardroom link remove <project-path> <id>
 //!     boardroom push <project-path>                 push the current branch to its upstream
 //!     boardroom snapshot [--ccomp P] <out> <dir>... a static copy for the web-only build
-//!     boardroom route <board.kicad_pcb> [--out DIR]  route a board (into DIR, else route/<board>/ in its project)
+//!     boardroom route <board.kicad_pcb> [--out DIR] [--packages DIR]  route a board (into DIR, else route/<board>/ in its project), keeping its blocks' pours joined
 //!     boardroom check <board.kicad_pcb> [--json]    the checker's faults and open connections
 //!     boardroom pours <board.kicad_pcb> [--zone NAME] [--cut-by NET[,NET]] [--json]  each pour's pieces after a refill and where each is narrow
 //!     boardroom blocks <board.kicad_pcb> [--pin REF=PACKAGE/LAYOUT] [--accept REF[:NAME]|all] [--decline REF:NAME]  each chip's block against its package
@@ -643,10 +643,11 @@ fn route_dir(board: &std::path::Path) -> PathBuf {
 
 fn route_cmd(args: &[String]) -> Result<(), String> {
     // The board: the first word that is neither a flag nor the value after `--out`.
-    let board = args.iter().enumerate().find(|(i, a)| !a.starts_with("--") && (*i == 0 || args[i - 1] != "--out")).map(|(_, a)| a).ok_or("usage: boardroom route <board.kicad_pcb> [--out DIR]")?;
+    let board = args.iter().enumerate().find(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--out", "--packages"].contains(&args[i - 1].as_str()))).map(|(_, a)| a).ok_or("usage: boardroom route <board.kicad_pcb> [--out DIR] [--packages DIR]")?;
     let board = PathBuf::from(board);
     let out = flag(args, "out").map(PathBuf::from).unwrap_or_else(|| route_dir(&board));
-    let report = route::route(&board, &out)?;
+    let packages = flag(args, "packages").map(PathBuf::from).unwrap_or_else(|| repo_dir().join("packages"));
+    let report = route::route(&board, &out, Some(&packages))?;
     // The report on stdout, one line, for scripts; what matters on stderr, for people.
     println!("{report}");
     for note in report["notes"].as_array().into_iter().flatten() {

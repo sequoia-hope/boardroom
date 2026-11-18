@@ -79,47 +79,107 @@ pub struct Section {
 /// too, each link at least `min_width` wide.
 pub fn sections(board: &Board, zone: usize, cut_by: &[u32], min_width: Nm) -> Vec<Section> {
     let Some(area) = board.zone_areas.iter().find(|z| z.zone == zone) else { return Vec::new() };
-    let mut ideal = board.clone();
-    let outline = area.outline.bbox();
-    let loose: Vec<ItemId> = board
-        .items()
-        .filter(|(id, it)| {
-            matches!(it.kind, Kind::Track | Kind::Via) && it.net != area.net && !cut_by.contains(&it.net) && board.bbox(*id).is_some_and(|b| b.overlaps(outline))
-        })
-        .map(|(id, _)| id)
-        .collect();
-    for id in loose {
-        ideal.remove(id);
+    let have = Pours::likely_for(board, zone).links_of(board, zone);
+    wanted(board, zone, area.net, cut_by).into_iter().map(|(layer, pins)| judge(&have, layer, pins, min_width)).collect()
+}
+
+/// Zone `zone`'s sections as only its own net's copper and `cut_by`'s would cut it: each one's
+/// layer and pins.
+fn wanted(board: &Board, zone: usize, net: u32, cut_by: &[u32]) -> Vec<(usize, Vec<ItemId>)> {
+    let only: Vec<u32> = std::iter::once(net).chain(cut_by.iter().copied()).collect();
+    let want = Pours::likely_for_only(board, zone, Some(&only)).links_of(board, zone);
+    want.into_iter().flat_map(|w| w.groups.into_iter().map(move |(pins, _)| (w.layer, pins))).collect()
+}
+
+/// Section `pins` on `layer` as the copper `have` joins them.
+fn judge(have: &[PinLinks], layer: usize, pins: Vec<ItemId>, min_width: Nm) -> Section {
+    let actual = have.iter().find(|h| h.layer == layer);
+    let mut groups: Vec<Vec<ItemId>> = Vec::new();
+    let mut weakest = None;
+    for (g, neck) in actual.map(|a| a.groups.as_slice()).unwrap_or_default() {
+        let mine: Vec<ItemId> = g.iter().copied().filter(|p| pins.contains(p)).collect();
+        if mine.is_empty() {
+            continue;
+        }
+        if mine.len() == pins.len() {
+            weakest = neck.clone();
+        }
+        groups.push(mine);
     }
-    let want = Pours::likely(&ideal).links_of(&ideal, zone);
-    let have = Pours::likely(board).links_of(board, zone);
-    let mut out = Vec::new();
-    for w in want {
-        let actual = have.iter().find(|h| h.layer == w.layer);
-        for (pins, _) in w.groups {
-            let mut groups: Vec<Vec<ItemId>> = Vec::new();
-            let mut weakest = None;
-            for (g, neck) in actual.map(|a| a.groups.as_slice()).unwrap_or_default() {
-                let mine: Vec<ItemId> = g.iter().copied().filter(|p| pins.contains(p)).collect();
-                if mine.is_empty() {
-                    continue;
-                }
-                if mine.len() == pins.len() {
-                    weakest = neck.clone();
-                }
-                groups.push(mine);
-            }
-            // A pin the board's copper inside reaches not at all is a group of its own.
-            for p in &pins {
-                if !groups.iter().any(|g| g.contains(p)) {
-                    groups.push(vec![*p]);
-                }
-            }
-            let ok = groups.len() == 1 && weakest.as_ref().is_none_or(|n: &Neck| n.width + STEP / 2 >= min_width);
-            out.push(Section { layer: w.layer, pins, groups, weakest, ok });
+    // A pin the board's copper inside reaches not at all is a group of its own.
+    for p in &pins {
+        if !groups.iter().any(|g| g.contains(p)) {
+            groups.push(vec![*p]);
         }
     }
-    out
+    let ok = groups.len() == 1 && weakest.as_ref().is_none_or(|n: &Neck| n.width + STEP / 2 >= min_width);
+    Section { layer, pins, groups, weakest, ok }
+}
+
+/// A pour a router must keep joined ([`Board::keep_joined`]): the sections of it that were whole
+/// when it began, which no track or via it lays may break.
+#[derive(Clone, Debug, PartialEq)]
+pub struct KeptJoined {
+    pub zone: usize,
+    pub net: u32,
+    /// The nets that may cut it, as the sections were drawn.
+    pub cut_by: Vec<u32>,
+    pub min_width: Nm,
+    /// The zone's outline and the layers it pours, and where copper must be to narrow it.
+    pub outline: Shape,
+    pub layers: u64,
+    pub reach: BBox,
+    /// The pins of each section broken at the start: a section now with any of them is left as
+    /// it is. The sections themselves are drawn again at each check, as the nets let cut the
+    /// pour lay their copper.
+    pub broken: Vec<Vec<ItemId>>,
+}
+
+/// How far from a kept-joined pour other copper can still narrow it: more than any clearance.
+const REACH: Nm = 1_000_000;
+
+impl KeptJoined {
+    /// Whether `item` may narrow it: other copper, of a net not let cut it, on a layer it pours
+    /// and near it.
+    pub fn touched_by(&self, board: &Board, id: ItemId, item: &crate::model::Item) -> bool {
+        matches!(item.kind, Kind::Track | Kind::Via)
+            && item.net != self.net
+            && !self.cut_by.contains(&item.net)
+            && item.layers & self.layers != 0
+            && board.bbox(id).unwrap_or_else(|| item.shape.bbox()).overlaps(self.reach)
+    }
+
+    /// The sections, as the copper of its net and of the nets let cut it now draws them, that
+    /// the board's copper breaks or narrows below the width; but those with a pin of a section
+    /// broken at the start.
+    pub fn broken(&self, board: &Board) -> Vec<Section> {
+        let want: Vec<(usize, Vec<ItemId>)> = wanted(board, self.zone, self.net, &self.cut_by)
+            .into_iter()
+            .filter(|(_, pins)| !self.broken.iter().any(|b| b.iter().any(|p| pins.contains(p))))
+            .collect();
+        if want.is_empty() {
+            return Vec::new();
+        }
+        let have = Pours::likely_for(board, self.zone).links_of(board, self.zone);
+        want.into_iter().map(|(layer, pins)| judge(&have, layer, pins, self.min_width)).filter(|s| !s.ok).collect()
+    }
+}
+
+impl Board {
+    /// Asks every check of copper from here on to keep zone `zone`'s sections ([`sections`])
+    /// whole: a track or via that breaks one, or narrows it below `min_width`, is a
+    /// [`crate::Rule::KeptJoined`] fault. The sections are drawn again at each check, so copper
+    /// of the nets let cut it laid since cuts them. A section broken now is left out. Returns
+    /// the sections as they are now.
+    pub fn keep_joined(&mut self, zone: usize, cut_by: &[u32], min_width: Nm) -> Vec<Section> {
+        let Some(area) = self.zone_areas.iter().find(|z| z.zone == zone) else { return Vec::new() };
+        let (net, outline, layers) = (area.net, area.outline.clone(), area.layers);
+        let now = sections(self, zone, cut_by, min_width);
+        let broken = now.iter().filter(|s| !s.ok).map(|s| s.pins.clone()).collect();
+        let reach = outline.bbox().grow(REACH);
+        self.kept_joined.push(KeptJoined { zone, net, cut_by: cut_by.to_vec(), min_width, outline, layers, reach, broken });
+        now
+    }
 }
 
 /// Two broad parts are told from a spur by how much broader than the neck between them each
