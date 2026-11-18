@@ -36,6 +36,14 @@ fn the_rp2350_block_goes_onto_its_fixture_and_then_matches() {
     let xs: Vec<f64> = ring.zone.outline.iter().map(|p| p[0] * 1e3).collect();
     assert!(xs.iter().all(|x| (x - 97.68).abs() < 1e-6 || (x - 102.32).abs() < 1e-6), "{xs:?}");
 
+    // The band is in sections between the DVDD spokes: only other nets' tracks are barred from
+    // it, and its copper is to stay joined in each section.
+    let band = placed.entries.iter().find(|e| e.name == "band").unwrap();
+    assert_eq!(band.rules.len(), 1);
+    assert!(band.rules[0].1.contains("(constraint disallow track))") && band.rules[0].1.contains("A.NetName != '+1V1'"), "{}", band.rules[0].1);
+    let band_copper = placed.entries.iter().find(|e| e.name == "band copper").unwrap();
+    assert_eq!(band_copper.keep_joined.as_deref(), Some(&["+1V1".to_string()][..]));
+
     // Raspberry Pi's board has its own pours near the block's (the board the block was lifted
     // from widened them a little), and none of the rule areas.
     let found = compare(&placed, &copper.zones, "");

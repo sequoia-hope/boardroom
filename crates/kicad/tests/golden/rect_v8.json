@@ -5,6 +5,16 @@
     "thickness_m": 0.0016,
     "thickness_general_m": 0.0016,
     "thickness_stackup_m": 0.0016000000000000003,
+    "copper_thickness_m": [
+      [
+        "F.Cu",
+        0.000035000000000000004
+      ],
+      [
+        "B.Cu",
+        0.000035000000000000004
+      ]
+    ],
     "title_block": {
       "title": "Waffle test board",
       "date": "2026-09-26",

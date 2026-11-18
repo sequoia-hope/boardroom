@@ -5,6 +5,7 @@
     "thickness_m": 0.0012,
     "thickness_general_m": 0.0012,
     "thickness_stackup_m": null,
+    "copper_thickness_m": [],
     "title_block": {
       "title": "",
       "date": "",

@@ -96,7 +96,7 @@ pub fn read(root: &Node) -> Result<Pcb, KicadParse> {
         Some(t) => Some(t.number_arg(0, "thickness")? * MM),
         None => None,
     };
-    let thickness_stackup_m = read_stackup(root)?;
+    let (thickness_stackup_m, copper_thickness_m) = read_stackup(root)?;
     let thickness_m = match (thickness_stackup_m, thickness_general_m) {
         (Some(s), Some(g)) => {
             if (s - g).abs() > 1e-9 {
@@ -201,6 +201,7 @@ pub fn read(root: &Node) -> Result<Pcb, KicadParse> {
         thickness_m,
         thickness_general_m,
         thickness_stackup_m,
+        copper_thickness_m,
         title_block,
         copper_layers,
         nets,
@@ -212,12 +213,15 @@ pub fn read(root: &Node) -> Result<Pcb, KicadParse> {
     })
 }
 
-fn read_stackup(root: &Node) -> Result<Option<f64>, KicadParse> {
+/// The stackup's total thickness, when it gives thicknesses, and each copper layer's.
+#[allow(clippy::type_complexity)]
+fn read_stackup(root: &Node) -> Result<(Option<f64>, Vec<(String, f64)>), KicadParse> {
     let Some(stackup) = root.find("setup").and_then(|s| s.find("stackup")) else {
-        return Ok(None);
+        return Ok((None, Vec::new()));
     };
     let mut sum = 0.0;
     let mut any = false;
+    let mut copper = Vec::new();
     for layer in stackup.find_all("layer") {
         let kind = layer
             .find("type")
@@ -228,11 +232,17 @@ fn read_stackup(root: &Node) -> Result<Option<f64>, KicadParse> {
             continue;
         }
         if let Some(t) = layer.find("thickness") {
-            sum += t.number_arg(0, "stackup layer thickness")? * MM;
+            let t = t.number_arg(0, "stackup layer thickness")? * MM;
+            sum += t;
             any = true;
+            if kind == "copper" {
+                if let Some(name) = layer.args().first().and_then(|a| a.text()) {
+                    copper.push((name.to_string(), t));
+                }
+            }
         }
     }
-    Ok(any.then_some(sum))
+    Ok((any.then_some(sum), copper))
 }
 
 fn read_title_block(root: &Node) -> Result<TitleBlock, KicadParse> {

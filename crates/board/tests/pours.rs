@@ -123,3 +123,28 @@ fn a_pour_narrowed_by_a_wall_has_a_neck_and_one_cut_through_is_two_pieces() {
     assert_eq!(links[0].groups.len(), 2);
     assert!(links[0].groups.iter().all(|(m, w)| m.len() == 1 && w.is_none()));
 }
+
+/// A pour's sections: cut only by the nets let cut it. A wall of B with a gap leaves the two
+/// pads one section, whole; with B let cut it, a wall without a gap makes two sections, each
+/// whole; with B not let cut it, the same wall breaks the one section in two.
+#[test]
+fn sections_are_cut_only_by_the_nets_let_cut_them() {
+    let pads = [pad("U1", 5.0, 10.0, A), pad("U2", 15.0, 10.0, A)].concat();
+    let mut b = board("yes", 0.2, &pads);
+    track(&mut b, (10.0, 1.0), (10.0, 9.5));
+    track(&mut b, (10.0, 10.5), (10.0, 19.0));
+    let zone = b.zone_areas[0].zone;
+    let s = sections(&b, zone, &[], 300_000);
+    assert_eq!(s.len(), 1);
+    assert!(s[0].ok && s[0].groups.len() == 1, "{s:?}");
+    assert!(!sections(&b, zone, &[], 500_000)[0].ok, "a 0.4 mm link is narrower than 0.5 mm");
+
+    let mut b = board("yes", 0.2, &pads);
+    track(&mut b, (10.0, 0.5), (10.0, 19.5));
+    let s = sections(&b, zone, &[2], 100_000);
+    assert_eq!(s.len(), 2);
+    assert!(s.iter().all(|s| s.ok && s.pins.len() == 1), "{s:?}");
+    let s = sections(&b, zone, &[], 100_000);
+    assert_eq!(s.len(), 1);
+    assert!(!s[0].ok && s[0].groups.len() == 2, "{s:?}");
+}

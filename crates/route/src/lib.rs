@@ -192,10 +192,23 @@ fn tell_pours(board: &board::Board, routed: &board::Board, pours: &board::Pours,
 /// fault with its rule, layer, place and the items in it, and each connection still open.
 /// Each pour's pieces after a refill round the copper on the board, what each joins and where
 /// it is narrow ([`board::Pours::pieces_of`]): the zones whose name contains `zone`, else all.
-pub fn pours(path: &Path, zone: Option<&str>) -> Result<Value, String> {
+/// With `cut_by`, each zone's sections too ([`board::sections`]): its pins as the nets named
+/// there alone would cut it, each joined inside by copper at least the fab's narrowest track for
+/// the zone's layer of the board's stackup ([`board::fab::min_track`]).
+pub fn pours(path: &Path, zone: Option<&str>, cut_by: &[String]) -> Result<Value, String> {
     let (board, text) = board::Board::load(path).map_err(|e| e.to_string())?;
-    let (_, copper) = kicad::parse_board(&text).map_err(|e| e.to_string())?;
+    let (pcb, copper) = kicad::parse_board(&text).map_err(|e| e.to_string())?;
     let pours = board::Pours::likely(&board);
+    let mut cut = Vec::new();
+    for name in cut_by {
+        cut.push(board.nets.iter().position(|n| n == name).ok_or(format!("no net {name}"))? as u32);
+    }
+    // The narrowest track the fab builds on the zone's layer of this stackup.
+    let min_width = |z: &board::ZoneArea| {
+        let name = board.layers.get(z.layers.trailing_zeros() as usize);
+        let copper = name.and_then(|n| pcb.copper_thickness_m.iter().find(|(l, _)| l == n).map(|(_, t)| *t));
+        board::fab::min_track(pcb.copper_layers, copper)
+    };
     let mm = |v: f64| (v / 1e3).round() / 1e3;
     let at = |p: board::Point| [mm(p.x as f64), mm(p.y as f64)];
     let describe = |id: board::ItemId| -> String {
@@ -263,7 +276,23 @@ pub fn pours(path: &Path, zone: Option<&str>) -> Result<Value, String> {
                 })
             })
             .collect();
-        zones.push(json!({"zone": z.zone, "name": name, "net": board.net_name(z.net), "pieces": pieces, "links": links}));
+        let sections: Vec<Value> = if cut.is_empty() {
+            Vec::new()
+        } else {
+            board::sections(&board, z.zone, &cut, min_width(z))
+                .iter()
+                .map(|x| {
+                    json!({
+                        "layer": board.layers[x.layer],
+                        "pins": x.pins.iter().map(|&id| pin(id)).collect::<Vec<_>>(),
+                        "groups": x.groups.iter().map(|g| g.iter().map(|&id| pin(id)).collect::<Vec<_>>()).collect::<Vec<_>>(),
+                        "weakest": x.weakest.as_ref().map(neck),
+                        "ok": x.ok,
+                    })
+                })
+                .collect()
+        };
+        zones.push(json!({"zone": z.zone, "name": name, "net": board.net_name(z.net), "pieces": pieces, "links": links, "sections": sections, "min_width_mm": mm(min_width(z) as f64)}));
     }
     Ok(json!({"board": path.display().to_string(), "zones": zones}))
 }

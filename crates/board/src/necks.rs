@@ -58,6 +58,70 @@ pub struct PinLinks {
     pub groups: Vec<(Vec<ItemId>, Option<Neck>)>,
 }
 
+/// A section of a pour: the pins of its net that its copper inside would join if only the nets
+/// let cut it crossed it, and whether the copper on the board still joins them, by copper at
+/// least so wide.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Section {
+    pub layer: usize,
+    pub pins: Vec<ItemId>,
+    /// The pins as the copper inside joins them, a group each; one when the section is whole.
+    pub groups: Vec<Vec<ItemId>>,
+    /// The weakest link on the widest way between its pins, when whole and of more than one pin.
+    pub weakest: Option<Neck>,
+    /// Whole, and no link narrower than the width asked for (to a raster step).
+    pub ok: bool,
+}
+
+/// Zone `zone`'s sections ([`Section`]): the pour with only the copper of its own net and of
+/// `cut_by` crossing it (no other net's tracks or vias) is poured again, and the pins its
+/// copper joins then are a section; each is whole if the copper on the board joins its pins
+/// too, each link at least `min_width` wide.
+pub fn sections(board: &Board, zone: usize, cut_by: &[u32], min_width: Nm) -> Vec<Section> {
+    let Some(area) = board.zone_areas.iter().find(|z| z.zone == zone) else { return Vec::new() };
+    let mut ideal = board.clone();
+    let outline = area.outline.bbox();
+    let loose: Vec<ItemId> = board
+        .items()
+        .filter(|(id, it)| {
+            matches!(it.kind, Kind::Track | Kind::Via) && it.net != area.net && !cut_by.contains(&it.net) && board.bbox(*id).is_some_and(|b| b.overlaps(outline))
+        })
+        .map(|(id, _)| id)
+        .collect();
+    for id in loose {
+        ideal.remove(id);
+    }
+    let want = Pours::likely(&ideal).links_of(&ideal, zone);
+    let have = Pours::likely(board).links_of(board, zone);
+    let mut out = Vec::new();
+    for w in want {
+        let actual = have.iter().find(|h| h.layer == w.layer);
+        for (pins, _) in w.groups {
+            let mut groups: Vec<Vec<ItemId>> = Vec::new();
+            let mut weakest = None;
+            for (g, neck) in actual.map(|a| a.groups.as_slice()).unwrap_or_default() {
+                let mine: Vec<ItemId> = g.iter().copied().filter(|p| pins.contains(p)).collect();
+                if mine.is_empty() {
+                    continue;
+                }
+                if mine.len() == pins.len() {
+                    weakest = neck.clone();
+                }
+                groups.push(mine);
+            }
+            // A pin the board's copper inside reaches not at all is a group of its own.
+            for p in &pins {
+                if !groups.iter().any(|g| g.contains(p)) {
+                    groups.push(vec![*p]);
+                }
+            }
+            let ok = groups.len() == 1 && weakest.as_ref().is_none_or(|n: &Neck| n.width + STEP / 2 >= min_width);
+            out.push(Section { layer: w.layer, pins, groups, weakest, ok });
+        }
+    }
+    out
+}
+
 /// Two broad parts are told from a spur by how much broader than the neck between them each
 /// is: at least this much on each side (so 2 steps of width).
 const BROADER: f64 = 1.0;

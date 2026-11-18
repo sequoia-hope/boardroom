@@ -145,6 +145,12 @@ pub struct Pour {
     pub thermal_gap: Option<f64>,
     #[serde(default)]
     pub thermal_bridge_width: Option<f64>,
+    /// The pins whose copper alone may cut it (pin names): it is in sections where they cross
+    /// it, and other nets' vias may pass through it so long as each section still joins its
+    /// pins inside, by copper at least the fab's narrowest track for the stackup
+    /// ([`Chip::sections`]).
+    #[serde(default)]
+    pub keep_joined: Option<Vec<String>>,
     pub polygon: Vec<[f64; 2]>,
 }
 
@@ -204,6 +210,9 @@ pub struct Entry {
     pub zone: NewZone,
     /// `(name, text)` of each rule, the text a whole `(rule …)` with a comment line above.
     pub rules: Vec<(String, String)>,
+    /// A pour's nets (on this board) that alone may cut it into sections, each section to stay
+    /// joined inside ([`Pour::keep_joined`]).
+    pub keep_joined: Option<Vec<String>>,
 }
 
 impl Entry {
@@ -345,6 +354,10 @@ pub fn place(package: &Package, layout: &str, pcb: &kicad::Pcb, chip: &str) -> R
     let mut entries = Vec::new();
     for p in &areas.pours {
         let (net, net_name) = net_of(&p.net)?;
+        let keep_joined = match &p.keep_joined {
+            Some(list) => Some(list.iter().map(|pin| net_of(pin).map(|n| n.1)).collect::<Result<Vec<_>, _>>()?),
+            None => None,
+        };
         entries.push(Entry {
             name: p.name.clone(),
             why: p.why.clone(),
@@ -365,6 +378,7 @@ pub fn place(package: &Package, layout: &str, pcb: &kicad::Pcb, chip: &str) -> R
                 locked: true,
             },
             rules: Vec::new(),
+            keep_joined,
         });
     }
     for a in &areas.areas {
@@ -424,6 +438,7 @@ pub fn place(package: &Package, layout: &str, pcb: &kicad::Pcb, chip: &str) -> R
                 locked: true,
             },
             rules,
+            keep_joined: None,
         });
     }
     // An entry for layers the board does not have (inner layers on a two-layer board) is not
@@ -733,6 +748,53 @@ impl BoardFiles {
     }
 }
 
+impl BoardFiles {
+    /// The board as the checker reads it, for [`Chip::sections`].
+    pub fn checked(&self) -> Result<board::Board, String> {
+        board::Board::load(&self.path).map(|(b, _)| b).map_err(|e| e.to_string())
+    }
+}
+
+/// The narrowest track the fab builds on zone `zone`'s (first) layer of the board's stackup.
+pub fn fab_min(board: &board::Board, pcb: &kicad::Pcb, zone: usize) -> board::Nm {
+    let layer = board.zone_areas.iter().find(|z| z.zone == zone).map(|z| z.layers.trailing_zeros() as usize);
+    let name = layer.and_then(|l| board.layers.get(l));
+    let copper = name.and_then(|n| pcb.copper_thickness_m.iter().find(|(l, _)| l == n).map(|(_, t)| *t));
+    board::fab::min_track(pcb.copper_layers, copper)
+}
+
+/// A section in plain words: its pins, and whether whole, broken (into which groups) or too
+/// narrow, with its weakest link and what pinches it.
+pub fn describe_section(board: &board::Board, s: &board::Section) -> String {
+    let pin = |id: board::ItemId| match board.item(id).map(|i| &i.kind) {
+        Some(board::Kind::Pad { footprint, number, .. }) => format!("{}.{number}", board.footprints[*footprint].reference),
+        _ => "?".into(),
+    };
+    let item = |id: board::ItemId| {
+        board.item(id).map_or("?".to_string(), |i| {
+            let what = match &i.kind {
+                board::Kind::Pad { .. } => format!("pad {}", pin(id)),
+                board::Kind::Track => "track".into(),
+                board::Kind::Via => "via".into(),
+                board::Kind::Pour { .. } => "pour".into(),
+                _ => "copper".into(),
+            };
+            format!("{what} of {}", board.net_name(i.net))
+        })
+    };
+    let pins: Vec<String> = s.pins.iter().map(|&p| pin(p)).collect();
+    let state = match (s.ok, s.groups.len()) {
+        (true, _) => "whole".to_string(),
+        (false, 1) => "too narrow".to_string(),
+        (false, n) => format!("broken in {n}: {}", s.groups.iter().map(|g| g.iter().map(|&p| pin(p)).collect::<Vec<_>>().join("+")).collect::<Vec<_>>().join(" / ")),
+    };
+    let weakest = s.weakest.as_ref().map_or(String::new(), |n| {
+        let by: Vec<String> = n.by.iter().map(|&(id, _)| item(id)).collect();
+        format!(", weakest link {:.3} mm at ({:.2}, {:.2}){}", n.width as f64 / 1e6, n.at.x as f64 / 1e6, n.at.y as f64 / 1e6, if by.is_empty() { String::new() } else { format!(" by {}", by.join(", ")) })
+    });
+    format!("pins {} on {}: {state}{weakest}", pins.join(", "), board.layers[s.layer])
+}
+
 /// A board text's zones, as [`compare`] and [`accept`] take them.
 pub fn zones_of(text: &str) -> Result<Vec<kicad::Zone>, String> {
     kicad::parse_board(text).map(|(_, c)| c.zones).map_err(|e| e.to_string())
@@ -748,6 +810,25 @@ pub struct Chip {
 impl Chip {
     pub fn outstanding(&self) -> Vec<usize> {
         outstanding(&self.pin, &self.placed, &self.found)
+    }
+
+    /// Each pour that must stay joined ([`Pour::keep_joined`]) as the board has it: its copy's
+    /// sections, as only the nets let cut it would cut it, and whether each still joins its pins
+    /// inside by copper at least the narrowest track the fab builds on that layer of the board's
+    /// stackup ([`board::fab::min_track`]). `board` is the same board loaded for checking.
+    pub fn sections(&self, board: &board::Board, pcb: &kicad::Pcb) -> Vec<(usize, Vec<board::Section>)> {
+        let mut out = Vec::new();
+        for (i, e) in self.placed.entries.iter().enumerate() {
+            let Some(cut) = &e.keep_joined else { continue };
+            let cut: Vec<u32> = cut.iter().filter_map(|n| board.nets.iter().position(|b| b == n)).map(|n| n as u32).collect();
+            let mut all = Vec::new();
+            for &z in &self.found[i].zones {
+                let min_width = fab_min(board, pcb, z);
+                all.extend(board::sections(board, z, &cut, min_width));
+            }
+            out.push((i, all));
+        }
+        out
     }
 
     /// Behind its source: an older version pinned, or changes neither accepted nor declined.

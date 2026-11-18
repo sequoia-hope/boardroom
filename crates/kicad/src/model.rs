@@ -24,6 +24,8 @@ pub struct Pcb {
     /// Sum of `(setup (stackup (layer … (thickness t))))` over `copper`,
     /// `core` and `prepreg` layers, when a stackup with thicknesses exists.
     pub thickness_stackup_m: Option<f64>,
+    /// Each copper layer's thickness in the stackup, by layer name; empty without a stackup.
+    pub copper_thickness_m: Vec<(String, f64)>,
     pub title_block: TitleBlock,
     /// Number of `(layers …)` entries whose name ends in `.Cu`.
     pub copper_layers: u32,

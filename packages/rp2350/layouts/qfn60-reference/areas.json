@@ -4,9 +4,10 @@
  "pours": [
   {
    "name": "band copper",
-   "why": "IOVDD copper round the chip on its own side, feeding every IOVDD pin from one unbroken band",
-   "since": "0.3.0",
+   "why": "IOVDD copper round the chip on its own side, in sections between the DVDD spokes, each joining its IOVDD pins; other nets' vias may pass through a section so long as it still joins its pins by copper at least the fab's narrowest track for the board's stackup",
+   "since": "0.4.0",
    "net": "IOVDD",
+   "keep_joined": ["DVDD"],
    "layers": "chip",
    "priority": 1,
    "pads": "solid",
@@ -122,11 +123,11 @@
   },
   {
    "name": "band",
-   "why": "no other net's track or via may cut the IOVDD band",
-   "since": "0.3.0",
+   "why": "no other net's track may cut the IOVDD band but the DVDD spokes; vias may pass where the band's sections stay joined (band copper)",
+   "since": "0.4.0",
    "layers": "chip",
    "polygon": [[-2.94, 2.94], [2.94, 2.94], [2.94, -2.94], [-2.94, -2.94], [-2.94, 0.0], [-2.35, 0.0], [-2.35, -2.35], [2.35, -2.35], [2.35, 2.35], [-2.35, 2.35], [-2.35, 0.002], [-2.94, 0.002]],
-   "only": {"tracks": ["IOVDD"], "vias": ["IOVDD"]}
+   "only": {"tracks": ["IOVDD", "DVDD"]}
   },
   {
    "name": "ring vias",

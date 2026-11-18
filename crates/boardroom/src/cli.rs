@@ -17,7 +17,7 @@
 //!     boardroom snapshot [--ccomp P] <out> <dir>... a static copy for the web-only build
 //!     boardroom route <board.kicad_pcb> [--out DIR]  route a board (into DIR, else route/<board>/ in its project)
 //!     boardroom check <board.kicad_pcb> [--json]    the checker's faults and open connections
-//!     boardroom pours <board.kicad_pcb> [--zone NAME] [--json]  each pour's pieces after a refill and where each is narrow
+//!     boardroom pours <board.kicad_pcb> [--zone NAME] [--cut-by NET[,NET]] [--json]  each pour's pieces after a refill and where each is narrow
 //!     boardroom blocks <board.kicad_pcb> [--pin REF=PACKAGE/LAYOUT] [--accept REF[:NAME]|all] [--decline REF:NAME]  each chip's block against its package
 //!     boardroom blocks --behind <dir>               the boards under dir behind their packages
 //!
@@ -685,10 +685,11 @@ fn check_cmd(args: &[String]) -> Result<(), String> {
 /// Each pour's pieces after a refill: the pads each joins, its own vias and tracks, and its
 /// necks, narrowest first, with the copper that pinches each. Without `--zone`, one line a zone.
 fn pours_cmd(args: &[String]) -> Result<(), String> {
-    let words = positionals(args, &["zone"], &["json"])?;
-    let board = words.first().ok_or("usage: boardroom pours <board.kicad_pcb> [--zone NAME] [--json]")?;
+    let words = positionals(args, &["zone", "cut-by"], &["json"])?;
+    let board = words.first().ok_or("usage: boardroom pours <board.kicad_pcb> [--zone NAME] [--cut-by NET[,NET]] [--json]")?;
     let zone = flag(args, "zone");
-    let report = route::pours(std::path::Path::new(board), zone.as_deref())?;
+    let cut_by: Vec<String> = flag(args, "cut-by").map(|c| c.split(',').map(str::to_string).collect()).unwrap_or_default();
+    let report = route::pours(std::path::Path::new(board), zone.as_deref(), &cut_by)?;
     if has_switch(args, "json") {
         println!("{report}");
         return Ok(());
@@ -718,6 +719,23 @@ fn pours_cmd(args: &[String]) -> Result<(), String> {
             let limit = if n["at_limit"].as_bool() == Some(true) { " (at the pour's minimum width: KiCad may drop it)" } else { "" };
             format!("{:.3} mm{limit} at ({:.2}, {:.2}), pinched by {}", n["width_mm"].as_f64().unwrap_or(0.0), n["at"][0].as_f64().unwrap_or(0.0), n["at"][1].as_f64().unwrap_or(0.0), if by.is_empty() { "the zone's edge".into() } else { by.join(", ") })
         };
+        let sections = z["sections"].as_array().cloned().unwrap_or_default();
+        if !sections.is_empty() {
+            let ok = sections.iter().filter(|x| x["ok"].as_bool() == Some(true)).count();
+            println!("  {} sections as {} alone cut it, {ok} whole with every link at least {:.3} mm (the fab's narrowest track for this stackup):", sections.len(), cut_by.join(", "), z["min_width_mm"].as_f64().unwrap_or(0.0));
+            for x in &sections {
+                let pins: Vec<&str> = x["pins"].as_array().into_iter().flatten().filter_map(|v| v.as_str()).collect();
+                let groups = x["groups"].as_array().map_or(0, Vec::len);
+                let state = match (x["ok"].as_bool() == Some(true), groups) {
+                    (true, _) => "whole".to_string(),
+                    (false, 1) => "whole but too narrow".to_string(),
+                    (false, n) => format!("broken in {n}: {}", x["groups"].as_array().into_iter().flatten().map(|g| g.as_array().into_iter().flatten().filter_map(|v| v.as_str()).collect::<Vec<_>>().join("+")).collect::<Vec<_>>().join(" / ")),
+                };
+                let weakest = if x["weakest"].is_null() { String::new() } else { format!(", weakest link {}", describe_neck(&x["weakest"])) };
+                println!("    pins {} on {}: {state}{weakest}", pins.join(", "), x["layer"].as_str().unwrap_or(""));
+            }
+            continue;
+        }
         for l in &links {
             for g in l["groups"].as_array().into_iter().flatten() {
                 let pins: Vec<&str> = g["pins"].as_array().into_iter().flatten().filter_map(|v| v.as_str()).collect();
@@ -816,6 +834,7 @@ fn blocks_cmd(args: &[String]) -> Result<(), String> {
     if chips.is_empty() {
         println!("no chip of {} is pinned to a package (pin one with --pin U3=rp2350/qfn60-reference)", board.display());
     }
+    let files_now = packages::BoardFiles::load(&board)?;
     for (c, ch) in &chips {
         let p = &ch.placed;
         let pinned = if ch.pin.version.is_empty() { "nothing taken yet".to_string() } else { format!("at {}", ch.pin.version) };
@@ -832,6 +851,19 @@ fn blocks_cmd(args: &[String]) -> Result<(), String> {
             if let packages::State::Differs(d) = &ch.found[i].state {
                 for d in d {
                     println!("           - {d}");
+                }
+            }
+        }
+        if ch.placed.entries.iter().any(|e| e.keep_joined.is_some()) {
+            let checked = files_now.checked()?;
+            for (i, sections) in ch.sections(&checked, &files_now.pcb) {
+                let e = &p.entries[i];
+                let ok = sections.iter().filter(|s| s.ok).count();
+                let cut = e.keep_joined.as_deref().unwrap_or_default().join(", ");
+                let min = ch.found[i].zones.first().map_or(0, |&z| packages::fab_min(&checked, &files_now.pcb, z));
+                println!("  joined   {}: {ok} of {} sections whole (cut only by {cut}; each link at least {:.3} mm, the fab's narrowest track for this stackup)", e.name, sections.len(), min as f64 / 1e6);
+                for s in &sections {
+                    println!("           - {}", packages::describe_section(&checked, s));
                 }
             }
         }

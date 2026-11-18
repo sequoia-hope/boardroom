@@ -292,7 +292,10 @@ new router is being written here (`crates/plan`, `crates/wire`, `crates/route`; 
 `boardroom route <board.kicad_pcb>` routes a board into `route/<board>/` and `boardroom check`
 reports our checker's faults; `bench/prototype.py` judges it with KiCad's DRC.
 `boardroom blocks <board.kicad_pcb>` compares each chip a board pins (`<board>.blocks.json`)
-with its package's copper and rule areas and lets each change be accepted or declined;
+with its package's copper and rule areas and lets each change be accepted or declined, and
+checks each pour the package keeps joined (the RP2350's band, in sections between its DVDD
+spokes, each still joining its IOVDD pins by copper at least the fab's narrowest track for
+the stackup, from `crates/board/src/fab.rs`);
 `boardroom blocks --behind <dir>` lists the boards behind their packages.
 `boardroom pours <board.kicad_pcb> [--zone NAME]` refills each pour as our checker does and
 gives its pieces, the pads each joins, its necks (narrowest copper between two broad parts,

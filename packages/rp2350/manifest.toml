@@ -1,5 +1,12 @@
 # Circuit Composer package: Raspberry Pi RP2350 family.
 #
+# 0.4.0: the IOVDD band is in sections between the DVDD spokes (Raspberry Pi's reference
+# routes DVDD out across it), and other nets' vias may pass through a section so long as it still
+# joins its IOVDD pins inside by copper at least the fab's narrowest track for the board's
+# stackup (JLCPCB: 0.09 mm multilayer, 0.10 mm two-layer at 1 oz): dense boards need
+# the room. Only other nets' tracks are barred from the band now; `boardroom blocks` checks the
+# sections. Taken from the owner's own band on round-pendant f-usbc-rtc.
+#
 # 0.3.0: the block's copper and rule areas round the QFN-60 chip (layouts/qfn60-reference/areas.json):
 # the DVDD ring and IOVDD band poured round the chip, the regulator's own copper, the rule areas
 # saying which nets may cross each, and no plane or track under the switch node on inner layers.
@@ -12,7 +19,7 @@
 
 [package]
 name = "rp2350"
-version = "0.3.0"
+version = "0.4.0"
 family = "RP2350"
 license = "MIT"
 summary = "RP2350A/B: verified core-regulator layouts (QFN-60/80, 2 and 4 layers), interface blocks, ports, cited rules"
