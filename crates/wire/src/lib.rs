@@ -1073,37 +1073,46 @@ fn tied(board: &Board, plan: &Plan, mut drawing: Drawing, before: &[(ItemId, usi
 /// pour in are laid another way, if that leaves no more open than before.
 ///
 /// A board that is not whole that way, and has parts whose pins stand nearer each other than
-/// vias may, is routed with those parts' ways out settled first as well ([`plan::escape`]):
-/// for each row of such a part's pads a row of vias a little way out, one for each pad in the
-/// pads' order, and the connections then from via to via. The one with fewer connections
-/// open is kept. The two are worked out side by side, on a thread each, and the second is
-/// dropped where the first comes out whole.
+/// vias may, is routed with those parts' ways out settled first as well ([`plan::escape`]),
+/// twice: with a row of vias a little way out for each row of such a part's pads, one for
+/// each pad in the pads' order ([`plan::Fan::Spread`]), and with each pad's via at its tip
+/// ([`plan::Fan::Tight`]); the connections then from via to via. The one with fewest
+/// connections open is kept (the first of them where two tie). The three are worked out side
+/// by side, on a thread each, and the two fanned out are dropped where the first comes out
+/// whole.
 pub fn route(board: &Board) -> (Plan, Drawing) {
     let never = AtomicBool::new(false);
     if std::env::var("WIRE_FIRST").is_ok() {
-        let (plan, drawing) = route_with(board, false, &never).unwrap_or_else(|| (plan::start(board), Drawing::default()));
+        let (plan, drawing) = route_with(board, None, &never).unwrap_or_else(|| (plan::start(board), Drawing::default()));
         let drawing = without_spare(board, &plan, drawing);
         return loose::loose(board, &plan, &drawing);
     }
-    // The two ways side by side, each on a thread of its own: neither asks anything of the
-    // other. The second is for a board the first leaves open, and is told to stop, at the
-    // end of what it is at, once the first has come out whole: what is kept is as it would
-    // be with one after the other.
+    // The ways side by side, each on a thread of its own: none asks anything of another. The
+    // fanned-out ones are for a board the first leaves open, and are told to stop, at the end
+    // of what they are at, once the first has come out whole: what is kept is as it would be
+    // with one after the other.
     let stop = AtomicBool::new(false);
     let (plain, fanned) = std::thread::scope(|scope| {
-        let fanned = scope.spawn(|| route_with(board, true, &stop));
-        let plain = route_with(board, false, &never);
+        let stop = &stop;
+        let fanned: Vec<_> = [plan::Fan::Spread, plan::Fan::Tight].into_iter().map(|fan| scope.spawn(move || route_with(board, Some(fan), stop))).collect();
+        let plain = route_with(board, None, &never);
         let still = plain.as_ref().map(|p| open(board, &p.0, &p.1));
         if still.is_none_or(|open| open == 0) {
             stop.store(true, Ordering::Relaxed);
         }
-        (plain.zip(still), fanned.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
+        let fanned: Vec<(Plan, Drawing)> = fanned.into_iter().filter_map(|f| f.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))).collect();
+        (plain.zip(still), fanned)
     });
-    let Some((plain, still)) = plain else { return (plan::start(board), Drawing::default()) };
-    let (plan, drawing) = match fanned {
-        Some(fanned) if still > 0 && open(board, &fanned.0, &fanned.1) < still => fanned,
-        _ => plain,
-    };
+    let Some(((mut plan, mut drawing), mut still)) = plain else { return (plan::start(board), Drawing::default()) };
+    for (other, drawn) in fanned {
+        if still == 0 {
+            break;
+        }
+        let open = open(board, &other, &drawn);
+        if open < still {
+            (still, plan, drawing) = (open, other, drawn);
+        }
+    }
     let drawing = without_spare(board, &plan, drawing);
     // Vias and wires left joining nothing where a wire beside them could not be drawn.
     loose::loose(board, &plan, &drawing)
@@ -1134,7 +1143,7 @@ fn without_spare(board: &Board, plan: &Plan, drawing: Drawing) -> Drawing {
 
 /// [`route`] one way: with the fine-pitch parts' ways out settled first, or without. None
 /// where there is no such part.
-fn route_with(board: &Board, fan: bool, stop: &AtomicBool) -> Option<(Plan, Drawing)> {
+fn route_with(board: &Board, fan: Option<plan::Fan>, stop: &AtomicBool) -> Option<(Plan, Drawing)> {
     let mut poured: Vec<u32> = board.zone_areas.iter().filter(|z| !z.kept && z.net != 0).map(|z| z.net).collect();
     poured.sort_unstable();
     poured.dedup();
@@ -1144,14 +1153,14 @@ fn route_with(board: &Board, fan: bool, stop: &AtomicBool) -> Option<(Plan, Draw
     let clock = std::time::Instant::now();
     let said = |what: &str, plan: &Plan, drawing: Option<&Drawing>| {
         if times {
-            eprintln!("{:7.2} s  {}{what}: {} strands, {} vias, {} left{}", clock.elapsed().as_secs_f64(), if fan { "ways out first, " } else { "" }, plan.sheets.iter().map(|s| s.laid().count()).sum::<usize>(), plan.vias.len(), plan.left.len(), drawing.map_or(String::new(), |d| format!(", {} drawn, {} not", d.wires.len(), d.undrawn.len())));
+            eprintln!("{:7.2} s  {}{what}: {} strands, {} vias, {} left{}", clock.elapsed().as_secs_f64(), match fan { Some(plan::Fan::Spread) => "ways out first, ", Some(plan::Fan::Tight) => "ways out at the tips, ", None => "" }, plan.sheets.iter().map(|s| s.laid().count()).sum::<usize>(), plan.vias.len(), plan.left.len(), drawing.map_or(String::new(), |d| format!(", {} drawn, {} not", d.wires.len(), d.undrawn.len())));
         }
     };
     // Told to stop: at the end of each thing it does, it does no more.
     let stopped = || stop.load(Ordering::Relaxed);
     let wants: Vec<plan::Want> = plan::wants(&lines).into_iter().filter(|w| !poured.contains(&w.net)).collect();
-    let mut plan = if fan {
-        let (spots, stubs) = plan::escape(board, &wants);
+    let mut plan = if let Some(fan) = fan {
+        let (spots, stubs) = plan::escape(board, &wants, fan);
         if stubs.is_empty() {
             return None;
         }

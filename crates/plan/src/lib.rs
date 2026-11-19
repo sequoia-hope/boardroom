@@ -750,10 +750,24 @@ const IN_LINE: f64 = 0.05;
 /// How much nearer the part, or farther from it, a row of vias is tried where not all of it
 /// fits at the distance its fan asks for, mm.
 const OUT_STEPS: [f64; 11] = [-0.1, -0.2, -0.3, -0.45, -0.6, -0.8, 0.15, 0.3, 0.5, 0.8, 1.1];
+/// How much farther than its pad's tip a tight fan's via is tried, mm, nearest first.
+const TIGHT_STEPS: [f64; 6] = [0.0, 0.05, 0.1, 0.2, 0.3, 0.45];
+
+/// How a fine-pitch part's rows of vias stand ([`escape`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fan {
+    /// A row of vias a via's pitch apart, a little way out from the pads, spread wider than
+    /// the row of pads where the pads stand nearer than that.
+    Spread,
+    /// Each via straight out from its own pad at the pad's tip, every other one a little
+    /// farther out; spread where that leaves fewer of a row's vias a place.
+    Tight,
+}
 
 /// The places for the vias of one row of a part's pads: the pads that have a connection, in
 /// their order along the row, each with where its via may stand (none where no via may).
-fn slots(board: &Board, apart: f64, radius: f64, hole: f64, row: &[(ItemId, space::P)], middle: space::P, scratch: &mut Board) -> Vec<(ItemId, Option<space::P>)> {
+#[allow(clippy::too_many_arguments)]
+fn slots(board: &Board, apart: f64, radius: f64, hole: f64, row: &[(ItemId, space::P)], middle: space::P, scratch: &mut Board, fan: Fan) -> Vec<(ItemId, Option<space::P>)> {
     let (first, last) = (row[0].1, row[row.len() - 1].1);
     let len = space::dist(first, last).max(1e-9);
     let along = [(last[0] - first[0]) / len, (last[1] - first[1]) / len];
@@ -820,10 +834,61 @@ fn slots(board: &Board, apart: f64, radius: f64, hole: f64, row: &[(ItemId, spac
     // Away from the part's middle; for a part that is one row, the side with more room.
     let normal = [-along[1], along[0]];
     let side = (first[0] - middle[0]) * normal[0] + (first[1] - middle[1]) * normal[1];
+    // Or tight, as the designers fan a fine-pitch chip out: each via straight out from its own
+    // pad, its copper at the pad's tip (a via may touch its own pad), every other one a little
+    // farther out so that neighbours keep a via's pitch apart. The ground beyond the row is
+    // then left to the wires.
+    let tight = |scratch: &mut Board, dir: space::P| -> Vec<Option<space::P>> {
+        let stagger = |k: usize| -> f64 {
+            let gap = |i: usize, j: usize| (t[i] - t[j]).abs();
+            let near = [k.checked_sub(1).map(|j| gap(k, j)), (k + 1 < t.len()).then(|| gap(k, k + 1))].into_iter().flatten().fold(f64::MAX, f64::min);
+            if near >= pitch { 0.0 } else { (pitch * pitch - near * near).sqrt() }
+        };
+        let mut best: Vec<Option<space::P>> = vec![None; row.len()];
+        // Every other via stands in one line: they must be a via's pitch apart in it.
+        if t.windows(3).any(|w| w[2] - w[0] < pitch) {
+            return best;
+        }
+        let far: Vec<f64> = (0..row.len()).map(|k| if k % 2 == 1 { stagger(k) } else { 0.0 }).collect();
+        for extra in TIGHT_STEPS {
+            let tried: Vec<Option<space::P>> = row
+                .iter()
+                .enumerate()
+                .map(|(k, &(pad, centre))| {
+                    let out = reach(pad, dir) + radius + extra + far[k];
+                    let p = [centre[0] + dir[0] * out, centre[1] + dir[1] * out];
+                    let q = board::Point::new((p[0] * 1e6).round() as i64, (p[1] * 1e6).round() as i64);
+                    let net = board.item(pad).map_or(0, |i| i.net);
+                    let id = scratch.insert(via_item(board, p, net));
+                    let fits = bounds.first().is_none_or(|o| board::inside(q, o)) && board::check_item(scratch, id).is_empty();
+                    scratch.remove(id);
+                    fits.then_some(p)
+                })
+                .collect();
+            // Each pad keeps the nearest place that fits.
+            for (b, t) in best.iter_mut().zip(tried) {
+                if b.is_none() {
+                    *b = t;
+                }
+            }
+            if best.iter().all(|p| p.is_some()) {
+                break;
+            }
+        }
+        best
+    };
+    let out_from = |scratch: &mut Board, dir: space::P| {
+        let spread = stand(scratch, dir);
+        if fan == Fan::Spread {
+            return spread;
+        }
+        let close = tight(scratch, dir);
+        if close.iter().flatten().count() >= spread.iter().flatten().count() { close } else { spread }
+    };
     let stood = if side.abs() > IN_LINE {
-        stand(scratch, if side > 0.0 { normal } else { [-normal[0], -normal[1]] })
+        out_from(scratch, if side > 0.0 { normal } else { [-normal[0], -normal[1]] })
     } else {
-        let (a, b) = (stand(scratch, normal), stand(scratch, [-normal[0], -normal[1]]));
+        let (a, b) = (out_from(scratch, normal), out_from(scratch, [-normal[0], -normal[1]]));
         if a.iter().flatten().count() >= b.iter().flatten().count() { a } else { b }
     };
     row.iter().map(|p| p.0).zip(stood).collect()
@@ -840,7 +905,11 @@ fn slots(board: &Board, apart: f64, radius: f64, hole: f64, row: &[(ItemId, spac
 /// rows. A stub that is not used is taken out again ([`tidy`]), and its pad's wire then has
 /// the place its via would have had to pass through. A pad that stands in no row, or whose
 /// own place cannot be reached, has its via wherever one fits within [`FAN_REACH`].
-pub fn escape(board: &Board, wants: &[Want]) -> (Spots, Vec<Want>) {
+///
+/// With [`Fan::Tight`] a row's vias stand at its pads' tips instead, as designers fan out a
+/// QFN of 0.4 mm pitch under 0.3 mm vias, leaving the ground beyond the row to the wires
+/// (parallelogram p2-132-usb6: 34 connections open with the spread rows, 21 with these).
+pub fn escape(board: &Board, wants: &[Want], fan: Fan) -> (Spots, Vec<Want>) {
     let mut spots = via_spots(board, true);
     let mid = |id: ItemId| board.bbox(id).map(|b| [(b.min.x + b.max.x) as f64 / 2e6, (b.min.y + b.max.y) as f64 / 2e6]);
     let part = |id: ItemId| match board.item(id) {
@@ -894,7 +963,7 @@ pub fn escape(board: &Board, wants: &[Want]) -> (Spots, Vec<Want>) {
             if wanted.is_empty() {
                 continue;
             }
-            let stood = slots(board, spots.apart, spots.radius, spots.hole, &wanted, middle, &mut scratch);
+            let stood = slots(board, spots.apart, spots.radius, spots.hole, &wanted, middle, &mut scratch, fan);
             let places: Vec<space::P> = stood.iter().filter_map(|s| s.1).collect();
             if let (Some(&first), Some(&last)) = (places.first(), places.last()) {
                 fans.push(vec![a, b, last, first]);
