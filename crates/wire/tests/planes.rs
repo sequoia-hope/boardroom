@@ -47,3 +47,23 @@ fn an_inner_plane_whose_rule_area_says_who_may_cross_is_open() {
     assert_eq!(plan.planes, vec![1]);
     assert!(plan.closed.is_empty(), "closed: {:?}", plan.closed);
 }
+
+fn length(w: &wire::Wire) -> f64 {
+    w.pts.windows(2).map(|p| (p[1][0] - p[0][0]).hypot(p[1][1] - p[0][1])).sum()
+}
+
+/// Three surface-mount ground pads on the front, far apart, over a ground plane nothing
+/// reaches: no through-hole pad, no via. Each goes down to the plane by a via of its own
+/// beside it, as a designer fans a ground pad out, rather than by a track to the next pad.
+#[test]
+fn pads_over_a_plane_nothing_reaches_each_take_a_via_down_to_it() {
+    let pad = |x: f64, y: f64| format!("(footprint \"P\" (layer \"F.Cu\") (at {x} {y}) (pad \"1\" smd rect (at 0 0) (size 1 0.6) (layers \"F.Cu\") (net 1 \"GND\")))");
+    let board = board("", &[pad(4.0, 4.0), pad(16.0, 4.0), pad(10.0, 16.0)].concat());
+    let (plan, drawing) = wire::route(&board);
+    assert!(drawing.undrawn.is_empty() && plan.left.is_empty(), "left {:?}", plan.left);
+    assert_eq!(wire::open(&board, &plan, &drawing), 0);
+    assert_eq!(plan.vias.len(), 3, "a via for each pad");
+    let longest = drawing.wires.iter().map(length).fold(0.0, f64::max);
+    assert!(longest < 3.0, "short stubs to the vias, not tracks from pad to pad: the longest is {longest} mm");
+    assert!(drawing.wires.iter().all(|w| w.layer == 0), "nothing is drawn on the plane");
+}

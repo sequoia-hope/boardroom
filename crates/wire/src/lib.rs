@@ -874,6 +874,72 @@ fn left_by_pours(board: &Board, plan: &Plan, drawing: &Drawing, poured: &[u32]) 
         }
         wants.push(want);
     }
+    // A plane no copper reaches yet (every pad of its net on the outer layers, before any via
+    // goes down to it) joins nothing, so neither end of a connection has a spot in it: laid as
+    // they come, the net's pads would be chained with tracks. Each such connection instead
+    // goes down to the plane from its end farther from one of the net's clusters, taken as the
+    // root, and the root by a way of its own: every cluster has its via.
+    // Only on an inner layer, where a via is the one way in, and of the net's pieces there the
+    // largest. A piece of pour between the pads of an outer layer that nothing reaches is no
+    // way to join anything (CAL430FR, two layers: 5 open with such pieces taken for planes, 2
+    // without). Not only the layers the plan takes for planes: a board poured on every layer
+    // has none of those (the simple earring).
+    let inner: Vec<usize> = (1..with.layers.len().saturating_sub(1)).collect();
+    let bare_nets: Vec<u32> = if inner.is_empty() { Vec::new() } else { poured.iter().copied().filter(|&net| wants.iter().any(|w| w.net == net && w.into.is_empty())).collect() };
+    let islands = if bare_nets.is_empty() { None } else { Some(board::Pours::with_islands(&with)) };
+    let mut free: HashMap<u32, Vec<usize>> = HashMap::new();
+    for (&net, islands) in bare_nets.iter().zip(std::iter::repeat(&islands)) {
+        let Some(islands) = islands else { continue };
+        let mut by: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (c, p) in spots.at.iter().enumerate() {
+            if (0..with.layers.len()).any(|l| pours.piece(net, l, nm(*p), r).is_some()) {
+                continue;
+            }
+            if let Some(piece) = inner.iter().find_map(|&l| islands.piece(net, l, nm(*p), r)) {
+                by.entry(piece).or_default().push(c);
+            }
+        }
+        if let Some((_, list)) = by.into_iter().max_by_key(|(piece, l)| (l.len(), std::cmp::Reverse(*piece))) {
+            free.insert(net, list);
+        }
+    }
+    for (&net, list) in &free {
+        let cluster = |id: ItemId| joined.cluster.get(&id).copied();
+        let bare: Vec<usize> = (0..wants.len()).filter(|&i| wants[i].net == net && wants[i].into.is_empty()).collect();
+        let Some(root) = bare.first().and_then(|&i| cluster(wants[i].to)) else { continue };
+        // How far each cluster is from the root, along the connections.
+        let mut depth: HashMap<usize, usize> = HashMap::from([(root, 0)]);
+        loop {
+            let mut grew = false;
+            for &i in &bare {
+                let (Some(a), Some(b)) = (cluster(wants[i].from), cluster(wants[i].to)) else { continue };
+                match (depth.get(&a).copied(), depth.get(&b).copied()) {
+                    (Some(d), None) => _ = depth.insert(b, d + 1),
+                    (None, Some(d)) => _ = depth.insert(a, d + 1),
+                    _ => continue,
+                }
+                grew = true;
+            }
+            if !grew {
+                break;
+            }
+        }
+        for &i in &bare {
+            let w = &mut wants[i];
+            let (Some(a), Some(b)) = (cluster(w.from).and_then(|c| depth.get(&c)), cluster(w.to).and_then(|c| depth.get(&c))) else { continue };
+            if a < b {
+                (w.from, w.to) = (w.to, w.from);
+            }
+            w.into = list.clone();
+        }
+        // And the root itself, which nothing goes down from: a way of its own into the plane,
+        // from its end of one of its connections.
+        if let Some(&i) = bare.iter().find(|&&i| cluster(wants[i].to) == Some(root) && !wants[i].into.is_empty()) {
+            let mut own = wants[i].clone();
+            (own.from, own.to) = (own.to, own.from);
+            wants.push(own);
+        }
+    }
     wants.sort_by(|a, b| a.apart.total_cmp(&b.apart));
     (wants, joined.airlines.len())
 }

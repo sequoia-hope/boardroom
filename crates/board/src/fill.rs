@@ -412,7 +412,7 @@ pub fn fill_zones_until(board: &Board, stop: &dyn Fn() -> bool) -> Option<Vec<Fi
             if stop() {
                 return None;
             }
-            if let Some(r) = fill_one(board, zone, layer, &poured, false, false, None, stop)? {
+            if let Some(r) = fill_one(board, zone, layer, &poured, false, false, None, false, stop)? {
                 fills.push(Fill { zone: zone.zone, net: zone.net, layer, rects: r.rects(), pieces: r.pieces() });
                 poured.push((zone.net, layer, r));
             }
@@ -433,7 +433,7 @@ const STOP_EVERY: usize = 64;
 /// With `only`, the tracks and vias of the nets it names alone are poured round: the others are
 /// taken as not there.
 #[allow(clippy::too_many_arguments)]
-fn fill_one(board: &Board, zone: &ZoneArea, layer: usize, poured: &[(u32, usize, Raster)], as_joined: bool, nearest: bool, only: Option<&[u32]>, stop: &dyn Fn() -> bool) -> Option<Option<Raster>> {
+fn fill_one(board: &Board, zone: &ZoneArea, layer: usize, poured: &[(u32, usize, Raster)], as_joined: bool, nearest: bool, only: Option<&[u32]>, islands: bool, stop: &dyn Fn() -> bool) -> Option<Option<Raster>> {
     let gone = |item: &crate::model::Item| matches!(item.kind, Kind::Track | Kind::Via) && only.is_some_and(|nets| !nets.contains(&item.net));
     let Shape::Polygon(outline) = &zone.outline else { return Some(None) };
     if outline.len() < 3 {
@@ -549,7 +549,7 @@ fn fill_one(board: &Board, zone: &ZoneArea, layer: usize, poured: &[(u32, usize,
     } else {
         r.open(zone.min_thickness / 2);
     }
-    if net != 0 {
+    if net != 0 && !islands {
         r.keep_seeded(&seeds);
     }
     Some(r.cells.iter().any(|&c| c).then_some(r))
@@ -639,20 +639,26 @@ impl Pours {
                 take
             })
             .collect();
-        Pours::over(board, true, zones, false, only)
+        Pours::over(board, true, zones, false, only, false)
     }
 
     fn with(board: &Board, nearest: bool) -> Pours {
-        Pours::over(board, nearest, order(board), true, None)
+        Pours::over(board, nearest, order(board), true, None, false)
     }
 
-    fn over(board: &Board, nearest: bool, zones: Vec<&ZoneArea>, spokes: bool, only: Option<&[u32]>) -> Pours {
+    /// [`Pours::of`] with the islands that touch none of their net's copper kept: where a via
+    /// would join a pour that nothing reaches yet, as a plane before any via goes down to it.
+    pub fn with_islands(board: &Board) -> Pours {
+        Pours::over(board, false, order(board), true, None, true)
+    }
+
+    fn over(board: &Board, nearest: bool, zones: Vec<&ZoneArea>, spokes: bool, only: Option<&[u32]>, islands: bool) -> Pours {
         let mut poured: Vec<(u32, usize, Raster)> = Vec::new();
         let mut parts = Vec::new();
         let mut pieces = 0u32;
         for zone in zones.into_iter().filter(|z| !z.kept) {
             for layer in (0..board.layers.len()).filter(|l| zone.layers & (1 << l) != 0) {
-                let Some(Some(r)) = fill_one(board, zone, layer, &poured, true, nearest, only, &|| false) else { continue };
+                let Some(Some(r)) = fill_one(board, zone, layer, &poured, true, nearest, only, islands, &|| false) else { continue };
                 poured.push((zone.net, layer, r.clone()));
                 if zone.net == 0 {
                     continue;
