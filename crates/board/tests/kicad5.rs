@@ -228,6 +228,23 @@ fn an_edge_clearance_rule_holds_copper_further_from_edge_circles_only() {
 }
 
 #[test]
+fn copper_may_come_up_to_an_edge_that_asks_no_clearance_and_not_across_it() {
+    let text = "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
+         (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
+         (net 0 \"\") (net 1 \"A\") (net 2 \"B\")
+         (gr_rect (start 0 0) (end 30 30) (layer \"Edge.Cuts\") (width 0.1)))";
+    let (pcb, copper) = kicad::parse_board(text).unwrap();
+    let mut b = Board::new(&pcb, &copper, kicad::Rules::parse(r#"{"board":{"design_settings":{"rules":{"min_clearance":0.2,"min_copper_edge_clearance":0.0}}}}"#).unwrap());
+    // A 0.2 mm track whose side is 0.05 mm inside the edge, and one whose side is 0.05 mm past it
+    // (Pi5_PCIe: a via 0.31 mm from the edge with 0.8 mm of copper, which KiCad reports).
+    let inside = track(&mut b, 0.15);
+    assert!(check_item(&b, inside).is_empty(), "{:?}", check_item(&b, inside));
+    let across = track(&mut b, 0.05);
+    let found = check_item(&b, across);
+    assert!(found.iter().any(|v| v.rule == Rule::EdgeClearance), "{found:?}");
+}
+
+#[test]
 fn an_outline_that_does_not_close_is_reported() {
     let text = "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
          (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))

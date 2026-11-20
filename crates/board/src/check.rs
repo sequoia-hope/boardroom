@@ -448,11 +448,11 @@ fn item_checks(
                 }
             }
         }
-        if limits.edge > 0 {
-            let (gap, required) = edge_gap(board, limits.edge, &item.shape, item_bbox);
-            if gap + SLACK < required as f64 {
-                found.push(Violation { rule: Rule::EdgeClearance, a: id, b: None, layer: None, gap, required });
-            }
+        // Where no clearance from the edge is asked, copper may still not cross it: KiCad
+        // reports copper that reaches an edge line whatever the clearance.
+        let (gap, required) = edge_gap(board, limits.edge.max(1), &item.shape, item_bbox);
+        if if limits.edge > 0 { gap + SLACK < required as f64 } else { gap <= 0.0 } {
+            found.push(Violation { rule: Rule::EdgeClearance, a: id, b: None, layer: None, gap, required: required.min(limits.edge) });
         }
         // Copper against the plated holes of others, when they are not walked themselves.
         if everyone {
