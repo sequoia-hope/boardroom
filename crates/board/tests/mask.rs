@@ -61,7 +61,7 @@ fn plain(setup: &str, drawn: &str) -> Board {
         "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
          (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (38 \"B.Mask\" user) (39 \"F.Mask\" user) (44 \"Edge.Cuts\" user))
          (setup {setup})
-         (net 0 \"\") (net 1 \"A\") (net 2 \"B\")
+         (net 0 \"\") (net 1 \"A\") (net 2 \"B\") (net 3 \"C\")
          (footprint \"R\" (layer \"F.Cu\") (uuid \"0b10c000-0000-4000-8000-0000000000ab\") (at 10 10) (property \"Reference\" \"R1\")
            (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net 1 \"A\")))
          (gr_rect (start 0 0) (end 20 20) (layer \"Edge.Cuts\") (width 0.1))
@@ -128,15 +128,38 @@ fn a_pads_opening_over_the_side_without_its_copper_bares_that_side() {
 #[test]
 fn an_opening_drawn_in_the_mask_bares_the_pads_it_touches_not_only_those_it_covers() {
     // A stroke on F.Mask from A's pad (edge at 10.5) to B's (edge at 11.5), covering neither
-    // centre: it bares both nets, so neither may run there.
+    // centre: it bares both nets, so no third may run there.
     let drawn = "(footprint \"P\" (layer \"F.Cu\") (uuid \"0b10c000-0000-4000-8000-0000000000ad\") (at 12 10) (property \"Reference\" \"P2\")
          (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net 2 \"B\")))
          (gr_line (start 10.4 10) (end 11.6 10) (layer \"F.Mask\") (stroke (width 0.4) (type solid)))";
     let mut b = plain("(pad_to_mask_clearance 0)", drawn);
     assert_eq!(b.mask_areas.len(), 1);
     assert_eq!(b.mask_areas[0].2, 0, "it bares nets A and B");
-    let a = track_at(&mut b, 1, 11.0, 1);
-    assert!(check_item(&b, a).iter().any(|v| v.rule == Rule::Keepout));
+    assert_eq!(b.mask_pads[0], vec![1, 2]);
+    let c = track_at(&mut b, 3, 11.0, 1);
+    assert!(check_item(&b, c).iter().any(|v| v.rule == Rule::Keepout));
+}
+
+#[test]
+fn a_track_reaches_its_own_pad_in_an_opening_it_shares_with_other_nets() {
+    // An edge connector's fingers: A's pad at (10, 10) and B's at (12, 10) under one opening in
+    // the mask. Each is reached only through the opening, so a track of either may run there
+    // (KiCad's solder mask bridge, which the designers' boards have too); a third net's may not,
+    // and no via may stand there.
+    let drawn = "(footprint \"P\" (layer \"F.Cu\") (uuid \"0b10c000-0000-4000-8000-0000000000b2\") (at 12 10) (property \"Reference\" \"P2\")
+         (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net 2 \"B\")))
+         (gr_rect (start 9 8) (end 13 12) (layer \"F.Mask\") (fill solid) (width 0))";
+    let mut b = plain("(pad_to_mask_clearance 0)", drawn);
+    assert_eq!(b.mask_areas[0].2, 0, "it bares nets A and B");
+    let a = track_at(&mut b, 1, 10.0, 1);
+    assert!(check_item(&b, a).is_empty(), "net A to its own pad: {:?}", check_item(&b, a));
+    let own = track_at(&mut b, 2, 12.0, 1);
+    assert!(check_item(&b, own).is_empty(), "net B to its own pad");
+    let c = track_at(&mut b, 3, 11.0, 1);
+    assert!(check_item(&b, c).iter().any(|v| v.rule == Rule::Keepout), "net C has no pad there");
+    b.remove(c);
+    let v = via(&mut b, 1, 11.0, 8.8);
+    assert!(check_item(&b, v).iter().any(|x| x.rule == Rule::Keepout), "a via reaches no pad");
 }
 
 #[test]

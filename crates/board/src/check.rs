@@ -382,9 +382,12 @@ fn item_checks(
     }
     // A track or via of another net bared in an opening drawn in the mask would bridge there, and
     // so would a bare via whose own opening meets it, or comes closer than the mask's narrowest
-    // web (a via beside an unplated hole's opening: digital_clock's Q17).
+    // web (a via beside an unplated hole's opening: digital_clock's Q17). An opening that bares
+    // pads of several nets (an edge connector's fingers) admits a track of any of those nets all
+    // the same: its pad lies inside the opening and is reached no other way, the designers'
+    // boards do it, and KiCad's solder mask bridge for it is taken as the cost.
     if matches!(item.kind, Kind::Track | Kind::Via) {
-        for (shape, layers, net) in &board.mask_areas {
+        for (k, (shape, layers, net)) in board.mask_areas.iter().enumerate() {
             let margin = board.mask_margin() + board.via_opening_on(item, *layers);
             if layers & item.layers != 0 && item.shape.gap_within(shape, margin as f64) < margin as f64 {
                 let allowed = if *net >= crate::model::ANY_ONE_NET {
@@ -392,7 +395,8 @@ fn item_checks(
                 } else {
                     Some(*net)
                 };
-                if allowed.is_some_and(|n| n != item.net || n == 0) {
+                let to_its_pad = *net == 0 && item.kind == Kind::Track && board.mask_pads[k].contains(&item.net);
+                if allowed.is_some_and(|n| n != item.net || n == 0) && !to_its_pad {
                     found.push(Violation { rule: Rule::Keepout, a: id, b: None, layer: Some(layers.trailing_zeros() as usize), gap: 0.0, required: margin });
                 }
             }

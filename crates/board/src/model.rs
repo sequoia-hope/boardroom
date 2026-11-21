@@ -325,8 +325,14 @@ pub struct Board {
     pub mask_web: Nm,
     /// Openings drawn in the solder mask: the shape, the copper layer it bares, and the net that
     /// may run there (`ANY_ONE_NET | group` where it bared no fixed copper, so any single net may
-    /// claim it; 0 where it bared several nets or unnetted copper, so none may).
+    /// claim it; 0 where it bared several nets or unnetted copper, so none may but a track to a
+    /// pad of its own there, see [`Board::mask_pads`]).
     pub mask_areas: Vec<(Shape, u64, u32)>,
+    /// For each of [`Board::mask_areas`] that admits no net, the nets of the pads it bares (an
+    /// edge connector's fingers under one opening): a track of one of them may run there, since a
+    /// pad wholly inside the opening is reached no other way. KiCad calls each such track a
+    /// solder mask bridge, as it does the designer's. Empty for the others.
+    pub mask_pads: Vec<Vec<u32>>,
     /// Slice ranges in [`Board::mask_areas`] for each unclaimed mask item (`ANY_ONE_NET | group`),
     /// grouping all polygons of one KiCad `BOARD_ITEM` so one net claims the whole item together.
     pub mask_groups: Vec<std::ops::Range<usize>>,
@@ -559,6 +565,7 @@ impl Board {
             via_openings: (0, 0),
             mask_web: nm(copper.solder_mask_min_width),
             mask_areas: Vec::new(),
+            mask_pads: Vec::new(),
             mask_groups: Vec::new(),
             pad_clearances: HashMap::new(),
             pad_zone_connect: HashMap::new(),
@@ -934,10 +941,11 @@ impl Board {
             // As KiCad judges an opening that belongs to no copper: over the whole `BOARD_ITEM`,
             // every bared piece of copper must share one net. Fixed copper (pads, locked tracks
             // and vias, drawn copper outside net ties) decides first: one net > 0 admits that net,
-            // several or net 0 admits none. When none touches it, a copper zone or pour beneath it
+            // several or net 0 admits none (but a track to its own pad there: `mask_pads`). When none touches it, a copper zone or pour beneath it
             // claims its net; otherwise any single net may enter. A pad's opening merely near it
             // decides nothing: closing the opening for that would bury the pads of fine-pitch parts
             // whose drawn openings sit within the mask web of each other (DSKY_alarm's IC3).
+            let mut pads: Vec<u32> = Vec::new();
             let net = net.unwrap_or_else(|| {
                 let mut nets: Vec<u32> = Vec::new();
                 for shape in &shapes {
@@ -947,7 +955,10 @@ impl Board {
                             continue;
                         }
                         match it.kind {
-                            Kind::Pad { .. } if shape.gap_within(&it.shape, mask_margin as f64) < mask_margin as f64 => nets.push(it.net),
+                            Kind::Pad { .. } if shape.gap_within(&it.shape, mask_margin as f64) < mask_margin as f64 => {
+                                nets.push(it.net);
+                                pads.push(it.net);
+                            }
                             Kind::Pour { kept: true, .. }
                                 if !board.ties.contains_key(&id)
                                     && shape.gap_within(&it.shape, mask_margin as f64) < mask_margin as f64 =>
@@ -1025,6 +1036,10 @@ impl Board {
                     _ => 0,
                 }
             });
+            pads.retain(|&n| n != 0 && net == 0);
+            pads.sort_unstable();
+            pads.dedup();
+            board.mask_pads.extend(shapes.iter().map(|_| pads.clone()));
             board.mask_areas.extend(shapes.into_iter().map(|shape| (shape, layer, net)));
         }
         board.limits = crate::check::Limits::of(&board);
