@@ -188,13 +188,6 @@ pub fn course(board: &Board, sheet: &Sheet, s: usize) -> Option<Course> {
             }
         }
     }
-    let mut walls = Vec::new();
-    for o in space.obstacles.iter().filter(|o| o.what == What::Edge) {
-        // A little over: a round cut-out is in the outline as chords, each a hair inside the
-        // curve the checker measures from.
-        let r = board.rules.min_copper_edge_clearance * 1e3 + strand.width / 2.0 + 0.02;
-        walls.extend((0..o.poly.len()).map(|i| Wall { a: o.poly[i], b: o.poly[(i + 1) % o.poly.len()], r }));
-    }
     // A bend may be anywhere in the box round the course, and a little way out of it: what
     // holds a wire is the corners it passes, not the triangles its strand was planned through.
     let (a, b) = (space.obstacles[from].centre, space.obstacles[to].centre);
@@ -206,6 +199,16 @@ pub fn course(board: &Board, sheet: &Sheet, s: usize) -> Option<Course> {
         }
     }
     let (lo, hi) = ([lo[0] - OUT, lo[1] - OUT], [hi[0] + OUT, hi[1] + OUT]);
+    // The sides of the board's edge that come within reach of that box: an outline with its
+    // cut-outs may have a thousand, and a wire is tried against each wall it is given.
+    let mut walls = Vec::new();
+    for o in space.obstacles.iter().filter(|o| o.what == What::Edge) {
+        // A little over: a round cut-out is in the outline as chords, each a hair inside the
+        // curve the checker measures from.
+        let r = board.rules.min_copper_edge_clearance * 1e3 + strand.width / 2.0 + 0.02;
+        let reaches = |a: P, b: P| (0..2).all(|i| a[i].min(b[i]) - r <= hi[i] && a[i].max(b[i]) + r >= lo[i]);
+        walls.extend((0..o.poly.len()).map(|i| (o.poly[i], o.poly[(i + 1) % o.poly.len()])).filter(|&(a, b)| reaches(a, b)).map(|(a, b)| Wall { a, b, r }));
+    }
     let within = vec![[lo, [hi[0], lo[1]], hi], [lo, hi, [lo[0], hi[1]]]];
     // A pad at least half as long again as it is wide is left, and come to, along its length.
     // (Tried 2026-11-13: by the side the plan has the strand cross, a long side straight out.
