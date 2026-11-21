@@ -298,7 +298,7 @@ pub fn via_spots(board: &Board, tight: bool) -> Spots {
     // Not for fan-outs: there each pad's via has its own place, beside its neighbours'.
     let ways_out = if tight { Vec::new() } else { ways_out(board, apart, pitch as f64 / 1e6) };
     let kept = Spots::kept_of(board, &at);
-    Spots { at, radius: r as f64 / 1e6, apart, hole, ways_out, out_keep: (r + keep) as f64 / 1e6 + width(board, 0) / 2.0, beside: (2 * r + board.max_rule_reach()) as f64 / 1e6 + 0.01, checked: Default::default(), bars: space::bars(board), kept, left_out: Default::default(), spared: Vec::new() }
+    Spots { at, radius: r as f64 / 1e6, apart, hole, ways_out, out_keep: (r + keep) as f64 / 1e6 + width(board, 0) / 2.0, beside: (2 * r + board.max_rule_reach()) as f64 / 1e6 + 0.01, checked: Default::default(), bars: space::bars(board), kept, left_out: Default::default(), spared: Vec::new(), holes: Vec::new(), wanted: Vec::new() }
 }
 
 /// The way straight out of each pad that stands nearer another pad of its part than two vias
@@ -358,9 +358,13 @@ fn ways_out(board: &Board, apart: f64, far: f64) -> Vec<(space::P, space::P, u32
 /// A spot in a triangle is left out when another spot is this near, mm.
 const NEAR: f64 = 0.3;
 
-/// The vias in the sheets.
+/// The vias in the sheets: all but the holes in pads ([`Spots::holes`]) that no strand ends at,
+/// which stand ready and are not drilled.
 fn vias_of(sheets: &[Sheet]) -> Vec<Via> {
-    sheets.first().map_or(Vec::new(), |s| s.space.vias().into_iter().enumerate().map(|(site, (at, net))| Via { net, site, at }).collect())
+    let Some(first) = sheets.first() else { return Vec::new() };
+    let holes = first.space.spots.holes.len();
+    let ended_at = |site: usize| sheets.iter().any(|s| s.laid().any(|k| [s.strands[k].from, s.strands[k].to].contains(&End::Site(site))));
+    first.space.vias().into_iter().enumerate().filter(|&(site, _)| site >= holes || ended_at(site)).map(|(site, (at, net))| Via { net, site, at }).collect()
 }
 
 /// Whether the exact checker passes every via in the sheets, all on the board together: a spot
@@ -493,18 +497,20 @@ fn sites_of(sheets: &[Sheet], connection: usize) -> Vec<usize> {
 }
 
 /// Where a connection may start and where it may end: each pad, the pads joined to it before
-/// anything is laid, and the via the stub of any of them ends in. A stub starts at its pad and
-/// has no end but the via it puts in.
+/// anything is laid, the via the stub of any of them ends in, and the hole in any of them
+/// ([`Spots::holes`]). A stub starts at its pad and has no end but the via it puts in.
 fn ends(sheets: &[Sheet], wants: &[Want], joined: &Joined, connection: usize) -> (Vec<End>, Vec<End>) {
     let want = &wants[connection];
     if want.stub {
         return (vec![End::Item(want.from)], Vec::new());
     }
+    let holes = sheets.first().map_or(&[][..], |s| s.space.spots.holes.as_slice());
     let cluster = |pad: ItemId| {
         let others = joined.get(&pad).map_or(&[][..], |pads| pads.as_slice());
         let pads: Vec<ItemId> = std::iter::once(pad).chain(others.iter().copied().filter(|&p| p != pad)).collect();
         let stubs = wants.iter().enumerate().filter(|(_, w)| w.stub && pads.contains(&w.from)).flat_map(|(s, _)| sites_of(sheets, s)).map(End::Site).collect::<Vec<End>>();
-        pads.into_iter().map(End::Item).chain(stubs).collect::<Vec<End>>()
+        let holed = holes.iter().enumerate().filter(|(_, h)| pads.contains(&h.0)).map(|(site, _)| End::Site(site)).collect::<Vec<End>>();
+        pads.into_iter().map(End::Item).chain(stubs).chain(holed).collect::<Vec<End>>()
     };
     (cluster(want.from), cluster(want.to))
 }
@@ -558,8 +564,10 @@ fn lift(board: &Board, sheets: &[Sheet], connection: usize) -> Option<Vec<Sheet>
             }
         }
     }
-    // A via another connection's strand still ends in stays: a stub's, while it is used.
-    gone.retain(|&site| !out.iter().any(|s| s.laid().any(|k| [s.strands[k].from, s.strands[k].to].contains(&End::Site(site)))));
+    // A via another connection's strand still ends in stays: a stub's, while it is used. So
+    // does a hole in a pad, the first of the vias, which is the pad's and no connection's.
+    let holes = out.first().map_or(0, |s| s.space.spots.holes.len());
+    gone.retain(|&site| site >= holes && !out.iter().any(|s| s.laid().any(|k| [s.strands[k].from, s.strands[k].to].contains(&End::Site(site)))));
     if gone.is_empty() {
         return Some(out);
     }
@@ -865,6 +873,63 @@ fn shut_in_by_spokes(board: &Board, sheets: &[Sheet], spots: &Spots) -> Vec<(Ite
     out
 }
 
+/// How many places across a pad, each way, a hole in it is tried at.
+const HOLE_TRIES: i64 = 5;
+
+/// Whether a pad could hold a hole: it is on one layer, has none, its net may have vias, and
+/// a via of its net is no wider than it either way.
+fn holds_a_hole(board: &Board, pad: ItemId) -> bool {
+    let (Some(item), Some(b)) = (board.item(pad), board.bbox(pad)) else { return false };
+    let d = 2 * via_size(board, item.net).0;
+    matches!(item.kind, Kind::Pad { .. }) && item.net != 0 && item.layers.count_ones() == 1 && item.hole.is_none() && !board.no_vias(item.net) && b.max.x - b.min.x >= d && b.max.y - b.min.y >= d
+}
+
+/// A hole for each of `wanted` that can hold one: a via of the pad's net wholly inside the
+/// pad's copper, at its middle or as near it as the exact checker lets one stand beside the
+/// plan's vias (`standing`) and the holes already found. What a designer does with a grid of bare pads too close for a track
+/// between them (the 120-channel test board of the gate tier: a via on each pad and its track
+/// on the other side). A via that would reach past its pad is not tried: the map of the pad's
+/// own layer has no place for it.
+pub fn holes(board: &Board, wanted: &[ItemId], standing: &[(space::P, u32)]) -> Vec<(ItemId, space::P, u32)> {
+    let mut scratch = board.clone();
+    for &(at, net) in standing {
+        scratch.insert(via_item(board, at, net));
+    }
+    let mut out = Vec::new();
+    let mut pads: Vec<(ItemId, u32)> = wanted.iter().filter(|&&pad| holds_a_hole(board, pad)).filter_map(|&pad| Some((pad, board.item(pad)?.net))).collect();
+    pads.sort();
+    pads.dedup();
+    for (pad, net) in pads {
+        let Some(item) = board.item(pad) else { continue };
+        let (Some(b), copper) = (board.bbox(pad), space::outline(&item.shape)) else { continue };
+        let r = via_size(board, net).0;
+        let (cx, cy, hx, hy) = ((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2, (b.max.x - b.min.x) / 2 - r, (b.max.y - b.min.y) / 2 - r);
+        if hx < 0 || hy < 0 || copper.len() < 3 {
+            continue;
+        }
+        // The middle first, then outwards.
+        let mut places: Vec<(i64, i64)> = (-HOLE_TRIES..=HOLE_TRIES).flat_map(|i| (-HOLE_TRIES..=HOLE_TRIES).map(move |j| (i, j))).collect();
+        places.sort_by_key(|&(i, j)| (i * i + j * j, i, j));
+        let rim = |at: space::P| (0..16).all(|k| {
+            let a = std::f64::consts::TAU * k as f64 / 16.0;
+            space::inside([at[0] + r as f64 / 1e6 * a.cos(), at[1] + r as f64 / 1e6 * a.sin()], &copper)
+        });
+        for (i, j) in places {
+            let at = [(cx + hx * i / HOLE_TRIES) as f64 / 1e6, (cy + hy * j / HOLE_TRIES) as f64 / 1e6];
+            if !rim(at) {
+                continue;
+            }
+            let id = scratch.insert(via_item(board, at, net));
+            if board::check_item(&scratch, id).is_empty() {
+                out.push((pad, at, net));
+                break;
+            }
+            scratch.remove(id);
+        }
+    }
+    out
+}
+
 /// A plan with nothing in it yet, with `spots` for its vias.
 pub fn start_from(board: &Board, spots: Spots) -> Plan {
     // The layers cut into triangles; and again without the spokes that shut a pad in, for as
@@ -889,6 +954,73 @@ pub fn start_from(board: &Board, spots: Spots) -> Plan {
     let stated = |l: usize| spots.bars.iter().any(|b| !b.nets[l].is_empty());
     let closed = planes.iter().copied().filter(|&l| l != 0 && l + 1 != board.layers.len() && !stated(l)).collect();
     Plan { sheets, planes, closed, vias: Vec::new(), left: Vec::new(), wants: Vec::new(), joined: Arc::new(joined(board)) }
+}
+
+/// The pads of the connections the plan found no way for that could hold a hole and have not
+/// been tried with one ([`Spots::wanted`]).
+pub fn wanting_holes(board: &Board, plan: &Plan) -> Vec<ItemId> {
+    let Some(first) = plan.sheets.first() else { return Vec::new() };
+    let spots = &first.space.spots;
+    let mut pads: Vec<ItemId> = plan.left.iter().flat_map(|l| [l.from, l.to]).filter(|&pad| holds_a_hole(board, pad) && !spots.wanted.contains(&pad) && !spots.holes.iter().any(|h| h.0 == pad)).collect();
+    pads.sort();
+    pads.dedup();
+    pads
+}
+
+/// Gives a hole to each pad that could hold one of the connections the plan found no way for,
+/// and lays those connections again: a pad shut in by its neighbours, or by their strands once
+/// those have taken the way round, leaves by its own hole as a designer has it do. A strand
+/// that lies where a hole goes on another layer is lifted and laid again with them. False if
+/// no pad was given one.
+pub fn hole(board: &Board, plan: &mut Plan) -> bool {
+    let pads = wanting_holes(board, plan);
+    let Some(first) = plan.sheets.first() else { return false };
+    let spots = first.space.spots.clone();
+    let standing = first.space.vias();
+    let found = holes(board, &pads, &standing);
+    if found.is_empty() {
+        return false;
+    }
+    // The strands in a hole's way, on any layer: nearer its middle than two vias may stand.
+    let mut which: Vec<usize> = Vec::new();
+    for sheet in &plan.sheets {
+        let Some(traces) = carry::traces(board, sheet, &Some) else { return false };
+        for t in &traces {
+            if found.iter().any(|h| t.pts.windows(2).any(|s| space::point_segment(h.1, s[0], s[1]) < spots.apart)) {
+                which.push(t.strand.connection);
+            }
+        }
+    }
+    which.sort_unstable();
+    which.dedup();
+    let mut sheets = plan.sheets.clone();
+    for &c in &which {
+        let Some(lifted) = lift(board, &sheets, c) else { return false };
+        sheets = lifted;
+    }
+    // The holes are the first of the vias: those there already, the new ones, then the rest.
+    let Some(first) = sheets.first() else { return false };
+    let (old, new) = (spots.holes.len(), found.len());
+    let mut vias = first.space.vias();
+    vias.splice(old..old, found.iter().map(|h| (h.1, h.2)));
+    let mut with = (*spots).clone();
+    with.holes.extend(found);
+    with.wanted.extend(pads);
+    let with = Arc::new(with);
+    let number = |k: usize| Some(if k < old { k } else { k + new });
+    let Some(holed) = side_by_side(sheets.iter().collect(), |sheet| carry::sheet(board, sheet.space.layer, &vias, &with, &carry::traces(board, sheet, &number)?)).into_iter().collect::<Option<Vec<Sheet>>>() else { return false };
+    plan.sheets = holed;
+    // Laid again: what was lifted, and of the connections with no way those with a hole now.
+    // (Not every connection with no way: on a board with many, looking again for each costs
+    // as much as the plan did.)
+    let has_hole = |pad: ItemId| with.holes.iter().any(|h| h.0 == pad);
+    which.extend(plan.left.iter().filter(|l| has_hole(l.from) || has_hole(l.to)).map(|l| l.connection));
+    which.retain(|&c| !plan.wants[c].stub);
+    which.sort_by(|&a, &b| plan.wants[a].apart.total_cmp(&plan.wants[b].apart).then(a.cmp(&b)));
+    which.dedup();
+    plan.left.retain(|l| !which.contains(&l.connection));
+    place(board, plan, &which);
+    true
 }
 
 /// How far off the line through a row's pads one of them may stand, mm.

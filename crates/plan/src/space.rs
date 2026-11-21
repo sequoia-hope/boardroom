@@ -128,6 +128,13 @@ pub struct Spots {
     /// pad no spoke reaches on a layer be, and so does the checker while another layer joins
     /// it). A wire may run over them all.
     pub spared: Vec<(ItemId, usize)>,
+    /// Pads with a hole in them, each with the place inside it a via of its net stands, and the
+    /// net ([`crate::hole`]): the plan's first vias, in this order. A
+    /// connection of the pad may start or end at its hole on any other layer; one no strand
+    /// ends at is not drilled.
+    pub holes: Vec<(ItemId, P, u32)>,
+    /// The pads a hole has been tried for ([`crate::hole`]), whether or not one could stand.
+    pub wanted: Vec<ItemId>,
 }
 
 /// For each layer, the sides of the board's own obstacles and of its rule areas that the

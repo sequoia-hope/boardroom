@@ -1374,6 +1374,14 @@ fn route_with(board: &Board, fan: Option<plan::Fan>, stop: &AtomicBool, told: &d
     }
     plan::add(board, &mut plan, wants);
     said("planned", &plan, None);
+    // A connection with no way whose pad could hold a hole: the pad is given one, and it and
+    // whatever lay in the hole's way are laid again.
+    for _ in 0..HOLE_ROUNDS {
+        if stopped() || !plan::hole(board, &mut plan) {
+            break;
+        }
+        said("holes put in pads", &plan, None);
+    }
     // WIRE_FIRST: the first plan and its drawing, with nothing laid again and no pours: what
     // the plan lays that cannot be drawn.
     if std::env::var("WIRE_FIRST").is_ok() {
@@ -1578,6 +1586,9 @@ const POURS: usize = 6;
 /// How many times wires that shut a pad's spokes in are laid another way, and how many
 /// spokes a pad may be drawn by hand.
 const SPOKES: usize = 3;
+
+/// How many times pads are given holes: a connection laid by one can leave another with no way.
+const HOLE_ROUNDS: usize = 3;
 
 /// The board with the drawing's copper on it: the wires as tracks, the plan's vias, the ties
 /// and then the stitches, and which items those are.

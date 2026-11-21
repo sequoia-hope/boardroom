@@ -51,6 +51,10 @@ type Key = (usize, usize, usize, usize);
 /// and is not what anyone would lay: with this it is weighed against a via, or against
 /// lifting what is in the way, as more than its length.
 const TURN: f64 = 0.75;
+/// What starting or ending at a hole in a pad ([`crate::Spots::holes`]) costs, as length, mm:
+/// three vias. A hole is where solder goes, and a designer drills one only where the pad has no
+/// other way; with this a via beside the pad is taken wherever one will do.
+pub const HOLE: f64 = 24.0;
 /// In a key's last place: the crossing is the last, onto the end.
 const GOAL: usize = usize::MAX;
 /// In a key's second place: the key is a via.
@@ -215,6 +219,7 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
     // The least there is still to go from a place: to the nearest of its ends.
     let left = |p: P| goals.iter().map(|g| dist(p, g.1)).fold(f64::MAX, f64::min).min(if goals.is_empty() { 0.0 } else { f64::MAX });
     let spots = sheets.first()?.space.spots.clone();
+    let holed = |e: End| if matches!(e, End::Site(k) if k < spots.holes.len()) { HOLE } else { 0.0 };
     let mut best: Map<Key, Seen> = Map::default();
     let mut heap = BinaryHeap::new();
     let mut stands: Map<usize, Option<Vec<(usize, Region)>>> = Map::default();
@@ -252,7 +257,7 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
                 if sheet.space.tris[inner].inside == Some(o) && sheet.space.free(outer) && !sheet.space.barred(outer, net) {
                     for slot in 0..=sheet.on[e].len() {
                         let at = sheet.crossing(board, e, slot, me, start, goal);
-                        let c = terms.dear[l] * dist(start, at);
+                        let c = holed(src) + terms.dear[l] * dist(start, at);
                         let key = (l, e, slot, outer);
                         if best.get(&key).is_none_or(|b| c < b.cost) {
                             best.insert(key, Seen { cost: c, prev: None, at, bend_at: start, bend_cost: 0.0, bend: None, starts: true, over: None, about: None, push: None, end: Some(src) });
@@ -342,7 +347,7 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
                 }
                 let there = sheet.crossing(board, e, s, me, p, goal);
                 let c = cost + terms.dear[l] * dist(p, there);
-                let (to_key, c) = match end { Some(g) => ((l, e, s, GOAL), c + terms.dear[l] * dist(there, g.1)), None => ((l, e, s, next), c) };
+                let (to_key, c) = match end { Some(g) => ((l, e, s, GOAL), c + terms.dear[l] * dist(there, g.1) + holed(g.0)), None => ((l, e, s, next), c) };
                 if best.get(&to_key).is_none_or(|b| c < b.cost && !through(&best, key, to_key)) {
                     found.push((to_key, Seen { cost: c, prev: Some(key), at: there, bend_at: p, bend_cost: cost, bend: None, starts: true, over: None, about: None, push: None, end: end.map(|g| g.0) }));
                 }
@@ -438,7 +443,7 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
                     (there, cost + TURN + terms.dear[l] * dist(here, there), Some(key), here, cost + TURN)
                 };
                 // The end's own side is the last crossing; then the way ends at its middle.
-                let (to_key, c) = match end { Some(g) => ((l, e, s, GOAL), c + terms.dear[l] * dist(there, g.1)), None => ((l, e, s, next), c) };
+                let (to_key, c) = match end { Some(g) => ((l, e, s, GOAL), c + terms.dear[l] * dist(there, g.1) + holed(g.0)), None => ((l, e, s, next), c) };
                 if best.get(&to_key).is_none_or(|b| c < b.cost && !through(&best, key, to_key)) {
                     found.push((to_key, Seen { cost: c, prev: Some(key), at: there, bend_at, bend_cost, bend, starts: false, over: None, about: Some(about), push: None, end: end.map(|g| g.0) }));
                 }
