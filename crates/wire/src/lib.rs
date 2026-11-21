@@ -1147,41 +1147,113 @@ fn tied(board: &Board, plan: &Plan, mut drawing: Drawing, before: &[(ItemId, usi
 /// by side, on a thread each, and the two fanned out are dropped where the first comes out
 /// whole.
 pub fn route(board: &Board) -> (Plan, Drawing) {
-    let never = AtomicBool::new(false);
     if std::env::var("WIRE_FIRST").is_ok() {
-        let (plan, drawing) = route_with(board, None, &never).unwrap_or_else(|| (plan::start(board), Drawing::default()));
+        let (plan, drawing) = route_with(board, None, &AtomicBool::new(false), &|_| ()).unwrap_or_else(|| (plan::start(board), Drawing::default()));
         let drawing = without_spare(board, &plan, drawing);
         return loose::loose(board, &plan, &drawing);
     }
-    // The ways side by side, each on a thread of its own: none asks anything of another. The
-    // fanned-out ones are for a board the first leaves open, and are told to stop, at the end
-    // of what they are at, once the first has come out whole: what is kept is as it would be
-    // with one after the other.
-    let stop = AtomicBool::new(false);
+    // The ways side by side, each on a thread of its own. The fanned-out ones are for a board
+    // the first leaves open, and are told to stop, at the end of what they are at, once the
+    // first has come out whole; and a way well behind the others where the pours are joined
+    // is told to stop too ([`Race`]). What is kept is as it would be with one after the other
+    // and the same ways dropped.
+    let race = Race::default();
     let (plain, fanned) = std::thread::scope(|scope| {
-        let stop = &stop;
-        let fanned: Vec<_> = [plan::Fan::Spread, plan::Fan::Tight].into_iter().map(|fan| scope.spawn(move || route_with(board, Some(fan), stop))).collect();
-        let plain = route_with(board, None, &never);
+        let race = &race;
+        let fanned: Vec<_> = [plan::Fan::Spread, plan::Fan::Tight].into_iter().enumerate().map(|(i, fan)| scope.spawn(move || race.run(i + 1, |told| route_with(board, Some(fan), &race.stop[i + 1], told)))).collect();
+        let plain = race.run(0, |told| route_with(board, None, &race.stop[0], told));
         let still = plain.as_ref().map(|p| open(board, &p.0, &p.1));
-        if still.is_none_or(|open| open == 0) {
-            stop.store(true, Ordering::Relaxed);
+        if still == Some(0) {
+            race.stop.iter().for_each(|s| s.store(true, Ordering::Relaxed));
         }
-        let fanned: Vec<(Plan, Drawing)> = fanned.into_iter().filter_map(|f| f.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))).collect();
+        let fanned: Vec<Option<(Plan, Drawing)>> = fanned.into_iter().map(|f| f.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))).collect();
         (plain.zip(still), fanned)
     });
-    let Some(((mut plan, mut drawing), mut still)) = plain else { return (plan::start(board), Drawing::default()) };
-    for (other, drawn) in fanned {
-        if still == 0 {
+    let dropped = race.dropped();
+    let mut kept: Option<(usize, Plan, Drawing)> = plain.filter(|_| !dropped[0]).map(|((plan, drawing), still)| (still, plan, drawing));
+    for (i, way) in fanned.into_iter().enumerate() {
+        if kept.as_ref().is_some_and(|k| k.0 == 0) {
             break;
         }
+        let Some((other, drawn)) = way.filter(|_| !dropped[i + 1]) else { continue };
         let open = open(board, &other, &drawn);
-        if open < still {
-            (still, plan, drawing) = (open, other, drawn);
+        if kept.as_ref().is_none_or(|k| open < k.0) {
+            kept = Some((open, other, drawn));
         }
     }
+    let Some((_, plan, drawing)) = kept else { return (plan::start(board), Drawing::default()) };
     let drawing = without_spare(board, &plan, drawing);
     // Vias and wires left joining nothing where a wire beside them could not be drawn.
     loose::loose(board, &plan, &drawing)
+}
+
+/// How far behind the way with fewest connections open another may be, where the pours are
+/// joined, and still be gone on with: a quarter of what that one has open and this many more.
+/// The rounds of laying again move a count by a few either way.
+const BEHIND: usize = 3;
+
+/// The ways of [`route`] side by side, and which of them are not worth going on with. Each
+/// says how many connections it has open at each round of joining its pours ([`pour`]), and
+/// when it has done with them. The rounds are judged in order, the first apart (nothing is
+/// joined by then), each once every way still in has come to it or has done: a way whose
+/// fewest open so far is more than [`BEHIND`] allows over the least of the ways' is dropped,
+/// told to stop at the end of what it is at, and whatever it comes to is not taken. So which
+/// are dropped follows from the counts alone, not from which thread was quicker, and a way
+/// that is kept is worked out to its end as it would be alone.
+#[derive(Default)]
+struct Race {
+    stop: [AtomicBool; 3],
+    state: std::sync::Mutex<Judged>,
+}
+
+#[derive(Default)]
+struct Judged {
+    /// Each way's connections open, round by round.
+    open: [Vec<usize>; 3],
+    done: [bool; 3],
+    dropped: [bool; 3],
+    /// The last round judged.
+    round: usize,
+}
+
+impl Race {
+    /// Runs `way`, given what to tell its counts to (None once its pours are done with).
+    fn run<T>(&self, way: usize, work: impl FnOnce(&dyn Fn(Option<usize>)) -> T) -> T {
+        let out = work(&|open| self.told(way, open));
+        self.told(way, None);
+        out
+    }
+
+    fn told(&self, way: usize, open: Option<usize>) {
+        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        match open {
+            Some(open) if !s.done[way] => s.open[way].push(open),
+            _ => s.done[way] = true,
+        }
+        loop {
+            let round = s.round + 1;
+            let ways: Vec<usize> = (0..3).filter(|&w| !s.dropped[w] && !s.open[w].is_empty()).collect();
+            let all_there = (0..3).all(|w| s.dropped[w] || s.done[w] || s.open[w].len() > round);
+            if !all_there || !ways.iter().any(|&w| s.open[w].len() > round) {
+                break;
+            }
+            let fewest = |w: usize| s.open[w].iter().take(round + 1).copied().min().unwrap_or(usize::MAX);
+            let least = ways.iter().map(|&w| fewest(w)).min().unwrap_or(0);
+            let behind: Vec<(usize, usize)> = ways.into_iter().map(|w| (w, fewest(w))).filter(|&(_, open)| open > least + least / 4 + BEHIND).collect();
+            for (w, open) in behind {
+                if std::env::var("WIRE_TIMES").is_ok() {
+                    eprintln!("           {} dropped at round {round} of the pours: {open} open at its fewest, {least} the least", ["the first way", "ways out first", "ways out at the tips"][w]);
+                }
+                s.dropped[w] = true;
+                self.stop[w].store(true, Ordering::Relaxed);
+            }
+            s.round = round;
+        }
+    }
+
+    fn dropped(&self) -> [bool; 3] {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).dropped
+    }
 }
 
 /// `drawing` with the copper its nets have no need of taken out ([`spare::spare`]), where
@@ -1209,7 +1281,7 @@ fn without_spare(board: &Board, plan: &Plan, drawing: Drawing) -> Drawing {
 
 /// [`route`] one way: with the fine-pitch parts' ways out settled first, or without. None
 /// where there is no such part.
-fn route_with(board: &Board, fan: Option<plan::Fan>, stop: &AtomicBool) -> Option<(Plan, Drawing)> {
+fn route_with(board: &Board, fan: Option<plan::Fan>, stop: &AtomicBool, told: &dyn Fn(Option<usize>)) -> Option<(Plan, Drawing)> {
     let mut poured: Vec<u32> = board.zone_areas.iter().filter(|z| !z.kept && z.net != 0).map(|z| z.net).collect();
     poured.sort_unstable();
     poured.dedup();
@@ -1254,7 +1326,8 @@ fn route_with(board: &Board, fan: Option<plan::Fan>, stop: &AtomicBool) -> Optio
     if poured.is_empty() {
         return Some((plan, drawing));
     }
-    drawing = pour(board, &mut plan, drawing, &poured, &mut memo, &said, stop);
+    drawing = pour(board, &mut plan, drawing, &poured, &mut memo, &said, stop, &|open| told(Some(open)));
+    told(None);
     if stopped() {
         return None;
     }
@@ -1272,7 +1345,7 @@ fn route_with(board: &Board, fan: Option<plan::Fan>, stop: &AtomicBool) -> Optio
         let mut other = plan.clone();
         plan::bar(board, &mut other, &bars);
         let redrawn = settle(board, &mut other, &mut memo, &said, stop);
-        let redrawn = pour(board, &mut other, redrawn, &poured, &mut memo, &said, stop);
+        let redrawn = pour(board, &mut other, redrawn, &poured, &mut memo, &said, stop, &|_| ());
         if stopped() {
             return None;
         }
@@ -1289,7 +1362,8 @@ fn route_with(board: &Board, fan: Option<plan::Fan>, stop: &AtomicBool) -> Optio
 /// drawn: a wire laid to join one pad can cut the pour another was joined by, or the pour a
 /// connection laid before it ends in. A round may leave more open than it found: the plan and
 /// the drawing are left as they were when fewest connections were open.
-fn pour(board: &Board, plan: &mut Plan, mut drawing: Drawing, poured: &[u32], memo: &mut chain::Memo, said: &dyn Fn(&str, &Plan, Option<&Drawing>), stop: &AtomicBool) -> Drawing {
+#[allow(clippy::too_many_arguments)]
+fn pour(board: &Board, plan: &mut Plan, mut drawing: Drawing, poured: &[u32], memo: &mut chain::Memo, said: &dyn Fn(&str, &Plan, Option<&Drawing>), stop: &AtomicBool, told: &dyn Fn(usize)) -> Drawing {
     // The connection the plan has already for a pair of pads.
     let had = |plan: &Plan, w: &plan::Want| plan.wants.iter().position(|x| x.net == w.net && !x.stub && ((x.from, x.to) == (w.from, w.to) || (x.from, x.to) == (w.to, w.from)));
     // How many were found the round before: a round that finds no fewer is the last.
@@ -1304,6 +1378,7 @@ fn pour(board: &Board, plan: &mut Plan, mut drawing: Drawing, poured: &[u32], me
             break;
         }
         let (mut wants, open) = left_by_pours(board, plan, &drawing, poured);
+        told(open);
         if best.as_ref().is_none_or(|b| open < b.0) {
             best = Some((open, plan.clone(), drawing.clone()));
         }
@@ -1440,5 +1515,49 @@ mod tests {
         assert!((apart(&board, &sheet, &on) - 0.3).abs() < 1e-9, "{}", apart(&board, &sheet, &on));
         assert!((apart(&board, &sheet, &on[..2]) - 0.3).abs() < 1e-9);
         assert!(apart(&board, &sheet, &on[1..]).abs() < 1e-9);
+    }
+}
+
+#[cfg(test)]
+mod race {
+    use super::*;
+
+    /// The counts of three ways round by round, told in the given order of ways.
+    fn told(counts: [&[usize]; 3], order: &[usize]) -> ([bool; 3], [bool; 3]) {
+        let race = Race::default();
+        let mut next = [0; 3];
+        for &w in order {
+            match counts[w].get(next[w]) {
+                Some(&open) => race.told(w, Some(open)),
+                None => race.told(w, None),
+            }
+            next[w] += 1;
+        }
+        (race.dropped(), std::array::from_fn(|w| race.stop[w].load(Ordering::Relaxed)))
+    }
+
+    #[test]
+    fn a_way_well_behind_once_the_pours_are_joined_is_dropped_whichever_is_quicker() {
+        // p2-132-usb6: the first way, ways out first, ways out at the tips.
+        let counts: [&[usize]; 3] = [&[148, 39, 32, 34], &[142, 38, 31], &[146, 23, 25]];
+        // One after the other, turn about, and the last first.
+        let orders: [&[usize]; 3] = [&[0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2], &[0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0], &[2, 2, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0, 0]];
+        for order in orders {
+            assert_eq!(told(counts, order), ([true, true, false], [true, true, false]), "{order:?}");
+        }
+        // Not before the slowest has come to the round: the quick one says nothing of the others.
+        assert_eq!(told(counts, &[2, 2, 2, 2, 1, 1, 1, 0]).0, [false; 3]);
+        assert_eq!(told(counts, &[2, 2, 2, 2, 1, 1, 1, 0, 0]).0, [true, true, false]);
+    }
+
+    #[test]
+    fn ways_near_each_other_all_go_on_and_the_first_round_says_nothing() {
+        // The first round is before anything is joined: far apart there, and nothing dropped.
+        let counts: [&[usize]; 3] = [&[90, 12, 9], &[40, 10, 11], &[41, 14, 8]];
+        assert_eq!(told(counts, &[0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2]).0, [false; 3]);
+        // A way with no fine-pitch part to fan out says nothing and is done at once; one that
+        // comes out whole drops one with more than a few open.
+        let counts: [&[usize]; 3] = [&[20, 0], &[], &[22, 5]];
+        assert_eq!(told(counts, &[1, 0, 2, 0, 2, 0, 2]).0, [false, false, true]);
     }
 }
