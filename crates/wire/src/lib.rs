@@ -1426,8 +1426,8 @@ fn pour(board: &Board, plan: &mut Plan, mut drawing: Drawing, poured: &[u32], me
     let had = |plan: &Plan, w: &plan::Want| plan.wants.iter().position(|x| x.net == w.net && !x.stub && ((x.from, x.to) == (w.from, w.to) || (x.from, x.to) == (w.to, w.from)));
     // How many were found the round before: a round that finds no fewer is the last.
     let mut found = usize::MAX;
-    // The connections laid again once already.
-    let mut twice: Vec<usize> = Vec::new();
+    // How many times each connection has been laid again.
+    let mut again_so_far: HashMap<usize, usize> = HashMap::new();
     // The plan and drawing as they were when fewest connections were open: a round may leave
     // more open than it found.
     let mut best: Option<(usize, Plan, Drawing)> = None;
@@ -1469,13 +1469,14 @@ fn pour(board: &Board, plan: &mut Plan, mut drawing: Drawing, poured: &[u32], me
         // One laid again before and open again: its wire moves the wires beside it, and those
         // cut the pour it ends in. It goes all the way to the pad.
         for (c, want) in renewed.iter_mut() {
-            if twice.contains(c) {
+            let times = again_so_far.entry(*c).or_insert(0);
+            *times += 1;
+            if *times > 1 {
                 want.into.clear();
-            } else {
-                twice.push(*c);
             }
         }
-        let stalled = rest.len() + renewed.len() >= found;
+        let times: Vec<usize> = renewed.iter().map(|(c, _)| again_so_far[c]).collect();
+        let stalled = last_round(found, rest.len(), &times);
         found = rest.len() + renewed.len();
         plan::renew(board, plan, renewed);
         plan::add(board, plan, rest);
@@ -1491,6 +1492,16 @@ fn pour(board: &Board, plan: &mut Plan, mut drawing: Drawing, poured: &[u32], me
         (*plan, drawing) = (kept, drawn);
     }
     drawing
+}
+
+/// Whether a round of [`pour`] is the last: it found no fewer connections to make than the
+/// round before (`found`), of them `left` new ones and one for each of `again`, how many times
+/// that one has been laid again with this round. Unless one of those is about to be laid a
+/// way not tried yet: the first time into the pour as it is now, the second all the way to
+/// the pad (deskbot_breakout's ground pin, whose wire into the pour each time moved the wires
+/// beside it to shut that pour in: the round that would have taken it to the pad never came).
+fn last_round(found: usize, left: usize, again: &[usize]) -> bool {
+    left + again.len() >= found && again.iter().all(|&times| times > 2)
 }
 
 /// How many times at most the pours are filled to see what they leave apart: fewer where a
@@ -1622,5 +1633,26 @@ mod race {
         // comes out whole drops one with more than a few open.
         let counts: [&[usize]; 3] = [&[20, 0], &[], &[22, 5]];
         assert_eq!(told(counts, &[1, 0, 2, 0, 2, 0, 2]).0, [false, false, true]);
+    }
+}
+
+#[cfg(test)]
+mod rounds {
+    use super::last_round;
+
+    #[test]
+    fn the_pours_rounds_go_on_while_a_connection_has_a_way_not_tried() {
+        // Fewer found than the round before: on.
+        assert!(!last_round(3, 2, &[]));
+        // No fewer, and nothing laid again: the last.
+        assert!(last_round(2, 2, &[]));
+        // One open again after its first laying, and after its second: each time it is laid
+        // another way, so the round is not the last though it found no fewer.
+        assert!(!last_round(1, 0, &[1]));
+        assert!(!last_round(1, 0, &[2]));
+        // Open again after it was taken all the way to the pad: nothing more to try.
+        assert!(last_round(1, 0, &[3]));
+        // One with a way to try keeps the round going for the others.
+        assert!(!last_round(2, 0, &[3, 1]));
     }
 }
