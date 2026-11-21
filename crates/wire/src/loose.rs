@@ -23,7 +23,7 @@ pub fn loose(board: &Board, plan: &Plan, drawing: &Drawing) -> (Plan, Drawing) {
     loop {
         let (routed, new) = onto(board, &plan, &drawing);
         let pours = Pours::of(&routed);
-        // `onto` puts in each wire's pieces in order, then the vias, then the ties.
+        // `onto` puts in each wire's pieces in order, then the vias, then the ties and stitches.
         let pieces: usize = drawing.wires.iter().map(|w| w.pts.len().saturating_sub(1)).sum();
         let (wire_ids, rest) = new.split_at(pieces.min(new.len()));
         let via_ids = &rest[..plan.vias.len().min(rest.len())];

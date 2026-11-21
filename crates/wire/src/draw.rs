@@ -74,9 +74,9 @@ pub fn layer(board: &Board, plan: &Plan, drawing: &Drawing, l: usize, faults: &[
     for tie in drawing.ties.iter().filter(|t| t.layer == l) {
         let _ = writeln!(s, "<path d='{}' stroke='{}' stroke-width='{:.4}'><title>{}, a spoke drawn by hand</title></path>", path(&tie.pts, false), PALETTE[tie.net as usize % PALETTE.len()], tie.width, board.net_name(tie.net));
     }
-    for v in &plan.vias {
-        let (r, drill) = plan::via_size(board, v.net);
-        let _ = writeln!(s, "<circle cx='{:.4}' cy='{:.4}' r='{:.4}' fill='{}' stroke='none'/><circle cx='{:.4}' cy='{:.4}' r='{:.4}' fill='#fff'/>", v.at[0], v.at[1], r as f64 / 1e6, PALETTE[v.net as usize % PALETTE.len()], v.at[0], v.at[1], drill as f64 / 1e6);
+    for (at, net) in plan.vias.iter().map(|v| (v.at, v.net)).chain(drawing.stitches.iter().map(|v| (v.at, v.net))) {
+        let (r, drill) = plan::via_size(board, net);
+        let _ = writeln!(s, "<circle cx='{:.4}' cy='{:.4}' r='{:.4}' fill='{}' stroke='none'/><circle cx='{:.4}' cy='{:.4}' r='{:.4}' fill='#fff'/>", at[0], at[1], r as f64 / 1e6, PALETTE[net as usize % PALETTE.len()], at[0], at[1], drill as f64 / 1e6);
     }
     for u in drawing.undrawn.iter().filter(|u| u.layer == l) {
         let _ = writeln!(s, "<path d='{}' stroke='#d00' stroke-width='{:.3}' stroke-dasharray='{:.3} {:.3}'><title>{}: {}</title></path>", path(&sheet.sketch(board, u.strand), false), thin * 4.0, thin * 12.0, thin * 8.0, board.net_name(u.net), u.why);

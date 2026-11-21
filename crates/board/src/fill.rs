@@ -803,6 +803,28 @@ impl Pours {
         })
     }
 
+    /// The places in piece `piece`, `apart` from one another, where a via of radius `r` stands
+    /// wholly in it.
+    pub fn room(&self, piece: usize, r: Nm, apart: Nm) -> Vec<Point> {
+        let stride = (apart / STEP).max(1) as usize;
+        let mut out = Vec::new();
+        for part in &self.parts {
+            let raster = &part.raster;
+            for j in (0..raster.h).step_by(stride) {
+                for i in (0..raster.w).step_by(stride) {
+                    if part.piece[j * raster.w + i] as usize != piece + 1 {
+                        continue;
+                    }
+                    let p = Point::new((raster.i0 + i as i64) * STEP + STEP / 2, (raster.j0 + j as i64) * STEP + STEP / 2);
+                    if self.piece(part.net, part.layer, p, r) == Some(piece) {
+                        out.push(p);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// The pieces of pour that copper item `id` is joined to on `layer`. A track is joined where
     /// an end of it lies in the pour, a via where its middle does, a pad the pour joins solidly
     /// where any of it does. A pad joined by thermal spokes is joined by each spoke whose land,

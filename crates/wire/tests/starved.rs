@@ -110,3 +110,72 @@ fn the_wires_that_shut_a_spoke_in_are_found_and_laid_another_way() {
         assert!(laid > 0);
     }
 }
+
+/// The same two columns three millimetres further apart, ground poured over the back as well
+/// where `back`, and a pad joined to nothing on each diagonal west of the ground pin: where a
+/// spoke drawn by hand would go there is no pour, and the pour the wires shut in between the
+/// columns has room for a via.
+fn fenced(back: bool) -> Board {
+    let parts = [
+        hole("J1", 10.0, 7.5, 2, "X"),
+        hole("J2", 10.0, 10.0, 1, "GND"),
+        hole("J3", 10.0, 12.5, 3, "Y"),
+        smd("R1", 15.0, 8.2, 2, "X"),
+        smd("R2", 15.0, 10.0, 4, "Z"),
+        smd("R3", 15.0, 11.8, 3, "Y"),
+        smd("R4", 5.0, 10.0, 1, "GND"),
+        smd("B1", 8.5, 8.5, 0, ""),
+        smd("B2", 8.5, 11.5, 0, ""),
+    ]
+    .concat();
+    let zone = |layer: &str| {
+        format!(
+            "(zone (net 1) (net_name \"GND\") (layer \"{layer}\") (hatch edge 0.5) (connect_pads (clearance 0.2)) (min_thickness 0.25)
+               (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5))
+               (polygon (pts (xy 0.5 0.5) (xy 19.5 0.5) (xy 19.5 19.5) (xy 0.5 19.5))))"
+        )
+    };
+    let text = format!(
+        "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
+         (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
+         (net 0 \"\") (net 1 \"GND\") (net 2 \"X\") (net 3 \"Y\") (net 4 \"Z\")
+         (gr_rect (start 0 0) (end 20 20) (layer \"Edge.Cuts\") (width 0.1))
+         {parts}
+         {}
+         {})",
+        zone("F.Cu"),
+        if back { zone("B.Cu") } else { String::new() }
+    );
+    let (pcb, copper) = kicad::parse_board(&text).unwrap();
+    Board::new(&pcb, &copper, kicad::Rules::parse(RULES).unwrap())
+}
+
+#[test]
+fn a_pour_shut_in_with_no_room_for_a_spoke_is_joined_to_the_other_layers_by_a_via() {
+    let board = fenced(true);
+    let before = board::Pours::likely(&board).starved(&board);
+    assert!(before.is_empty(), "{before:?}");
+    let (plan, drawing) = wire::route(&board);
+    assert!(plan.left.is_empty() && drawing.undrawn.is_empty());
+    assert_eq!(drawing.wires.len(), 2, "X and Y, ground left to its pour");
+    assert!(drawing.ties.is_empty(), "{:?}", drawing.ties);
+    // One via of ground between the columns, between the two wires.
+    assert_eq!(drawing.stitches.len(), 1, "{:?}", drawing.stitches);
+    let via = &drawing.stitches[0];
+    assert_eq!(board.net_name(via.net), "GND");
+    assert!(via.at[0] > 11.3 && via.at[0] < 14.3 && via.at[1] > 8.0 && via.at[1] < 12.0, "{:?}", via.at);
+    assert_eq!(wire::amiss(&board, &plan, &drawing), (0, 0));
+    // It is copper of the board written out.
+    let (with, new) = wire::onto(&board, &plan, &drawing);
+    assert_eq!(new.len(), drawing.wires.iter().map(|w| w.pts.len() - 1).sum::<usize>() + 1);
+    assert!(new.iter().all(|&id| board::check_item(&with, id).is_empty()));
+}
+
+#[test]
+fn no_via_is_put_where_no_other_layer_has_the_nets_pour() {
+    // The same with ground poured on the front alone: a via between the columns would join
+    // the pour there to nothing.
+    let board = fenced(false);
+    let (_, drawing) = wire::route(&board);
+    assert!(drawing.stitches.is_empty(), "{:?}", drawing.stitches);
+}

@@ -371,7 +371,7 @@ pub fn spare(board: &Board, plan: &Plan, drawing: &Drawing, leave: &[u32]) -> (D
         return (drawing.clone(), 0);
     }
     // The wires again: each as what is left of it, in as many lengths as it is cut into.
-    let mut out = Drawing { wires: Vec::new(), undrawn: drawing.undrawn.clone(), ties: drawing.ties.clone(), spare: drawing.spare.clone() };
+    let mut out = Drawing { wires: Vec::new(), undrawn: drawing.undrawn.clone(), ties: drawing.ties.clone(), stitches: drawing.stitches.clone(), spare: drawing.spare.clone() };
     let mut s = 0;
     for (w, wire) in drawing.wires.iter().enumerate() {
         let (from, spare_from) = (out.wires.len(), out.spare.len());

@@ -16,7 +16,8 @@
 //! later wires cut off is laid again, the second time all the way to the pad. A pad the
 //! wires leave fewer thermal spokes than the rules ask, because they shut in the pour a spoke
 //! of it ends in ([`board::Pours::starved`]), is given a spoke drawn by hand ([`Tie`]), or
-//! those wires are laid another way ([`shutting`]).
+//! that pour a via down to the net's pour on another layer ([`Stitch`]), or those wires are
+//! laid another way ([`shutting`]).
 //!
 //! Last of all, copper a net has no need of is taken out ([`spare`]): a wire is drawn from pad
 //! to pad knowing nothing of the copper its net has already, and where it joins that copper a
@@ -78,11 +79,21 @@ pub struct Tie {
     pub pts: [P; 2],
 }
 
+/// A via standing in a piece of pour that joins nothing but one pad, down to the same net's
+/// pour on another layer: the pad's spokes into that piece then lead somewhere.
+#[derive(Debug, Clone, Serialize)]
+pub struct Stitch {
+    pub net: u32,
+    /// mm.
+    pub at: P,
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct Drawing {
     pub wires: Vec<Wire>,
     pub undrawn: Vec<Undrawn>,
     pub ties: Vec<Tie>,
+    pub stitches: Vec<Stitch>,
     /// Lengths of wire taken out again: each was one of two ways between the same two places
     /// of its net's copper, and the other is kept ([`spare`]).
     pub spare: Vec<Wire>,
@@ -1115,18 +1126,61 @@ fn tie(with: &mut Board, pours: &board::Pours, s: &board::Starved) -> Option<Tie
     None
 }
 
-/// `drawing` with a spoke drawn by hand for each pad it leaves short of spokes ([`tie`]),
-/// and how many pads are short still.
+/// How far apart the places tried for a via in a piece of pour are, nm, and how many of them
+/// the checker is asked about.
+const STITCH_APART: i64 = 100_000;
+const STITCH_TRIES: usize = 48;
+
+/// A via for pad `s` of `with`, the board with the drawing on it and `pours` its pours: in a
+/// piece of pour the pad's spokes end in that joins nothing else, where the via stands wholly
+/// in that piece and wholly in the net's pour on another layer, and the checker passes it;
+/// the place nearest the middle of the piece's room for one. The via is left on `with`.
+fn stitch(with: &mut Board, pours: &board::Pours, s: &board::Starved) -> Option<Stitch> {
+    let net = with.item(s.pad)?.net;
+    let (r, drill) = plan::via_size(with, net);
+    let all = (1u64 << with.layers.len()) - 1;
+    for &pocket in &s.pockets {
+        let leads_on = |p: board::Point| (0..with.layers.len()).filter(|&l| l != s.layer).any(|l| pours.piece(net, l, p, r).is_some_and(|k| !s.pockets.contains(&k)));
+        let mut room: Vec<board::Point> = pours.room(pocket, r, STITCH_APART).into_iter().filter(|&p| leads_on(p)).collect();
+        if room.is_empty() {
+            continue;
+        }
+        let n = room.len() as i64;
+        let middle = board::Point::new(room.iter().map(|p| p.x).sum::<i64>() / n, room.iter().map(|p| p.y).sum::<i64>() / n);
+        room.sort_by(|a, b| a.distance(middle).total_cmp(&b.distance(middle)).then((a.x, a.y).cmp(&(b.x, b.y))));
+        // Spread over the room where there is more of it than is tried.
+        let every = room.len().div_ceil(STITCH_TRIES);
+        for &p in room.iter().step_by(every) {
+            let id = with.insert(Item { kind: Kind::Via, net, layers: all, shape: Shape::Capsule { a: p, b: p, r }, hole: Some((p, drill)), locked: false, span: None });
+            if board::check_item(with, id).is_empty() {
+                return Some(Stitch { net, at: [p.x as f64 / 1e6, p.y as f64 / 1e6] });
+            }
+            with.remove(id);
+        }
+    }
+    None
+}
+
+/// `drawing` with a spoke drawn by hand for each pad it leaves short of spokes ([`tie`]), or,
+/// where there is no room for one, a via that joins the pour its spokes end in to the net's
+/// pour on another layer ([`stitch`]), and how many pads are short still.
 fn tied(board: &Board, plan: &Plan, mut drawing: Drawing, before: &[(ItemId, usize)]) -> (Drawing, usize) {
     for _ in 0..SPOKES {
         let (mut with, _) = onto(board, plan, &drawing);
         let pours = board::Pours::likely(&with);
         let short: Vec<board::Starved> = pours.starved(&with).into_iter().filter(|s| !before.contains(&(s.pad, s.layer))).collect();
-        let more: Vec<Tie> = short.iter().filter_map(|s| tie(&mut with, &pours, s)).collect();
-        if more.is_empty() {
+        let (mut ties, mut stitches) = (Vec::new(), Vec::new());
+        for s in &short {
+            match tie(&mut with, &pours, s) {
+                Some(t) => ties.push(t),
+                None => stitches.extend(stitch(&mut with, &pours, s)),
+            }
+        }
+        if ties.is_empty() && stitches.is_empty() {
             return (drawing, short.len());
         }
-        drawing.ties.extend(more);
+        drawing.ties.extend(ties);
+        drawing.stitches.extend(stitches);
     }
     let short = starved(board, plan, &drawing, before).len();
     (drawing, short)
@@ -1138,7 +1192,8 @@ fn tied(board: &Board, plan: &Plan, mut drawing: Drawing, before: &[(ItemId, usi
 /// pours are filled round them, and only what the pours then leave apart is planned, each such
 /// connection to the nearest pad of the other part or to a via standing in its pour. A pad
 /// the wires then leave too few spokes, because they shut in the pour a spoke of it ends in,
-/// is given one drawn by hand ([`Tie`]); where it has no room for one, the wires that shut the
+/// is given one drawn by hand ([`Tie`]); where it has no room for one, the pour is joined to
+/// the net's pour on another layer by a via ([`Stitch`]), or the wires that shut the
 /// pour in are laid another way, if that leaves no more open than before.
 ///
 /// A board that is not whole that way, and has parts whose pins stand nearer each other than
@@ -1445,8 +1500,8 @@ const POURS: usize = 6;
 /// spokes a pad may be drawn by hand.
 const SPOKES: usize = 3;
 
-/// The board with the drawing's copper on it: the wires as tracks, the plan's vias and then
-/// the ties, and which items those are.
+/// The board with the drawing's copper on it: the wires as tracks, the plan's vias, the ties
+/// and then the stitches, and which items those are.
 pub fn onto(board: &Board, plan: &Plan, drawing: &Drawing) -> (Board, Vec<ItemId>) {
     let mut out = board.clone();
     let mut new = Vec::new();
@@ -1467,6 +1522,11 @@ pub fn onto(board: &Board, plan: &Plan, drawing: &Drawing) -> (Board, Vec<ItemId
         let shape = Shape::Capsule { a: at(t.pts[0]), b: at(t.pts[1]), r: (t.width * 1e6 / 2.0).round() as i64 };
         new.push(out.insert(Item { kind: Kind::Track, net: t.net, layers: 1 << t.layer, shape, hole: None, locked: false, span: None }));
     }
+    for v in &drawing.stitches {
+        let c = at(v.at);
+        let (r, drill) = plan::via_size(board, v.net);
+        new.push(out.insert(Item { kind: Kind::Via, net: v.net, layers: all, shape: Shape::Capsule { a: c, b: c, r }, hole: Some((c, drill)), locked: false, span: None }));
+    }
     (out, new)
 }
 
@@ -1484,9 +1544,9 @@ pub fn write(text: &str, original: &Board, plan: &Plan, drawing: &Drawing) -> St
         edit.tracks.push(kicad::write::NewTrack { start: m(t.pts[0]), end: m(t.pts[1]), width: t.width / 1e3, layer: original.layers[t.layer].clone(), net: original.file_net(t.net), locked: false });
     }
     let (Some(top), Some(bottom)) = (original.layers.first(), original.layers.last()) else { return kicad::write::apply(text, &edit) };
-    for v in &plan.vias {
-        let (r, drill) = plan::via_size(original, v.net);
-        edit.vias.push(kicad::write::NewVia { at: m(v.at), size: 2.0 * r as f64 / 1e9, drill: 2.0 * drill as f64 / 1e9, layers: [top.clone(), bottom.clone()], net: original.file_net(v.net), locked: false });
+    for (at, net) in plan.vias.iter().map(|v| (v.at, v.net)).chain(drawing.stitches.iter().map(|v| (v.at, v.net))) {
+        let (r, drill) = plan::via_size(original, net);
+        edit.vias.push(kicad::write::NewVia { at: m(at), size: 2.0 * r as f64 / 1e9, drill: 2.0 * drill as f64 / 1e9, layers: [top.clone(), bottom.clone()], net: original.file_net(net), locked: false });
     }
     kicad::write::apply(text, &edit)
 }
