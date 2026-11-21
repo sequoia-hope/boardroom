@@ -21,7 +21,7 @@ read-only copy of the app, open on the worked example, easy2350.
 **For an agent pointed here:** this README is the map. It says what each project in the suite is,
 where its repo and live page are, what a board repo looks like, and how to make one that works
 with the viewer, the router and the other apps. Follow the links for detail. The specs under
-[`docs/`](docs/) are the full design; [`CLAUDE.md`](CLAUDE.md) holds the rules for this repo, and
+[`docs/`](docs/) are the full design; [`governance/ENGINEERING_CONSTITUTION.md`](governance/ENGINEERING_CONSTITUTION.md) is the law for how work is done here; [`CLAUDE.md`](CLAUDE.md) holds the session rules for this repo, and
 [`template/CLAUDE.md`](template/CLAUDE.md) holds the rules for a board repo.
 
 ## The suite

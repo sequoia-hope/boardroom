@@ -1,7 +1,10 @@
 # Boardroom
 
 Boardroom is becoming one program with many crates: Projects, Compose and Route as modes of
-one app, with the router rewritten here. **Read `docs/one-system-spec.md` before any work on
+one app, with the router rewritten here. **`governance/ENGINEERING_CONSTITUTION.md` is the law
+for how work is done here and overrides this file: read it at the start of every session.** Its
+core: look at the board (the designer's beside ours, every layer that matters) before settling
+on a cause, before claiming a success, and before asking the owner anything. **Read `docs/one-system-spec.md` before any work on
 the code**: it has the layout, the dependency rules, the order of work and where each crate
 comes from. Nothing has to keep working during the migration, but `main` builds at every commit
 and each step's commit message says what is broken.
@@ -34,7 +37,8 @@ a board project (`template/CLAUDE.md` is the board-repo version).
 - **The new router is `boardroom route <board.kicad_pcb> [--out DIR]`** (default `route/<board>/`
   in the board's project; it keeps each pour the board's pinned blocks keep joined whole, from
   `packages/` or `--packages DIR`); `boardroom check <board.kicad_pcb>` gives our checker's faults and open
-  connections. It is a prototype: judge it with `bench/prototype.py` (KiCad's DRC beside ours).
+  connections. It is a prototype: judge it with `bench/tier.py` (KiCad's DRC beside ours), and
+  after a gate run rebuild the gallery the owner reviews (`bench/gallery.py`, pages in the lab).
   Board repos' `scripts/route.sh` still runs the old router (`$ULTRAROUTE`, a built binary); the
   old router's code is never brought in or built here.
 - **Making a board repo:** run `scripts/new-board.sh <dir> [--name <title>] [--github <owner>/<repo> [--private]]`,

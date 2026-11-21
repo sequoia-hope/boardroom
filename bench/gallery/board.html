@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<link rel="icon" href="data:,">
+<title>Board</title>
+<style>
+:root{color-scheme:dark}
+body{font:15px/1.4 system-ui,sans-serif;margin:0;padding:8px 10px 30px;background:#12151b;color:#dde1e7}
+a{color:#8fc1ff}h1{font-size:1.1em;margin:.2em 0;overflow-wrap:anywhere}.m{color:#98a1ad;font-size:.9em}
+.bar{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0;align-items:center}
+button,textarea{font:inherit;color:inherit;background:#1e232c;border:1px solid #39414d;border-radius:6px;padding:5px 10px}
+button.on{background:#2f5d9a;border-color:#5b93dc}button.layer{border-left-width:10px}button.layer:not(.on){opacity:.55}
+.panes{display:grid;grid-template-columns:1fr 1fr;gap:8px}.panes.single{grid-template-columns:1fr}
+.pane{position:relative;height:72vh;background:#000;border:1px solid #2b323c;border-radius:8px;overflow:hidden;touch-action:none;cursor:grab}
+.pane .label{position:absolute;left:8px;top:6px;z-index:3;background:#000a;padding:1px 8px;border-radius:5px;pointer-events:none}
+.stage{position:absolute;isolation:isolate;background:#000}
+.stage img{position:absolute;left:0;top:0;width:100%;height:100%;mix-blend-mode:screen;pointer-events:none;user-select:none}
+.stage img.pour{opacity:.3}.stage svg{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}
+.bad{color:#ff8a7a}.good{color:#7fd69a}.warn{color:#f0c35a}
+textarea{width:100%;box-sizing:border-box;min-height:4.5em}
+@media(max-width:760px){.pane{height:58vh}}
+</style></head><body>
+<div class="bar"><a href="./">← All boards</a><a id="prev" href="#">‹ Previous</a><a id="next" href="#">Next ›</a><span id="pos" class="m"></span></div>
+<h1 id="title"></h1>
+<p id="facts" class="m"></p>
+<div class="bar" id="layers"></div>
+<div class="bar">
+ <button id="combine" title="Tap layers to add and remove them, instead of one at a time">Combine layers</button>
+ <button id="pours" class="on">Pours</button><button id="open" class="on">Open connections</button><button id="errors" class="on">New errors</button>
+ <span class="m">|</span>
+ <button data-mode="both">Side by side</button><button data-mode="ours">Ours</button><button data-mode="designer">Designer</button><button id="flip">Flip (F)</button>
+ <button id="fit">Fit</button>
+</div>
+<div class="panes" id="panes"></div>
+<p class="m">Drag to move, wheel or pinch to zoom; both sides move together. Keys: 1 to 9 one layer, 0 all, F flip.
+Yellow lines: what KiCad still calls unconnected on ours. Red rings: errors our copper adds.</p>
+<p><b>My note on this board</b> <span class="m">(kept in this browser; "Copy my notes" on the list gathers them to paste to Claude)</span></p>
+<textarea id="note" placeholder="What looks wrong or right here?"></textarea>
+<script>
+const id = new URLSearchParams(location.search).get('id'), dir = 'b/' + encodeURIComponent(id) + '/';
+const $ = s => document.querySelector(s);
+let board, on = new Set(), combine = false, show = {pours: true, open: true, errors: true}, mode, view = {x: 0, y: 0, k: 1};
+const sides = () => ['ours', 'designer'].filter(s => board.sides[s] && board.sides[s].tracks);
+function fitScale(pane) { return Math.min(pane.clientWidth / board.box[2], pane.clientHeight / board.box[3]); }
+function place() {
+  for (const pane of document.querySelectorAll('.pane')) {
+    const s = fitScale(pane) * view.k, st = pane.querySelector('.stage');
+    st.style.width = board.box[2] * s + 'px'; st.style.height = board.box[3] * s + 'px';
+    st.style.left = (pane.clientWidth - board.box[2] * s) / 2 + view.x + 'px'; st.style.top = (pane.clientHeight - board.box[3] * s) / 2 + view.y + 'px';
+    for (const c of st.querySelectorAll('circle')) c.setAttribute('r', 9 / s);
+  }
+}
+function images() {
+  for (const pane of document.querySelectorAll('.pane')) {
+    const side = pane.dataset.side, st = pane.querySelector('.stage'), have = board.sides[side];
+    for (const img of st.querySelectorAll('img')) {
+      const want = img.dataset.layer === 'Edge.Cuts' || (on.has(img.dataset.layer) && (!img.classList.contains('pour') || show.pours));
+      if (want && !img.src) img.src = img.dataset.src;
+      img.style.display = want ? '' : 'none';
+    }
+    const svg = st.querySelector('svg');
+    if (svg) { svg.querySelector('.open').style.display = show.open ? '' : 'none'; svg.querySelector('.errors').style.display = show.errors ? '' : 'none'; }
+  }
+  for (const b of document.querySelectorAll('button.layer')) b.classList.toggle('on', on.has(b.dataset.layer));
+  for (const k of ['pours', 'open', 'errors']) $('#' + k).classList.toggle('on', show[k]);
+  $('#combine').classList.toggle('on', combine);
+}
+function panes() {
+  const el = $('#panes'); el.textContent = '';
+  const want = mode === 'both' ? sides() : [mode].filter(s => sides().includes(s));
+  el.className = 'panes' + (want.length < 2 ? ' single' : '');
+  for (const side of want) {
+    const pane = document.createElement('div'); pane.className = 'pane'; pane.dataset.side = side;
+    pane.innerHTML = `<div class="label">${side === 'ours' ? 'Ours' : 'Designer'}</div><div class="stage"></div>`;
+    const st = pane.querySelector('.stage'), have = board.sides[side];
+    for (const layer of [...board.layers].reverse()) {
+      if (have.pours.includes(layer)) st.insertAdjacentHTML('beforeend', `<img class="pour" data-layer="${layer}" data-src="${dir}${side}-pour-${layer}.svg" alt="">`);
+      if (have.tracks.includes(layer)) st.insertAdjacentHTML('beforeend', `<img data-layer="${layer}" data-src="${dir}${side}-${layer}.svg" alt="">`);
+    }
+    if (have.tracks.includes('Edge.Cuts')) st.insertAdjacentHTML('beforeend', `<img data-layer="Edge.Cuts" data-src="${dir}${side}-Edge.Cuts.svg" alt="">`);
+    if (side === 'ours') {
+      const lines = (board.open || []).map(([a, b]) => `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}"/>`).join('');
+      const rings = (board.new || []).map(([kind, x, y]) => `<circle cx="${x}" cy="${y}" r="1"><title>${kind}</title></circle>`).join('');
+      st.insertAdjacentHTML('beforeend', `<svg viewBox="${board.box.join(' ')}"><g class="open" stroke="#ffe24a" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linecap="round">${lines}</g>`
+        + `<g class="errors" fill="none" stroke="#ff3b30" stroke-width="2">${rings}</g></svg>`);
+      for (const n of st.querySelectorAll('line,circle')) n.setAttribute('vector-effect', 'non-scaling-stroke');
+    }
+    gestures(pane); el.append(pane);
+  }
+  for (const b of document.querySelectorAll('button[data-mode]')) b.classList.toggle('on', b.dataset.mode === mode);
+  images(); place();
+}
+function zoomAt(pane, cx, cy, f) {
+  const k = Math.min(60, Math.max(0.5, view.k * f)); f = k / view.k;
+  const r = pane.getBoundingClientRect(), px = cx - r.left - pane.clientWidth / 2, py = cy - r.top - pane.clientHeight / 2;
+  view.x = px - (px - view.x) * f; view.y = py - (py - view.y) * f; view.k = k; place();
+}
+function gestures(pane) {
+  const at = new Map(); let apart = 0;
+  pane.addEventListener('wheel', e => { e.preventDefault(); zoomAt(pane, e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0015)); }, {passive: false});
+  pane.addEventListener('pointerdown', e => { pane.setPointerCapture(e.pointerId); at.set(e.pointerId, [e.clientX, e.clientY]); apart = 0; });
+  pane.addEventListener('pointermove', e => {
+    if (!at.has(e.pointerId)) return;
+    const was = at.get(e.pointerId); at.set(e.pointerId, [e.clientX, e.clientY]);
+    if (at.size === 1) { view.x += e.clientX - was[0]; view.y += e.clientY - was[1]; place(); }
+    else if (at.size === 2) {
+      const [p, q] = [...at.values()], d = Math.hypot(p[0] - q[0], p[1] - q[1]);
+      if (apart) zoomAt(pane, (p[0] + q[0]) / 2, (p[1] + q[1]) / 2, d / apart);
+      apart = d;
+    }
+  });
+  for (const k of ['pointerup', 'pointercancel']) pane.addEventListener(k, e => { at.delete(e.pointerId); apart = 0; });
+}
+function pick(layer) {
+  if (layer === null) on = new Set(board.layers);
+  else if (combine) { on.has(layer) ? on.delete(layer) : on.add(layer); }
+  else on = new Set([layer]);
+  images();
+}
+fetch(dir + 'board.json').then(r => r.json()).then(b => {
+  board = b; document.title = b.id; $('#title').textContent = b.id;
+  const row = b.row || {}, was = b.before || {}, open = row.kicad_open ?? row.open, wasOpen = was.kicad_open ?? was.open;
+  const facts = [];
+  if (b.missing) facts.push(`<span class="bad">${b.missing}</span>`);
+  else facts.push(open === 0 ? '<span class="good">Nothing open</span>' : `<span class="bad">${open} open</span>`);
+  if (wasOpen != null && wasOpen !== open) facts.push(`<span class="${open > wasOpen ? 'bad' : 'good'}">was ${wasOpen} in the run before</span>`);
+  const kinds = Object.entries(row.kicad_new || {}).map(([k, n]) => `${n} ${k}`);
+  if (kinds.length) facts.push(`<span class="warn">our copper adds: ${kinds.join(', ')}</span>`);
+  if (row.vias != null) facts.push(`ours: ${row.vias} vias, ${Math.round(row.track_mm)} mm of track, ${row.seconds} s`);
+  if (b.designer) facts.push(`designer: ${b.designer.open} open, ${b.designer.errors} errors of their own, ${b.designer.vias} vias, ${b.designer.track_mm} mm`);
+  $('#facts').innerHTML = facts.join(' · ');
+  if (!b.box) return;
+  const bar = $('#layers'); bar.innerHTML = '<button id="all">All layers</button>';
+  $('#all').onclick = () => pick(null);
+  b.layers.forEach((l, i) => { const el = document.createElement('button'); el.className = 'layer'; el.dataset.layer = l; el.textContent = `${i + 1} ${l}`; el.style.borderLeftColor = b.colours[l]; el.onclick = () => pick(l); bar.append(el); });
+  // Two layers read well laid over each other; more are a blur, so the front alone to begin with.
+  on = new Set(b.layers.length > 2 ? [b.layers[0]] : b.layers);
+  mode = innerWidth < 760 || sides().length < 2 ? 'ours' : 'both';
+  panes();
+});
+for (const k of ['pours', 'open', 'errors']) $('#' + k).onclick = () => { show[k] = !show[k]; images(); };
+$('#combine').onclick = () => { combine = !combine; images(); };
+for (const b of document.querySelectorAll('button[data-mode]')) b.onclick = () => { mode = b.dataset.mode; panes(); };
+const flip = () => { if (sides().length > 1) { mode = mode === 'designer' ? 'ours' : 'designer'; panes(); } };
+$('#flip').onclick = flip; $('#fit').onclick = () => { view = {x: 0, y: 0, k: 1}; place(); };
+addEventListener('resize', place);
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'TEXTAREA' || !board || !board.box) return;
+  if (e.key === 'f' || e.key === 'F') flip();
+  else if (e.key === '0') pick(null);
+  else if (/^[1-9]$/.test(e.key) && board.layers[e.key - 1]) pick(board.layers[e.key - 1]);
+});
+const note = $('#note'); note.value = localStorage.getItem('gallery-note:' + id) || '';
+note.oninput = () => note.value.trim() ? localStorage.setItem('gallery-note:' + id, note.value.trim()) : localStorage.removeItem('gallery-note:' + id);
+const list = JSON.parse(sessionStorage.getItem('gallery-list') || '[]'), i = list.indexOf(id);
+for (const [sel, j] of [['#prev', i - 1], ['#next', i + 1]]) { const a = $(sel); if (i >= 0 && list[j]) a.href = 'board.html?id=' + encodeURIComponent(list[j]); else a.style.visibility = 'hidden'; }
+if (i >= 0) $('#pos').textContent = `${i + 1} of ${list.length}`;
+</script></body></html>
