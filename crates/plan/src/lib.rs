@@ -876,12 +876,17 @@ fn shut_in_by_spokes(board: &Board, sheets: &[Sheet], spots: &Spots) -> Vec<(Ite
 /// How many places across a pad, each way, a hole in it is tried at.
 const HOLE_TRIES: i64 = 5;
 
-/// Whether a pad could hold a hole: it is on one layer, has none, its net may have vias, and
-/// a via of its net is no wider than it either way.
+/// Whether a pad could hold a hole: it is on one layer, has none, its net may have vias, a
+/// via of its net is no wider than it either way, and nothing is soldered to it. A hole in a
+/// pad that takes solder draws the solder down it unless the board is made with its holes
+/// filled, which nothing written on a board says: where designers stand a via on such a pad it
+/// is at the pad's end or corner, and none of the gate tier's puts one in a ball of a grid
+/// array (PocketBone's U2, 2026-11-21: every ball leaves by a short track to a via between the
+/// balls). Such a pad's connection is left open, and said to be.
 fn holds_a_hole(board: &Board, pad: ItemId) -> bool {
     let (Some(item), Some(b)) = (board.item(pad), board.bbox(pad)) else { return false };
     let d = 2 * via_size(board, item.net).0;
-    matches!(item.kind, Kind::Pad { .. }) && item.net != 0 && item.layers.count_ones() == 1 && item.hole.is_none() && !board.no_vias(item.net) && b.max.x - b.min.x >= d && b.max.y - b.min.y >= d
+    matches!(item.kind, Kind::Pad { .. }) && !board.soldered.contains(&pad) && item.net != 0 && item.layers.count_ones() == 1 && item.hole.is_none() && !board.no_vias(item.net) && b.max.x - b.min.x >= d && b.max.y - b.min.y >= d
 }
 
 /// A hole for each of `wanted` that can hold one: a via of the pad's net wholly inside the

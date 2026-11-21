@@ -7,9 +7,14 @@ use board::{Board, Kind};
 const RULES: &str = r#"{"board":{"design_settings":{"rules":{"min_clearance":0.2,"min_copper_edge_clearance":0.3,"min_track_width":0.2,"min_via_diameter":0.8,"min_through_hole_diameter":0.4}}},
     "net_settings":{"classes":[{"name":"Default","clearance":0.2,"track_width":0.2,"via_diameter":0.8,"via_drill":0.4}]}}"#;
 
-/// A square pad 2 mm across on the front.
+/// A square pad 2 mm across on the front, bare: nothing is soldered to it.
 fn pad(reference: &str, x: f64, y: f64, n: usize, net: &str) -> String {
-    format!("(footprint \"P\" (layer \"F.Cu\") (at {x} {y}) (property \"Reference\" \"{reference}\") (pad \"1\" smd rect (at 0 0) (size 2 2) (layers \"F.Cu\") (net {n} \"{net}\")))")
+    pad_on(reference, x, y, n, net, "\"F.Cu\" \"F.Mask\"")
+}
+
+/// The same pad on `layers`.
+fn pad_on(reference: &str, x: f64, y: f64, n: usize, net: &str, layers: &str) -> String {
+    format!("(footprint \"P\" (layer \"F.Cu\") (at {x} {y}) (property \"Reference\" \"{reference}\") (pad \"1\" smd rect (at 0 0) (size 2 2) (layers {layers}) (net {n} \"{net}\")))")
 }
 
 fn board(width: f64, parts: &[String]) -> Board {
@@ -54,6 +59,24 @@ fn a_pad_shut_in_by_its_neighbours_leaves_by_a_hole_in_itself() {
     assert_eq!(plan.vias.iter().filter(|v| within(&board, "P11", v.at)).count(), 1, "{:?}", plan.vias);
     assert!(!plan.vias.iter().any(|v| within(&board, "Q", v.at)), "{:?}", plan.vias);
     assert!(drawing.wires.iter().any(|w| w.layer == 1));
+}
+
+/// The same nine pads with solder paste on them: a part is soldered there, and a hole in the
+/// pad would take its solder. No hole is made, and the connection is left open.
+#[test]
+fn a_pad_that_takes_solder_is_given_no_hole() {
+    let mut parts = Vec::new();
+    for (i, x) in [7.7, 10.0, 12.3].into_iter().enumerate() {
+        for (j, y) in [7.7, 10.0, 12.3].into_iter().enumerate() {
+            let middle = (i, j) == (1, 1);
+            parts.push(pad_on(&format!("P{i}{j}"), x, y, if middle { 1 } else { 0 }, if middle { "A" } else { "" }, "\"F.Cu\" \"F.Paste\" \"F.Mask\""));
+        }
+    }
+    parts.push(pad("Q", 3.0, 16.0, 1, "A"));
+    let board = board(20.0, &parts);
+    let (plan, drawing) = wire::route(&board);
+    assert!(!plan.vias.iter().any(|v| within(&board, "P11", v.at)), "{:?}", plan.vias);
+    assert_eq!(wire::open(&board, &plan, &drawing), 1);
 }
 
 /// Where no pad is shut in, no hole is made: the same pads with room between them.

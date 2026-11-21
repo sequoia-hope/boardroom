@@ -1,7 +1,7 @@
 //! The board as a router sees it: every piece of copper as a shape on a set of layers, holes,
 //! keepouts and the outline, indexed by where they are.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use kicad::{Copper, Keepout, Outline, PadKind, Pcb, Rules, Span};
@@ -340,6 +340,9 @@ pub struct Board {
     /// than their nets': one stands in for the net classes and custom rules (see
     /// [`Board::clearance_between`]).
     pub pad_clearances: HashMap<ItemId, Nm>,
+    /// Pads solder paste is printed on (a paste layer among the pad's own): a part is soldered
+    /// there, and a hole in such a pad draws the solder down it.
+    pub soldered: HashSet<ItemId>,
     /// Pads no zone of their net joins (KiCad's zone connection "none", the pad's own, its
     /// footprint's or the zone's).
     pub pad_zone_connect: HashMap<ItemId, u8>,
@@ -568,6 +571,7 @@ impl Board {
             mask_pads: Vec::new(),
             mask_groups: Vec::new(),
             pad_clearances: HashMap::new(),
+            soldered: HashSet::new(),
             pad_zone_connect: HashMap::new(),
             zones_without_pads: copper.zones.iter().enumerate().filter(|(_, z)| z.no_pads).map(|(i, _)| i).collect(),
             relief_pads: Default::default(),
@@ -721,6 +725,9 @@ impl Board {
             }
             let id = board.insert(base);
             ids.push(id);
+            if pad.layers.iter().any(|l| l.ends_with(".Paste")) {
+                board.soldered.extend(ids.iter().copied());
+            }
             pad_items.push((k, id));
             board.pads.push(PadInfo { footprint: pad.footprint, number: model.number.clone(), centre: Point::from_m(model.position), items: ids.clone() });
             if let Some(ends) = model.drill.and_then(|d| slot_ends(model.position, model.rotation_deg, d)) {
