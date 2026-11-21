@@ -298,7 +298,7 @@ pub fn via_spots(board: &Board, tight: bool) -> Spots {
     // Not for fan-outs: there each pad's via has its own place, beside its neighbours'.
     let ways_out = if tight { Vec::new() } else { ways_out(board, apart, pitch as f64 / 1e6) };
     let kept = Spots::kept_of(board, &at);
-    Spots { at, radius: r as f64 / 1e6, apart, hole, ways_out, out_keep: (r + keep) as f64 / 1e6 + width(board, 0) / 2.0, beside: (2 * r + board.max_rule_reach()) as f64 / 1e6 + 0.01, checked: Default::default(), bars: space::bars(board), kept, left_out: Default::default() }
+    Spots { at, radius: r as f64 / 1e6, apart, hole, ways_out, out_keep: (r + keep) as f64 / 1e6 + width(board, 0) / 2.0, beside: (2 * r + board.max_rule_reach()) as f64 / 1e6 + 0.01, checked: Default::default(), bars: space::bars(board), kept, left_out: Default::default(), spared: Vec::new() }
 }
 
 /// The way straight out of each pad that stands nearer another pad of its part than two vias
@@ -734,10 +734,154 @@ pub fn start(board: &Board) -> Plan {
 /// How far from its pad a stub's via may stand, mm.
 const FAN_REACH: f64 = 4.0;
 
+/// How many triangles the room round a pad is followed through before it is taken not to be
+/// shut in: a pad shut in stands in a pocket, a few triangles between its neighbours.
+const SHUT_IN: usize = 300;
+/// How many times spokes are given up and the layers cut into triangles again.
+const SPARINGS: usize = 3;
+
+/// The pins with a hole whose spokes shut a pad in, each with the layer to spare them on
+/// ([`Spots::spared`]). A pad is shut in when a strand of its net, at the narrowest it may be
+/// and with nothing else laid, reaches no other pad of the net from it on any layer, through
+/// any spot a via could stand at. The spokes spared are those at the gaps too narrow for it
+/// round the room it does reach, on layers other than the one the pin keeps them on: the one
+/// where it has the most, an inner layer before an outer one (wires are fewest there), the
+/// first of those.
+fn shut_in_by_spokes(board: &Board, sheets: &[Sheet], spots: &Spots) -> Vec<(ItemId, usize)> {
+    // Each pin's spokes on each layer, and how many it needs.
+    let mut on_each: std::collections::HashMap<ItemId, (usize, Vec<usize>)> = std::collections::HashMap::new();
+    for (_, item) in board.items() {
+        if let Kind::Spoke { pad, need, .. } = item.kind {
+            let count = on_each.entry(pad).or_insert_with(|| (need as usize, vec![0; board.layers.len()]));
+            for (l, n) in count.1.iter_mut().enumerate() {
+                *n += item.on(l) as usize;
+            }
+        }
+    }
+    let last = board.layers.len().saturating_sub(1);
+    let kept_on = |pad: ItemId| -> Option<usize> {
+        let (need, count) = on_each.get(&pad)?;
+        (0..count.len()).filter(|&l| count[l] >= *need).max_by_key(|&l| (count[l], l != 0 && l != last, std::cmp::Reverse(l)))
+    };
+    // The pin a corner's obstacle is a spoke of, if it may be spared on that layer.
+    let spare = |l: usize, v: usize| -> Option<ItemId> {
+        let space = &sheets[l].space;
+        let o = &space.obstacles[space.vert_of[v]?];
+        let Kind::Spoke { pad, .. } = board.item(o.item?)?.kind else { return None };
+        (o.what == space::What::Copper && kept_on(pad).is_some_and(|k| k != l)).then_some(pad)
+    };
+    if !(0..sheets.len()).any(|l| (0..sheets[l].space.verts.len()).any(|v| spare(l, v).is_some())) {
+        return Vec::new();
+    }
+    // On each layer, the free triangles with a corner on each obstacle.
+    let around: Vec<std::collections::HashMap<usize, Vec<usize>>> = sheets
+        .iter()
+        .map(|sheet| {
+            let space = &sheet.space;
+            let mut around: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
+            for t in (0..space.tris.len()).filter(|&t| space.free(t)) {
+                for o in space.tris[t].v.iter().filter_map(|&v| space.vert_of[v]) {
+                    if space.obstacles[o].what == space::What::Pad && around.get(&o).is_none_or(|a| a.last() != Some(&t)) {
+                        around.entry(o).or_default().push(t);
+                    }
+                }
+            }
+            around
+        })
+        .collect();
+    let mut out: Vec<(ItemId, usize)> = Vec::new();
+    // The pads to ask it of: those of nets with another pad to reach and no pour to join them.
+    let mut pads: Vec<(ItemId, u32)> = board.items().filter(|(_, i)| matches!(i.kind, Kind::Pad { .. }) && i.net != 0 && !board.zone_areas.iter().any(|z| z.net == i.net)).map(|(id, i)| (id, i.net)).collect();
+    let mut of_net: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    for &(_, net) in &pads {
+        *of_net.entry(net).or_default() += 1;
+    }
+    pads.retain(|(_, net)| of_net[net] > 1);
+    pads.sort();
+    for (pad, net) in pads {
+        let wide = least_width(board, net).max(NARROWEST * width(board, net));
+        let mut seen: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+        let mut todo: Vec<(usize, usize)> = Vec::new();
+        for (l, around) in around.iter().enumerate() {
+            let Some(&o) = sheets[l].space.ends.get(&End::Item(pad)) else { continue };
+            for &t in around.get(&o).map_or(&[][..], |a| a.as_slice()) {
+                seen.insert((l, t));
+                todo.push((l, t));
+            }
+        }
+        let mut short: Vec<(usize, usize)> = Vec::new();
+        let (mut steps, mut joined) = (0, todo.is_empty());
+        while let Some((l, t)) = todo.pop() {
+            let space = &sheets[l].space;
+            steps += 1;
+            // Another pad of the net, or more room than a pad shut in has.
+            let other = |v: usize| space.vert_of[v].is_some_and(|k| space.obstacles[k].what == crate::space::What::Pad && space.obstacles[k].net == net && space.obstacles[k].item != Some(pad));
+            if steps > SHUT_IN || space.tris[t].v.iter().any(|&v| other(v)) {
+                joined = true;
+                break;
+            }
+            for &k in &space.tri_spots[t] {
+                for (m, sheet) in sheets.iter().enumerate() {
+                    if let Some(u) = sheet.space.spot_tri[k]
+                        && seen.insert((m, u))
+                    {
+                        todo.push((m, u));
+                    }
+                }
+            }
+            for &e in &space.tris[t].e {
+                let Some(next) = space.edges[e].t.iter().flatten().copied().find(|&y| y != t) else { continue };
+                if !space.free(next) || seen.contains(&(l, next)) || space.barred(next, net) {
+                    continue;
+                }
+                if space.keep(board, space.edges[e].v[0], net) + space.keep(board, space.edges[e].v[1], net) + wide > space.width(e) + strands::EPS {
+                    short.push((l, e));
+                    continue;
+                }
+                seen.insert((l, next));
+                todo.push((l, next));
+            }
+        }
+        if joined {
+            continue;
+        }
+        for (l, e) in short {
+            let space = &sheets[l].space;
+            let [a, b] = space.edges[e].v;
+            for (v, w) in [(a, b), (b, a)] {
+                // Not the gap between a spoke and its own pin, or two spokes of one pin:
+                // nothing passes there with the spoke or without.
+                let own = |pin: ItemId| spare(l, w) == Some(pin) || space.vert_of[w].is_some_and(|k| space.obstacles[k].item == Some(pin));
+                if let Some(pin) = spare(l, v)
+                    && !own(pin)
+                    && !out.contains(&(pin, l))
+                {
+                    out.push((pin, l));
+                }
+            }
+        }
+    }
+    out.retain(|x| !spots.spared.contains(x));
+    out
+}
+
 /// A plan with nothing in it yet, with `spots` for its vias.
 pub fn start_from(board: &Board, spots: Spots) -> Plan {
-    let spots = Arc::new(spots);
-    let sheets: Vec<Sheet> = (0..board.layers.len()).map(|l| Sheet::new(Space::new(board, l, &[], &spots))).collect();
+    // The layers cut into triangles; and again without the spokes that shut a pad in, for as
+    // long as giving some up opens a way to more.
+    let mut spots = Arc::new(spots);
+    let mut made = 0;
+    let sheets = loop {
+        let sheets: Vec<Sheet> = (0..board.layers.len()).map(|l| Sheet::new(Space::new(board, l, &[], &spots))).collect();
+        let more = if made == SPARINGS { Vec::new() } else { shut_in_by_spokes(board, &sheets, &spots) };
+        if more.is_empty() {
+            break sheets;
+        }
+        let mut with = (*spots).clone();
+        with.spared.extend(more);
+        spots = Arc::new(with);
+        made += 1;
+    };
     let poured = poured(board);
     // On two layers a poured side is still routed on: the designers do (159 of the gate
     // tier's 253 two-layer boards have a side at least half poured).

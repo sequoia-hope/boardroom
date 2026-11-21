@@ -123,6 +123,11 @@ pub struct Spots {
     pub kept: std::collections::HashMap<usize, Vec<usize>>,
     /// The sides the triangulation could not take ([`Space::new`]), found so far.
     pub left_out: LeftOut,
+    /// Pins with a hole, each with a layer on which its spokes are no obstacles: they shut
+    /// another pad in there, and the pin has spokes enough on another layer (KiCad leaves a
+    /// pad no spoke reaches on a layer be, and so does the checker while another layer joins
+    /// it). A wire may run over them all.
+    pub spared: Vec<(ItemId, usize)>,
 }
 
 /// For each layer, the sides of the board's own obstacles and of its rule areas that the
@@ -732,11 +737,13 @@ impl Space {
         // A pad joined to its pour by spokes must keep some of them whole. As many as must stay
         // are obstacles of the pour's net: those with the most room about them, so that the
         // ones a wire may cut are the ones in the narrow places wires need. The rest are left
-        // out, and the checker counts what is cut.
+        // out, and the checker counts what is cut. A pin with a hole whose spokes on this layer
+        // shut another pad in is given none here ([`Spots::spared`]): another layer joins it.
         let mut spokes: HashMap<ItemId, Vec<(ItemId, &board::Item)>> = HashMap::new();
         for (id, item) in board.items() {
             if let Kind::Spoke { pad, .. } = item.kind
                 && item.on(layer)
+                && !spots.spared.contains(&(pad, layer))
             {
                 spokes.entry(pad).or_default().push((id, item));
             }

@@ -469,3 +469,36 @@ fn the_pour_keeps_only_the_hole_clearance_from_a_hole_with_no_copper_round_it() 
     assert!(tips(&b).contains(&(11.25, 10.0)), "{:?}", tips(&b));
 }
 
+
+#[test]
+fn a_pin_with_a_hole_may_lose_every_spoke_on_one_side_while_the_other_joins_it() {
+    // Net A's zone on both sides, and a pin with a hole joined to each by four spokes. A wire
+    // close round the pin on the back cuts every spoke there: KiCad leaves a pad no spoke
+    // reaches on a layer alone, and the front still joins it (ESP-PROG-Adapter's J1, where the
+    // designer runs a signal round pin 1 on the back).
+    let back = "(zone (net 1) (net_name \"A\") (layer \"B.Cu\") (hatch edge 0.5) (connect_pads (clearance 0.2)) (min_thickness 0.25)
+           (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5))
+           (polygon (pts (xy 1 1) (xy 19 1) (xy 19 19) (xy 1 19))))";
+    let mut b = board(HOLED, "", back, "");
+    assert_eq!(tips(&b).len(), 8, "four spokes a side");
+    let clearance = |b: &Board, id| check_item(b, id).iter().filter(|v| v.rule == Rule::Clearance).count();
+    let on = |b: &mut Board, layer: u64, (x0, y0): (f64, f64), (x1, y1): (f64, f64)| {
+        let id = other(b, (x0, y0), (x1, y1));
+        let mut item = b.item(id).unwrap().clone();
+        b.remove(id);
+        item.layers = layer;
+        b.insert(item)
+    };
+    let sides = [((11.5, 2.0), (11.5, 18.0)), ((8.5, 2.0), (8.5, 18.0)), ((2.0, 11.5), (18.0, 11.5)), ((2.0, 8.5), (18.0, 8.5))];
+    let round: Vec<ItemId> = sides.iter().map(|&(a, z)| on(&mut b, 2, a, z)).collect();
+    assert!(round.iter().all(|&t| clearance(&b, t) == 0), "none left on the back, four on the front");
+    // The front may spare two of its four and no more: nothing else would join the pin.
+    let first = on(&mut b, 1, sides[0].0, sides[0].1);
+    let second = on(&mut b, 1, sides[1].0, sides[1].1);
+    assert_eq!((clearance(&b, first), clearance(&b, second)), (0, 0), "two left on the front");
+    let third = on(&mut b, 1, sides[2].0, sides[2].1);
+    assert_eq!(clearance(&b, third), 1, "one left on the front, and none on the back");
+    assert!(round.iter().all(|&t| clearance(&b, t) > 0), "one spoke on the front does not join the pin for the back");
+    let fourth = on(&mut b, 1, sides[3].0, sides[3].1);
+    assert_eq!(clearance(&b, fourth), 1, "no spoke left on either side");
+}

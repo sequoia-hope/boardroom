@@ -179,3 +179,54 @@ fn no_via_is_put_where_no_other_layer_has_the_nets_pour() {
     let (_, drawing) = wire::route(&board);
     assert!(drawing.stitches.is_empty(), "{:?}", drawing.stitches);
 }
+
+/// A pin with a hole, 1 mm square.
+fn pin(reference: &str, x: f64, y: f64, n: usize, net: &str) -> String {
+    format!("(footprint \"P\" (layer \"F.Cu\") (at {x} {y}) (property \"Reference\" \"{reference}\") (pad \"1\" thru_hole rect (at 0 0) (size 1 1) (drill 0.6) (layers \"*.Cu\" \"*.Mask\") (net {n} \"{net}\")))")
+}
+
+#[test]
+fn a_wire_runs_over_a_pins_spokes_on_one_side_where_the_other_side_joins_it() {
+    // A 1.27 mm header close under the board's edge, ground poured on both sides. X's pin is
+    // between two ground pins with a row of other nets' pins below: its one way out is up,
+    // and then over a ground pin's spokes, which reach too near the edge to pass beyond. On
+    // one side of the board that is allowed: the pin keeps its two spokes on the other
+    // (ESP-PROG-Adapter's J3, where the designer does just this on the back).
+    let parts = [
+        pin("G1", 8.73, 10.0, 1, "GND"),
+        pin("S", 10.0, 10.0, 2, "X"),
+        pin("G2", 11.27, 10.0, 1, "GND"),
+        pin("P", 8.73, 11.27, 3, "P"),
+        pin("Q", 10.0, 11.27, 4, "Q"),
+        pin("R", 11.27, 11.27, 5, "R"),
+        pin("T", 7.0, 13.0, 2, "X"),
+        pin("G3", 15.0, 15.0, 1, "GND"),
+    ]
+    .concat();
+    let zone = |layer: &str| {
+        format!(
+            "(zone (net 1) (net_name \"GND\") (layer \"{layer}\") (hatch edge 0.5) (connect_pads (clearance 0.2)) (min_thickness 0.25)
+               (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5))
+               (polygon (pts (xy 0.5 8.5) (xy 19.5 8.5) (xy 19.5 19.5) (xy 0.5 19.5))))"
+        )
+    };
+    let text = format!(
+        "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
+         (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
+         (net 0 \"\") (net 1 \"GND\") (net 2 \"X\") (net 3 \"P\") (net 4 \"Q\") (net 5 \"R\")
+         (gr_rect (start 0 8.3) (end 20 20) (layer \"Edge.Cuts\") (width 0.1))
+         {parts}
+         {}
+         {})",
+        zone("F.Cu"),
+        zone("B.Cu")
+    );
+    let (pcb, copper) = kicad::parse_board(&text).unwrap();
+    let board = Board::new(&pcb, &copper, kicad::Rules::parse(RULES).unwrap());
+    let (plan, drawing) = wire::route(&board);
+    assert!(plan.left.is_empty(), "{:?}", plan.left);
+    assert!(drawing.undrawn.is_empty(), "{:?}", drawing.undrawn.iter().map(|u| &u.why).collect::<Vec<_>>());
+    assert_eq!(wire::open(&board, &plan, &drawing), 0);
+    assert_eq!(wire::amiss(&board, &plan, &drawing), (0, 0));
+    assert!(drawing.wires.iter().all(|w| w.layer == 1), "X's wire is on the back, where no spoke is kept");
+}

@@ -306,43 +306,53 @@ pub(crate) fn cut(board: &Board, sid: ItemId, spoke: &Item, layer: usize, but: O
 /// Whether cutting spoke `sid` leaves its pad fewer whole spokes on `layer` than it needs,
 /// the others cut by other nets' tracks and vias but `id`. A track of the pad's net that leaves
 /// it counts as a spoke, as KiCad counts one that ends in the pour (kicad-cli 9.0.8: a pad with
-/// one spoke and its own track out of it is not starved). It skips a pad no spoke reaches at all,
-/// which a via of its net standing on it joins.
+/// one spoke and its own track out of it is not starved). It skips a pad no spoke reaches at all
+/// on the layer, as KiCad does, where the pad is joined all the same: by a via of its net
+/// standing on it, or by spokes enough on another layer (a pin with a hole, which a designer
+/// runs a wire close round on one side and leaves joined on the other).
 fn spokes_left(board: &Board, id: ItemId, sid: ItemId, spoke: &Item, layer: usize) -> bool {
     let Kind::Spoke { pad, need, .. } = spoke.kind else { return false };
     // A pad's spokes all start at its centre, so all of them meet its box.
     let (Some(pad_box), Some(pad_item)) = (board.bbox(pad), board.item(pad)) else { return true };
-    let in_a_pad = |p: Point| {
+    let in_a_pad = |layer: usize, p: Point| {
         board.near(layer, BBox::of([p, p])).into_iter().filter_map(|q| board.item(q)).any(|q| matches!(q.kind, Kind::Pad { .. }) && q.on(layer) && q.shape.contains(p))
     };
-    let own_tracks = board
-        .near(layer, pad_box)
-        .into_iter()
-        .filter_map(|t| board.item(t))
-        .filter(|t| t.kind == Kind::Track && t.net == pad_item.net && t.on(layer))
-        .filter(|t| match t.shape {
-            Shape::Capsule { a, b, .. } => match (pad_item.shape.contains(a), pad_item.shape.contains(b)) {
-                (true, false) => !in_a_pad(b),
-                (false, true) => !in_a_pad(a),
-                _ => false,
-            },
-            Shape::Polygon(_) => false,
-        })
-        .count();
-    let whole = board
-        .near(layer, pad_box)
-        .into_iter()
-        .filter(|&s| s != sid)
-        .filter_map(|s| board.item(s).map(|it| (s, it)))
-        .filter(|(_, it)| matches!(it.kind, Kind::Spoke { pad: p, .. } if p == pad) && it.on(layer))
-        .filter(|&(s, it)| !cut(board, s, it, layer, Some(id)))
-        .count();
-    // KiCad leaves a pad no spoke reaches alone: one a via of its net stands on is joined.
+    let own_tracks = |layer: usize| {
+        board
+            .near(layer, pad_box)
+            .into_iter()
+            .filter_map(|t| board.item(t))
+            .filter(|t| t.kind == Kind::Track && t.net == pad_item.net && t.on(layer))
+            .filter(|t| match t.shape {
+                Shape::Capsule { a, b, .. } => match (pad_item.shape.contains(a), pad_item.shape.contains(b)) {
+                    (true, false) => !in_a_pad(layer, b),
+                    (false, true) => !in_a_pad(layer, a),
+                    _ => false,
+                },
+                Shape::Polygon(_) => false,
+            })
+            .count()
+    };
+    // The pad's spokes on a layer that no other net's copper cuts, `sid` and what `but` cuts aside.
+    let whole = |layer: usize, but: Option<ItemId>| {
+        board
+            .near(layer, pad_box)
+            .into_iter()
+            .filter(|&s| s != sid)
+            .filter_map(|s| board.item(s).map(|it| (s, it)))
+            .filter(|(_, it)| matches!(it.kind, Kind::Spoke { pad: p, .. } if p == pad) && it.on(layer))
+            .filter(|&(s, it)| !cut(board, s, it, layer, but))
+            .count()
+    };
     let via_on_it = || {
         board.near(layer, pad_box).into_iter().filter_map(|v| board.item(v)).any(|v| v.kind == Kind::Via && v.net == pad_item.net && v.shape.gap_within(&pad_item.shape, 0.0) == 0.0)
     };
-    let left = whole + own_tracks;
-    left < need as usize && !(left == 0 && via_on_it())
+    let elsewhere = || (0..board.layers.len()).any(|l| l != layer && pad_item.on(l) && whole(l, None) + own_tracks(l) >= need as usize);
+    let tracks = own_tracks(layer);
+    if whole(layer, None) + tracks == 0 && (via_on_it() || elsewhere()) {
+        return false;
+    }
+    whole(layer, Some(id)) + tracks < need as usize
 }
 
 /// With `everyone` false, pairs are taken once, from their lower id, as the whole-board check
