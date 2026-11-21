@@ -121,6 +121,25 @@ pub struct Spots {
     /// The spots that stand in a pour that must stay joined ([`Board::kept_joined`]), each with
     /// those pours by their numbers there: a via of another net there costs [`KEPT_VIA`] more.
     pub kept: std::collections::HashMap<usize, Vec<usize>>,
+    /// The sides the triangulation could not take ([`Space::new`]), found so far.
+    pub left_out: LeftOut,
+}
+
+/// For each layer, the sides of the board's own obstacles and of its rule areas that the
+/// triangulation could not take, each as whether it is a rule area's, which obstacle or area,
+/// and which side: found once, and left out of every map of the layer made after.
+/// A copy of the spots starts with none of it.
+#[derive(Debug, Default)]
+pub struct LeftOut(std::sync::Mutex<Map<usize, Vec<Side>>>);
+
+/// A side by where it lasts from one map to the next: whether it is a rule area's, which
+/// obstacle or area it is of, and which of its sides.
+type Side = (bool, usize, usize);
+
+impl Clone for LeftOut {
+    fn clone(&self) -> LeftOut {
+        LeftOut::default()
+    }
 }
 
 /// What a via of a net not let cut it costs in a pour that must stay joined, beyond any other
@@ -505,6 +524,30 @@ fn centre(poly: &[P]) -> P {
     [poly.iter().map(|p| p[0]).sum::<f64>() / n, poly.iter().map(|p| p[1]).sum::<f64>() / n]
 }
 
+/// How many sides at most are left out of a layer's map before its fault is taken for another.
+const LEFT_OUT: usize = 32;
+
+/// `work`, and what it panicked with if it did, without the panic's message printed: for work
+/// whose panic is expected and answered. Other threads' panics are printed as ever.
+fn quietly<T>(work: impl FnOnce() -> T) -> std::thread::Result<T> {
+    thread_local! {
+        static QUIET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    static HOOK: std::sync::Once = std::sync::Once::new();
+    HOOK.call_once(|| {
+        let before = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if !QUIET.with(|q| q.get()) {
+                before(info);
+            }
+        }));
+    });
+    QUIET.with(|q| q.set(true));
+    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work));
+    QUIET.with(|q| q.set(false));
+    out
+}
+
 impl Space {
     /// The room on `layer` of `board`, tracks and vias that are not locked left out (strip the
     /// board first: see [`crate::strip`]), with the plan's `vias` (each a middle and a net) as
@@ -639,59 +682,82 @@ impl Space {
         }
 
         // Corners, one vertex per place (to a nanometre), and each polygon's sides as constraints.
-        let mut cdt = ConstrainedDelaunayTriangulation::<Point2<f64>>::new();
-        let mut at: HashMap<(i64, i64), spade::handles::FixedVertexHandle> = HashMap::new();
-        let mut owner: HashMap<(i64, i64), usize> = HashMap::new();
+        // The triangulation cannot take every side: it stops (a panic of its own) on some that
+        // run along or end on another's, as where a pad is drawn as shapes that overlap with
+        // sides in common, or an outline runs back along itself (eternal-keypad, urchin and
+        // KLOR, of the 631 gate boards, 2026-11-20). The map is then made again without that
+        // side, which is no wall in it: the checker still refuses a wire across it.
         let key = |p: P| ((p[0] * 1e6).round() as i64, (p[1] * 1e6).round() as i64);
-        for (k, o) in obstacles.iter().enumerate() {
-            let hs: Vec<_> = o
-                .poly
-                .iter()
-                .filter_map(|&p| {
-                    owner.entry(key(p)).or_insert(k);
-                    match at.get(&key(p)) {
-                        Some(&h) => Some(h),
-                        None => {
-                            let h = cdt.insert(Point2::new(p[0], p[1])).ok()?;
-                            at.insert(key(p), h);
-                            Some(h)
+        let bars_here: Vec<usize> = (0..spots.bars.len().min(64)).filter(|&k| !spots.bars[k].nets[layer].is_empty()).collect();
+        type Made = (ConstrainedDelaunayTriangulation<Point2<f64>>, HashMap<(i64, i64), usize>, HashMap<(i64, i64), u64>);
+        // A side of the board's own keeps its place from one map to the next, and is left out
+        // from the first: a via's does not, and is found again.
+        let lasting = |(k, i): (usize, usize)| if k < first_site { Some((false, k, i)) } else { k.checked_sub(obstacles.len()).map(|b| (true, b, i)) };
+        let known: Vec<Side> = spots.left_out.0.lock().unwrap_or_else(|e| e.into_inner()).get(&layer).cloned().unwrap_or_default();
+        let mut left_out: Vec<(usize, usize)> = known.iter().map(|&(bar, k, i)| (if bar { obstacles.len() + k } else { k }, i)).collect();
+        let (cdt, owner, bar_at) = loop {
+            // The side being added: an obstacle's (or, past the obstacles, a rule area's) and
+            // which of its sides.
+            let adding = std::cell::Cell::new((usize::MAX, 0));
+            let made = quietly(|| -> Option<Made> {
+                let mut cdt = ConstrainedDelaunayTriangulation::<Point2<f64>>::new();
+                let mut at: HashMap<(i64, i64), spade::handles::FixedVertexHandle> = HashMap::new();
+                let mut owner: HashMap<(i64, i64), usize> = HashMap::new();
+                let mut bar_at: HashMap<(i64, i64), u64> = HashMap::new();
+                // The outlines of rule areas that bar some nets here come after the obstacles,
+                // as sides of triangles, so that each triangle is wholly in or out of each.
+                // Their corners belong to no obstacle and nothing keeps a distance from them.
+                let polys = obstacles.iter().map(|o| &o.poly).chain(bars_here.iter().map(|&k| &spots.bars[k].poly));
+                for (k, poly) in polys.enumerate() {
+                    let mut hs = Vec::with_capacity(poly.len());
+                    for &p in poly.iter() {
+                        if k < obstacles.len() {
+                            owner.entry(key(p)).or_insert(k);
+                        } else {
+                            *bar_at.entry(key(p)).or_default() |= 1 << bars_here[k - obstacles.len()];
+                        }
+                        let h = match at.get(&key(p)) {
+                            Some(&h) => Some(h),
+                            None => cdt.insert(Point2::new(p[0], p[1])).ok().inspect(|&h| _ = at.insert(key(p), h)),
+                        };
+                        hs.extend(h);
+                    }
+                    for i in 0..hs.len() {
+                        let (a, b) = (hs[i], hs[(i + 1) % hs.len()]);
+                        if a != b && !left_out.contains(&(k, i)) {
+                            adding.set((k, i));
+                            cdt.add_constraint_and_split(a, b, |p| p);
                         }
                     }
-                })
-                .collect();
-            for i in 0..hs.len() {
-                let (a, b) = (hs[i], hs[(i + 1) % hs.len()]);
-                if a != b {
-                    cdt.add_constraint_and_split(a, b, |p| p);
                 }
-            }
-        }
-        // The outlines of rule areas that bar some nets here, as sides of triangles, so that
-        // each triangle is wholly in or out of each. Their corners belong to no obstacle and
-        // nothing keeps a distance from them.
-        let bars_here: Vec<usize> = (0..spots.bars.len().min(64)).filter(|&k| !spots.bars[k].nets[layer].is_empty()).collect();
-        let mut bar_at: HashMap<(i64, i64), u64> = HashMap::new();
-        for &k in &bars_here {
-            for &p in &spots.bars[k].poly {
-                *bar_at.entry(key(p)).or_default() |= 1 << k;
-            }
-            let hs: Vec<_> = spots.bars[k]
-                .poly
-                .iter()
-                .filter_map(|&p| match at.get(&key(p)) {
-                    Some(&h) => Some(h),
-                    None => {
-                        let h = cdt.insert(Point2::new(p[0], p[1])).ok()?;
-                        at.insert(key(p), h);
-                        Some(h)
+                Some((cdt, owner, bar_at))
+            });
+            match made {
+                Ok(Some(map)) => break map,
+                Ok(None) => unreachable!(),
+                Err(panic) => {
+                    // The same side twice, or too many: not this fault.
+                    if adding.get().0 == usize::MAX || left_out.contains(&adding.get()) || left_out.len() >= LEFT_OUT {
+                        std::panic::resume_unwind(panic);
                     }
-                })
-                .collect();
-            for i in 0..hs.len() {
-                let (a, b) = (hs[i], hs[(i + 1) % hs.len()]);
-                if a != b {
-                    cdt.add_constraint_and_split(a, b, |p| p);
+                    left_out.push(adding.get());
                 }
+            }
+        };
+        let found: Vec<Side> = left_out.iter().filter_map(|&side| lasting(side)).filter(|side| !known.contains(side)).collect();
+        if !found.is_empty() {
+            let mut all = spots.left_out.0.lock().unwrap_or_else(|e| e.into_inner());
+            let of_layer = all.entry(layer).or_default();
+            let new: Vec<_> = found.into_iter().filter(|side| !of_layer.contains(side)).collect();
+            if !new.is_empty() {
+                // Said once for a layer, however many plans of the board are made.
+                static SAID: std::sync::Mutex<Vec<(String, usize)>> = std::sync::Mutex::new(Vec::new());
+                let mut said = SAID.lock().unwrap_or_else(|e| e.into_inner());
+                if !said.contains(&(board.layers[layer].clone(), new.len())) {
+                    said.push((board.layers[layer].clone(), new.len()));
+                    eprintln!("plan: {} left out of the map of {}: the triangulation could not take {}", if new.len() == 1 { "a side".to_string() } else { format!("{} sides", new.len()) }, board.layers[layer], if new.len() == 1 { "it" } else { "them" });
+                }
+                of_layer.extend(new);
             }
         }
 
