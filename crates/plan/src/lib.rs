@@ -202,11 +202,13 @@ impl Want {
 }
 
 /// The radius and drill radius of a via of `net`, nm: its class's (net 0: the default class's),
-/// no less than the board's least. A power class's via is bigger than a signal's.
+/// no less than the board's least, and with no less copper round its hole than the board's
+/// least ring (a class's 0.45 mm via drilled 0.3 mm, on a board whose least ring is 0.1 mm,
+/// is 0.5 mm across). A power class's via is bigger than a signal's.
 pub fn via_size(board: &Board, net: u32) -> (i64, i64) {
     let class = board.rules.class_of(board.net_name(net)).or_else(|| board.rules.class_of(""));
-    let d = class.as_ref().map_or(0.0, |c| c.via_diameter).max(board.rules.min_via_diameter);
     let drill = class.as_ref().map_or(0.0, |c| c.via_drill).max(board.rules.min_via_drill);
+    let d = class.as_ref().map_or(0.0, |c| c.via_diameter).max(board.rules.min_via_diameter).max(drill + 2.0 * board.rules.min_via_annular_width);
     (board::nm(d) / 2, board::nm(drill) / 2)
 }
 

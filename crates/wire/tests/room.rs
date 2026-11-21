@@ -8,7 +8,8 @@ use board::Board;
 use plan::space::{Space, Spots, VIA_CORNER};
 
 /// A 20 by 20 mm board of two layers with `parts` on it: tracks 0.1 mm wide and 0.1 mm
-/// apart, vias 0.3 mm across with a 0.15 mm hole, and copper 0.2 mm from any hole.
+/// apart, vias 0.3 mm across with a 0.15 mm hole (a ring of 0.075 mm, the least the board
+/// allows), and copper 0.2 mm from any hole.
 fn board(parts: &str) -> Board {
     let text = format!(
         "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
@@ -17,7 +18,7 @@ fn board(parts: &str) -> Board {
          (gr_rect (start 0 0) (end 20 20) (layer \"Edge.Cuts\") (width 0.1))
          {parts})"
     );
-    let rules = r#"{"board":{"design_settings":{"rules":{"min_clearance":0.1,"min_copper_edge_clearance":0.3,"min_track_width":0.1,"min_hole_clearance":0.2,"min_hole_to_hole":0.25,"min_via_diameter":0.2,"min_through_hole_diameter":0.15}}},
+    let rules = r#"{"board":{"design_settings":{"rules":{"min_clearance":0.1,"min_copper_edge_clearance":0.3,"min_track_width":0.1,"min_hole_clearance":0.2,"min_hole_to_hole":0.25,"min_via_diameter":0.2,"min_through_hole_diameter":0.15,"min_via_annular_width":0.075}}},
             "net_settings":{"classes":[{"name":"Default","clearance":0.1,"track_width":0.1,"via_diameter":0.3,"via_drill":0.15}]}}"#;
     let (pcb, copper) = kicad::parse_board(&text).unwrap();
     Board::new(&pcb, &copper, kicad::Rules::parse(rules).unwrap())

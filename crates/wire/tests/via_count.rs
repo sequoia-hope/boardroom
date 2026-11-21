@@ -80,6 +80,26 @@ fn a_via_and_wires_left_joining_nothing_are_taken_out() {
 }
 
 #[test]
+fn a_via_has_the_boards_least_ring_round_its_hole() {
+    // A class whose via leaves 0.075 mm round its hole (0.45 mm drilled 0.3 mm: old KiCad
+    // files' own), on a board whose least ring is 0.1 mm: KiCad faults every such via
+    // (annular_width), so the via is 0.5 mm across.
+    let text = "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
+         (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
+         (net 0 \"\") (net 1 \"A\")
+         (gr_rect (start 0 0) (end 30 20) (layer \"Edge.Cuts\") (width 0.1)))";
+    let rules = |ring: &str| {
+        let rules = r#"{"board":{"design_settings":{"rules":{"min_clearance":0.2,"min_track_width":0.25,"min_via_diameter":0.45,"min_through_hole_diameter":0.3,"min_via_annular_width":RING}}},
+            "net_settings":{"classes":[{"name":"Default","clearance":0.2,"track_width":0.25,"via_diameter":0.45,"via_drill":0.3}]}}"#.replace("RING", ring);
+        let (pcb, copper) = kicad::parse_board(text).unwrap();
+        Board::new(&pcb, &copper, kicad::Rules::parse(&rules).unwrap())
+    };
+    assert_eq!(plan::via_size(&rules("0.1"), 1), (250_000, 150_000));
+    // A ring the class's via has already leaves it as it is.
+    assert_eq!(plan::via_size(&rules("0.05"), 1), (225_000, 150_000));
+}
+
+#[test]
 fn a_via_is_its_nets_class_size() {
     // A in the POWER class: its two vias are that class's, 1.2 mm, not the default's 0.8 mm.
     let board = board_classed("", r#"{"A":"POWER"}"#);
