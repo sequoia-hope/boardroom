@@ -383,14 +383,146 @@ const AREA_KEEP: f64 = 0.01;
 const FRAME: i64 = 2_000_000;
 
 /// The loops that bound the room on a board: its outline with its cut-outs, or, where its
-/// edge is not drawn as a closed loop, the least convex shape round every line of the edge
-/// and everything on the board (a box round it all, and a little more, where no edge is drawn
-/// at all). Without it the room would be what lies between the outermost pads of each layer,
-/// and a layer with pads in one row would have none.
+/// edge is not drawn as loops the board model could take, what of it does close
+/// ([`closed_loops`]) within the least convex shape round every line of the edge and
+/// everything on the board (a box round it all, and a little more, where no edge is drawn at
+/// all). Without it the room would be what lies between the outermost pads of each layer, and
+/// a layer with pads in one row would have none.
 pub fn bounds(board: &Board) -> Vec<Vec<Point>> {
     if !board.outline.is_empty() {
         return board.outline.clone();
     }
+    let hull = hull(board);
+    // The edge is drawn, but not as loops the board model could take: an end a little short
+    // of the next line's, or a place where more than two lines meet, and it has none at all.
+    // What does close is taken all the same: an outline, where one closes round most of the
+    // board, and the cut-outs inside it (pinci's seventeen switch cut-outs, 2026-11-20: the
+    // outline branches at one corner, and with no loop the plan ran its strands across
+    // every cut-out for the checker to refuse).
+    let area = |l: &[Point]| (0..l.len()).map(|i| l[i].x as f64 * l[(i + 1) % l.len()].y as f64 - l[(i + 1) % l.len()].x as f64 * l[i].y as f64).sum::<f64>().abs() / 2.0;
+    let Some(around) = hull.first() else { return hull };
+    // An edge drawn as thousands of short lines is as many corners in the map of every layer
+    // (ULK, 2026-11-20: 5,962 of them, and the board no longer routed in its time).
+    let fewer = |l: Vec<Point>| -> Vec<Point> { simpler(&l.iter().map(|&p| mm(p)).collect::<Vec<P>>(), FINE).iter().map(|p| Point::new((p[0] * 1e6).round() as i64, (p[1] * 1e6).round() as i64)).collect() };
+    let mut closed: Vec<(f64, Vec<Point>)> = closed_loops(board).into_iter().map(fewer).map(|l| (area(&l), l)).collect();
+    closed.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let whole = area(around);
+    let outer = match closed.first() {
+        Some((a, _)) if *a >= OUTLINE_SHARE * whole => closed.remove(0).1,
+        _ => around.clone(),
+    };
+    // A cut-out has no pad in it: a loop with pads in it is a board of its own, one of a
+    // panel's or a part of this one drawn round, and its pads are to be reached.
+    let pads: Vec<Point> = board.items().filter(|(_, i)| matches!(i.kind, Kind::Pad { .. })).filter_map(|(id, _)| board.bbox(id)).map(|b| Point::new((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2)).collect();
+    let cut_out = |l: &[Point]| l.iter().all(|&p| board::inside(p, &outer)) && !pads.iter().any(|&p| board::inside(p, l));
+    let cuts: Vec<Vec<Point>> = closed.into_iter().map(|(_, l)| l).filter(|l| cut_out(l)).collect();
+    std::iter::once(outer).chain(cuts).collect()
+}
+
+/// How much of the area round everything on the board a closed loop of its edge must take up
+/// to be the board's outline.
+const OUTLINE_SHARE: f64 = 0.5;
+
+/// How near each other two loose ends of edge lines are taken for one place, nm: nearer than
+/// any copper could pass between.
+const SAME_PLACE: i64 = 100_000;
+
+/// The loops the lines of the board's edge close into, each as its corners: a set of lines
+/// joined end to end, two at every end, a loose end (one no other line ends at) taken as one
+/// place with every end within [`SAME_PLACE`] of it. Lines that do not close, or branch, are
+/// in none.
+pub fn closed_loops(board: &Board) -> Vec<Vec<Point>> {
+    let mut places: Vec<Point> = Vec::new();
+    let mut known: HashMap<(i64, i64), usize> = HashMap::new();
+    let mut place = |p: Point| {
+        *known.entry((p.x, p.y)).or_insert_with(|| {
+            places.push(p);
+            places.len() - 1
+        })
+    };
+    let tidy = |mut lines: Vec<(usize, usize)>| {
+        lines.retain(|(a, b)| a != b);
+        for l in &mut lines {
+            *l = (l.0.min(l.1), l.0.max(l.1));
+        }
+        lines.sort_unstable();
+        lines.dedup();
+        lines
+    };
+    let mut lines = tidy(board.outline_runs.iter().flat_map(|run| run.windows(2)).map(|w| (place(w[0]), place(w[1]))).collect());
+    // A loose end is one place with every end within reach of it: an arc's end computed a
+    // hair off the line it meets, a sliver of a line between the two, a line run a hair past
+    // a corner. Ends that are not loose stay apart from each other however near: a curve
+    // drawn as many short lines keeps its corners.
+    let mut ends = vec![0usize; places.len()];
+    for &(a, b) in &lines {
+        ends[a] += 1;
+        ends[b] += 1;
+    }
+    let cell = |p: Point| (p.x.div_euclid(SAME_PLACE), p.y.div_euclid(SAME_PLACE));
+    let mut near: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (k, &p) in places.iter().enumerate() {
+        near.entry(cell(p)).or_default().push(k);
+    }
+    let mut as_one: Vec<usize> = (0..places.len()).collect();
+    fn first(as_one: &mut [usize], mut k: usize) -> usize {
+        while as_one[k] != k {
+            as_one[k] = as_one[as_one[k]];
+            k = as_one[k];
+        }
+        k
+    }
+    for a in (0..places.len()).filter(|&k| ends[k] == 1) {
+        let (cx, cy) = cell(places[a]);
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for &b in near.get(&(cx + dx, cy + dy)).into_iter().flatten() {
+                    if b != a && places[a].distance(places[b]) <= SAME_PLACE as f64 {
+                        let (x, y) = (first(&mut as_one, a), first(&mut as_one, b));
+                        as_one[x.max(y)] = x.min(y);
+                    }
+                }
+            }
+        }
+    }
+    let as_one: Vec<usize> = (0..places.len()).map(|k| first(&mut as_one, k)).collect();
+    lines = tidy(lines.into_iter().map(|(a, b)| (as_one[a], as_one[b])).collect());
+    let mut at: Vec<Vec<usize>> = vec![Vec::new(); places.len()];
+    for &(a, b) in &lines {
+        at[a].push(b);
+        at[b].push(a);
+    }
+    let mut seen = vec![false; places.len()];
+    let mut loops = Vec::new();
+    for start in 0..places.len() {
+        if seen[start] || at[start].len() != 2 {
+            continue;
+        }
+        // Round from one place to the next, while each has two lines, back to the first.
+        let (mut walk, mut from, mut here) = (vec![start], start, at[start][0]);
+        seen[start] = true;
+        let closes = loop {
+            if here == start {
+                break true;
+            }
+            if seen[here] || at[here].len() != 2 {
+                break false;
+            }
+            seen[here] = true;
+            walk.push(here);
+            let next = if at[here][0] == from { at[here][1] } else { at[here][0] };
+            (from, here) = (here, next);
+        };
+        if closes && walk.len() >= 3 {
+            loops.push(walk.into_iter().map(|k| places[k]).collect());
+        }
+    }
+    loops
+}
+
+/// The least convex shape round every line of the board's edge and everything on the board (a
+/// box round it all, and a little more, where no edge is drawn at all).
+fn hull(board: &Board) -> Vec<Vec<Point>> {
     let corners = |b: board::BBox| [b.min, Point::new(b.max.x, b.min.y), b.max, Point::new(b.min.x, b.max.y)];
     let things = board.items().filter_map(|(id, _)| board.bbox(id));
     if board.outline_edges.is_empty() {

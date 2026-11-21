@@ -306,6 +306,9 @@ pub struct Board {
     /// edge-clearance checks: the clearance copper keeps from that edge, the board's or a custom
     /// rule's for its primitive's shape.
     pub outline_edges: Vec<(Point, Point, BBox, Nm)>,
+    /// Each primitive drawn on Edge.Cuts as one run of points, an arc or circle followed once:
+    /// what the edge is made of where it does not close into [`Board::outline`].
+    pub outline_runs: Vec<Vec<Point>>,
     pub rules: Rules,
     /// Plane layers, one bit per index into `layers`: whole layers given to one net's pour,
     /// which no track crosses, other nets' vias pass through and which joins its net.
@@ -549,6 +552,7 @@ impl Board {
             blocks: blocks.clone(),
             outline: Vec::new(),
             outline_edges: Vec::new(),
+            outline_runs: Vec::new(),
             rules,
             planes: 0,
             mask_openings: HashMap::new(),
@@ -620,10 +624,13 @@ impl Board {
             let edge = crate::custom::Thing::Edge { shape, layer: if k < edge_cuts { "Edge.Cuts" } else { "Margin" } };
             let copper = crate::custom::Thing::Copper(&board);
             let clearance = (0..board.layers.len()).map(|l| board.rule_min("edge_clearance", &copper, Some(&edge), l, implicit)).max().unwrap_or(implicit);
-            for line in edge_polylines(&p.shape, p.width) {
+            for (n, line) in edge_polylines(&p.shape, p.width).into_iter().enumerate() {
                 let points: Vec<Point> = line.into_iter().map(Point::from_m).collect();
                 for w in points.windows(2) {
                     board.outline_edges.push((w[0], w[1], BBox::of([w[0], w[1]]), clearance));
+                }
+                if n == 0 && k < edge_cuts {
+                    board.outline_runs.push(points);
                 }
             }
         }
