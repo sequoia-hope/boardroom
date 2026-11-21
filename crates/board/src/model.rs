@@ -340,6 +340,9 @@ pub struct Board {
     /// gap the pour leaves round the pad: such a pad is joined to its pour only by its
     /// [`Kind::Spoke`] items.
     pub relief_pads: HashMap<(ItemId, usize), Nm>,
+    /// Every spoke a relief pad could have, and what was made of it as the board was read
+    /// ([`crate::SpokeTrial`]).
+    pub spoke_trials: Vec<crate::SpokeTrial>,
     /// Slotted holes: the two ends of a slot's centre line, its radius the item's `hole`'s. A
     /// slot is longer than the circle `hole` holds; [`Board::hole_shape`] gives all of it.
     pub hole_ends: HashMap<ItemId, (Point, Point)>,
@@ -404,7 +407,7 @@ pub struct Board {
     pub(crate) names_nets: bool,
     /// Per net number, whether a custom rule allows it no vias (see [`Board::no_vias`]).
     pub(crate) via_free: Vec<bool>,
-    min_clearance_nm: Nm,
+    pub(crate) min_clearance_nm: Nm,
     /// The checks' limits, worked out once from the rules and the pads' openings and clearances,
     /// which only [`Board::new`] sets: a check of one item no longer walks every pad.
     pub(crate) limits: crate::check::Limits,
@@ -557,6 +560,7 @@ impl Board {
             pad_zone_connect: HashMap::new(),
             zones_without_pads: copper.zones.iter().enumerate().filter(|(_, z)| z.no_pads).map(|(i, _)| i).collect(),
             relief_pads: Default::default(),
+            spoke_trials: Vec::new(),
             hole_ends: HashMap::new(),
             ties: HashMap::new(),
             keepout_holes: HashMap::new(),

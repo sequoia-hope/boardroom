@@ -11,13 +11,18 @@ const RULES: &str = r#"{"board":{"design_settings":{"rules":{"min_clearance":0.2
 /// Net A's zone over F.Cu, with a 0.5 mm thermal gap and spokes, 0.25 mm minimum width and
 /// 0.2 mm clearance, unfilled; `pad` and `extra` inside it.
 fn board(pad: &str, connect: &str, extra: &str, custom: &str) -> Board {
+    board_keeping(0.2, pad, connect, extra, custom)
+}
+
+/// The same, with the zone keeping `clearance` mm from other nets.
+fn board_keeping(clearance: f64, pad: &str, connect: &str, extra: &str, custom: &str) -> Board {
     let text = format!(
         "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
          (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
          (net 0 \"\") (net 1 \"A\") (net 2 \"B\")
          (gr_rect (start 0 0) (end 20 20) (layer \"Edge.Cuts\") (width 0.1))
          (footprint \"P\" (layer \"F.Cu\") (at 10 10) (property \"Reference\" \"U1\") {pad})
-         (zone (net 1) (net_name \"A\") (layer \"F.Cu\") (hatch edge 0.5) (connect_pads {connect} (clearance 0.2)) (min_thickness 0.25)
+         (zone (net 1) (net_name \"A\") (layer \"F.Cu\") (hatch edge 0.5) (connect_pads {connect} (clearance {clearance})) (min_thickness 0.25)
            (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5))
            (polygon (pts (xy 1 1) (xy 19 1) (xy 19 19) (xy 1 19))))
          {extra})"
@@ -395,3 +400,72 @@ fn a_bridge_cut_at_one_pads_end_is_cut_for_the_other_pad_too() {
     let clear = other(&mut b, (10.7, 11.12), (11.2, 11.12));
     assert!(check_item(&b, clear).iter().all(|v| v.rule != Rule::Clearance));
 }
+
+
+#[test]
+fn a_neighbour_that_takes_a_corner_of_the_land_leaves_the_spoke() {
+    // Net B's pad 0.13 mm from the far corner of the +x spoke's land, nearer than the zone's
+    // 0.2 mm, and 0.15 mm from the corner of its middle strip: but 0.32 mm from the middle of
+    // the spoke's far end, which is what KiCad's filler tests, and clear of the spoke where it
+    // crosses the gap. KiCad fills the spoke (BB-PWR-3608's P1, kicad-cli 9.0.8).
+    let corner = "(footprint \"P\" (layer \"F.Cu\") (at 11.58 10.4) (property \"Reference\" \"U2\")
+                    (pad \"1\" smd rect (at 0 0) (size 0.4 0.4) (layers \"F.Cu\") (net 2 \"B\")))";
+    let b = board(RECT, "", corner, FOUR);
+    assert!(tips(&b).contains(&(11.25, 10.0)), "{:?}", tips(&b));
+    // Nearer, over the middle of the far end, there is no pour for it to end in.
+    let over = "(footprint \"P\" (layer \"F.Cu\") (at 11.45 10.0) (property \"Reference\" \"U2\")
+                  (pad \"1\" smd rect (at 0 0) (size 0.4 0.4) (layers \"F.Cu\") (net 2 \"B\")))";
+    let b = board(RECT, "", over, FOUR);
+    assert!(!tips(&b).contains(&(11.25, 10.0)), "{:?}", tips(&b));
+}
+
+#[test]
+fn the_pour_keeps_a_pads_own_clearance_from_it_whatever_the_zones() {
+    // The zone keeps 0.5 mm from other nets, and net B's pad stands 0.42 mm from the middle
+    // of the +x spoke's far end: no pour there, no spoke. With a clearance of its own (a solder
+    // jumper's 0.05 mm; the board's least, 0.2 mm, holds under it) the pour comes up to that,
+    // and the spoke has pour to end in (the induction hob sensor's JMP1, kicad-cli 9.0.8).
+    let pad = |own: &str| {
+        format!(
+            "(footprint \"P\" (layer \"F.Cu\") (at 11.7 10) (property \"Reference\" \"U2\")
+               (pad \"1\" smd rect (at 0 0) (size 0.3 0.3) (layers \"F.Cu\") (net 2 \"B\") {own}))"
+        )
+    };
+    let b = board_keeping(0.5, RECT, "", &pad(""), FOUR);
+    assert!(!tips(&b).contains(&(11.25, 10.0)), "{:?}", tips(&b));
+    let b = board_keeping(0.5, RECT, "", &pad("(clearance 0.05)"), FOUR);
+    assert!(tips(&b).contains(&(11.25, 10.0)), "{:?}", tips(&b));
+}
+
+#[test]
+fn spokes_that_meet_are_kept_where_their_side_alone_is_taken() {
+    // A second pad of net A 1 mm right of U1's: their gaps meet, no pour lies between, and the
+    // spokes they send towards each other meet and are kept, as a bridge from pad to pad.
+    let beside = "(footprint \"P\" (layer \"F.Cu\") (at 12 10) (property \"Reference\" \"U2\")
+                    (pad \"1\" smd rect (at 0 0) (size 1 0.6) (layers \"F.Cu\") (net 1 \"A\")))";
+    let b = board(RECT, "", beside, FOUR);
+    assert!(tips(&b).contains(&(11.13, 10.0)) && tips(&b).contains(&(10.87, 10.0)), "{:?}", tips(&b));
+    // A rule area that bars pours, 4 um into the side of the two: KiCad cuts that much off
+    // them and keeps the rest (AS5043's C3, kicad-cli 9.0.8).
+    let area = "(zone (net 0) (net_name \"\") (layer \"F.Cu\") (hatch edge 0.5) (connect_pads (clearance 0)) (min_thickness 0.25)
+                  (keepout (tracks allowed) (vias allowed) (pads allowed) (copperpour not_allowed) (footprints allowed))
+                  (fill (thermal_gap 0.5) (thermal_bridge_width 0.5))
+                  (polygon (pts (xy 10.6 9) (xy 11.4 9) (xy 11.4 9.754) (xy 10.6 9.754))))";
+    let b = board(RECT, "", &format!("{beside} {area}"), FOUR);
+    assert!(tips(&b).contains(&(11.13, 10.0)) && tips(&b).contains(&(10.87, 10.0)), "{:?}", tips(&b));
+}
+
+#[test]
+fn the_pour_keeps_only_the_hole_clearance_from_a_hole_with_no_copper_round_it() {
+    // The zone keeps 0.5 mm from other nets. A pad of net B 0.8 mm across, its edge 0.43 mm
+    // from the middle of the +x spoke's far end: no pour there, no spoke. An unplated hole
+    // of the same size in the same place has no copper to keep that from, and the pour keeps
+    // the board's hole clearance from it, 0.25 mm: the spoke has pour to end in (drawduino's
+    // mounting hole beside C2, kicad-cli 9.0.8).
+    let at = |pad: &str| format!("(footprint \"H\" (layer \"F.Cu\") (at 11.75 10.55) (property \"Reference\" \"H1\") {pad})");
+    let b = board_keeping(0.5, RECT, "", &at("(pad \"1\" thru_hole circle (at 0 0) (size 0.8 0.8) (drill 0.5) (layers \"*.Cu\") (net 2 \"B\"))"), FOUR);
+    assert!(!tips(&b).contains(&(11.25, 10.0)), "{:?}", tips(&b));
+    let b = board_keeping(0.5, RECT, "", &at("(pad \"\" np_thru_hole circle (at 0 0) (size 0.8 0.8) (drill 0.8) (layers \"*.Cu\" \"*.Mask\"))"), FOUR);
+    assert!(tips(&b).contains(&(11.25, 10.0)), "{:?}", tips(&b));
+}
+

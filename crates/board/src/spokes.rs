@@ -22,12 +22,26 @@
 //! between them, the spokes they send towards each other are kept if they meet, as a bridge
 //! from pad to pad (Shift-in 32's row of ground pins: a track between two pins cuts it).
 //!
-//! From KiCad 9.0.8's filler (`zone_filler.cpp`, read 2026-11-14): a spoke is kept where the
-//! middle of its far end, past the gap by the arc error and half the zone's minimum width, is
-//! in the pour as it stands less every other net's clearance; the spoke is then added and
-//! those clearances cut out of it, so one whose side a neighbour's clearance takes is kept
-//! narrower, down to the minimum width. Every pad the zone joins by reliefs has its own gap,
-//! pads of one number too. What DRC then counts is in [`crate::Pours::starved`].
+//! From KiCad 9.0.8's filler (`zone_filler.cpp`, read 2026-11-14 and again 2026-11-20): a
+//! spoke is kept where the middle of its far end, past the gap by the arc error and half the
+//! zone's minimum width, is in the pour as it stands less every other net's clearance, pruned
+//! to the minimum width; or where it and another pad's spoke have their ends in each other.
+//! The spoke is then added and those clearances cut out of it, and the whole pruned again, so
+//! one whose side a neighbour's clearance takes is kept narrower, down to the minimum width.
+//! A pad narrower than the zone's minimum width gets no spokes. Every pad the zone joins by
+//! reliefs has its own gap, pads of one number too. And its check
+//! (`drc_test_provider_zone_connections.cpp`) counts a pad's spokes as the places the fill's
+//! outline crosses the pad's outline grown by half the gap: copper at the middle of the gap,
+//! whether or not it comes in to the pad (a spoke cut off short of its pad is counted, and
+//! joins nothing). What it then makes of them is in [`crate::Pours::starved`].
+//!
+//! So which spokes a board has before routing is asked the same way ([`Board::reserve_spokes`]):
+//! the end of each in our own fill of the board ([`crate::Pours`]), then a strip of it as wide
+//! as the minimum width clear across the gap, from the pad out: a spoke here is one that joins
+//! its pad. Each spoke a pad could have and what was made of it is kept ([`SpokeTrial`]);
+//! `bench/spokes.py` sets them beside the fills KiCad wrote. On the 631 gate boards
+//! (2026-11-20) most of what the two differ on is on a few boards with fields of through pins
+//! on plane layers, and strips of pour within a raster step of the minimum width.
 
 use std::collections::HashSet;
 
@@ -46,13 +60,42 @@ const MIN_LAND: Nm = 25_000;
 /// zone's minimum width (its filler's `spokesBox`: the gap, its arc error and half that width).
 const PAST: Nm = 5_000;
 
+/// How far off a pad's edge a spoke is looked for to see that it joins the pad.
+const BY_PAD: Nm = 20_000;
+
 /// A spoke with a pad of its net past its gap: the pad it is of, its layer, the middle of its
 /// far end, and the spoke as far as that.
 struct Facing {
     pad: ItemId,
     layer: usize,
+    trial: usize,
     tip: Point,
     stub: Shape,
+    /// The same spoke where only its middle, as wide as the zone's least width, is left.
+    slim: Shape,
+    /// What made it: the pad's centre, the spoke's turn, how far past the pad it goes, and
+    /// half its width and half the least width.
+    centre: [f64; 2],
+    angle: f64,
+    past: Nm,
+    half: Nm,
+    least: Nm,
+}
+
+/// A spoke to be asked of the pour once every pad's gap is known: which of the pads found it is for, the pad's centre and item, the spoke's turn,
+/// and the gap, land and half width it is made with.
+struct Asked {
+    found: usize,
+    /// Which of the board's [`SpokeTrial`]s it is.
+    trial: usize,
+    centre: [f64; 2],
+    angle: f64,
+    item: Item,
+    gap: Nm,
+    land: Nm,
+    half: Nm,
+    /// The spoke's own width, which may be less than the land's.
+    width: Nm,
 }
 
 /// How a zone joins a pad of its net: the pad's (or its footprint's) zone connection, else the
@@ -90,6 +133,49 @@ fn spoke_shape(c: [f64; 2], angle: f64, pad: &Shape, gap: Nm, land: Nm, half: Nm
     (rect(0.0, past + land as f64), rect(past, past + land as f64))
 }
 
+/// The part of such a spoke that crosses the gap: from the pad's edge that way to `past` beyond
+/// it, from `lo` to `hi` across its axis. In nanometres.
+fn across_gap(c: [f64; 2], angle: f64, pad: &Shape, past: Nm, lo: Nm, hi: Nm) -> Shape {
+    let (s, co) = angle.to_radians().sin_cos();
+    let along = |p: Point| (p.x as f64 - c[0] * 1e9) * co - (p.y as f64 - c[1] * 1e9) * s;
+    let reach = match pad {
+        Shape::Polygon(points) => points.iter().map(|p| along(*p)).fold(0.0, f64::max),
+        Shape::Capsule { a, b, r } => along(*a).max(along(*b)) + *r as f64,
+    };
+    let (from, to, lo, hi) = (reach * 1e-9, (reach + past as f64) * 1e-9, lo as f64 * 1e-9, hi as f64 * 1e-9);
+    Shape::Polygon([[from, lo], [to, lo], [to, hi], [from, hi]].iter().map(|&q| Point::from_m(kicad::place(c, angle, q))).collect())
+}
+
+/// One of the four spokes a pad could have to a zone on a layer, and what was made of it on
+/// the board as it was read: kept for setting beside KiCad's own fill (`bench/spokes.py`).
+#[derive(Debug, Clone)]
+pub struct SpokeTrial {
+    pub pad: ItemId,
+    pub zone: usize,
+    pub layer: usize,
+    /// The way it runs, degrees, as KiCad turns.
+    pub angle: f64,
+    /// The middle of the pad's gap on the spoke's axis: where KiCad's check looks for it.
+    pub mid: Point,
+    /// On its axis just off the pad's edge: copper there and at `mid` is a spoke that joins
+    /// the pad, copper at `mid` alone one cut off short of it.
+    pub by_pad: Point,
+    pub made: SpokeMade,
+}
+
+/// What was made of a spoke a pad could have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpokeMade {
+    Kept,
+    /// The pad is narrower than the zone's least width: KiCad gives it no spokes.
+    PadTooNarrow,
+    /// Its far end lies in no pour, and it meets no other pad's spoke.
+    NoPour,
+    /// Other nets' clearances, a rule area or the zone's edge leave no strip of it as wide as
+    /// the zone's least width from the middle of the gap out.
+    Cut,
+}
+
 impl Board {
     /// Keeps room for each thermal pad's spokes; `pads` pairs each of `copper.pads` (by index)
     /// with its item. Run once the board's copper, keepouts and edges are in.
@@ -98,8 +184,6 @@ impl Board {
             Kind::Pour { zone, kept: true } => Some(zone),
             _ => None,
         }).collect();
-        // Each pad's first item: the pour leaves its gap round each of these.
-        let mains: HashSet<ItemId> = pads.iter().map(|&(_, id)| id).collect();
         let mut wanted = 0;
         let mut short = 0;
         for (z, zone) in copper.zones.iter().enumerate() {
@@ -110,9 +194,11 @@ impl Board {
             let cutouts: Vec<Vec<Point>> = zone.cutouts.iter().map(|c| c.iter().copied().map(Point::from_m).collect()).collect();
             let within = |p: Point| inside(p, &outline) && !cutouts.iter().any(|c| inside(p, c));
             let layers: Vec<usize> = copper.expand(&zone.layers).iter().filter_map(|n| self.layers.iter().position(|l| l == n)).collect();
-            // Each pad's spokes that fit, by pad and layer, with its footprint and how many
-            // must stay; and the spokes with a pad of the net past their gap.
+            // Each pad's spokes that are kept, by pad and layer, with its footprint and how
+            // many must stay; every spoke such a pad could have; and those whose end is in no
+            // pour.
             let mut found: Vec<(ItemId, usize, usize, usize, Vec<Shape>)> = Vec::new();
+            let mut asked: Vec<Asked> = Vec::new();
             let mut facing: Vec<Facing> = Vec::new();
             for &(k, id) in pads {
                 let pad = &copper.pads[k];
@@ -151,36 +237,51 @@ impl Board {
                     }
                     self.relief_pads.insert((id, z), gap);
                     let land = nm(zone.min_thickness).max(MIN_LAND);
+                    // KiCad makes no spoke narrower than the zone's least width: a pad narrower
+                    // than that has its gap and no spokes, and the pour does not join it.
+                    let narrow = width < nm(zone.min_thickness);
                     let half = width.max(land) / 2;
-                    let mut fits: Vec<Shape> = Vec::new();
                     for turn in 0..4 {
                         let angle = pad.spoke_angle + 90.0 * turn as f64;
-                        let (shape, past) = spoke_shape(pad.spoke_centre, angle, &item.shape, gap, land, half);
-                        let Shape::Polygon(corners) = &shape else { continue };
-                        if !corners.iter().all(|&p| within(p)) {
-                            continue;
-                        }
-                        if !self.in_a_relief(&past, id, &item, layer, gap, &mains) {
-                            // KiCad cuts other nets' clearance out of a spoke and keeps what is
-                            // left of it where that is still as wide as the zone's least width:
-                            // so where the whole spoke has no room, its middle alone may.
-                            let slim = || spoke_shape(pad.spoke_centre, angle, &item.shape, gap, land, land / 2).0;
-                            if self.room_for(&shape, &item, z, layer, nm(zone.clearance)) {
-                                fits.push(shape);
-                            } else if land < 2 * half && self.room_for(&slim(), &item, z, layer, nm(zone.clearance)) {
-                                fits.push(slim());
-                            }
-                            continue;
-                        }
-                        // No pour past the gap, for a pad of the net stands there: the spoke
-                        // may still meet that pad's spoke coming the other way.
-                        let (stub, _) = spoke_shape(pad.spoke_centre, angle, &item.shape, gap, PAST + nm(zone.min_thickness) / 2, width / 2);
-                        if let Shape::Polygon(c) = &stub {
-                            let tip = Point::new((c[1].x + c[2].x) / 2, (c[1].y + c[2].y) / 2);
-                            facing.push(Facing { pad: id, layer, tip, stub });
+                        let on_axis = |past: Nm| match across_gap(pad.spoke_centre, angle, &item.shape, past, -1, 1) {
+                            Shape::Polygon(c) => Point::new((c[1].x + c[2].x) / 2, (c[1].y + c[2].y) / 2),
+                            Shape::Capsule { a, .. } => a,
+                        };
+                        let trial = self.spoke_trials.len();
+                        self.spoke_trials.push(SpokeTrial { pad: id, zone: z, layer, angle, mid: on_axis(gap / 2), by_pad: on_axis(BY_PAD), made: if narrow { SpokeMade::PadTooNarrow } else { SpokeMade::NoPour } });
+                        if !narrow {
+                            asked.push(Asked { found: found.len(), trial, centre: pad.spoke_centre, angle, item: item.clone(), gap, land, half, width });
                         }
                     }
-                    found.push((id, layer, pad.footprint, count, fits));
+                    found.push((id, layer, pad.footprint, count, Vec::new()));
+                }
+            }
+            // What KiCad's filler asks of a spoke (`zone_filler.cpp`, 9.0.8): the middle of its
+            // far end, past the gap by its arc error and half the zone's least width, lies in
+            // the pour as the pads' gaps and other nets' clearances leave it, pruned to that
+            // width. The spoke is then added whole, those clearances and what lies outside
+            // the zone cut off it, and what is left narrower than the least width goes. A
+            // neighbour's clearance may take a corner of the land past the gap and the spoke
+            // is there all the same (BB-PWR-3608's P1, 2026-11-20: the square pad beside a
+            // round one 0.3 mm from the land of its spoke, in a zone that keeps 0.508 mm).
+            // One whose end is in no pour may still meet another pad's coming the other way.
+            if !asked.is_empty() {
+                let pours = crate::Pours::before_routing(self, z);
+                for Asked { found: f, trial, centre, angle, item, gap, land, half, width } in asked {
+                    let (id, layer) = (found[f].0, found[f].1);
+                    let (stub, _) = spoke_shape(centre, angle, &item.shape, gap, PAST + land / 2, width / 2);
+                    let Shape::Polygon(c) = &stub else { continue };
+                    let tip = Point::new((c[1].x + c[2].x) / 2, (c[1].y + c[2].y) / 2);
+                    if !pours.poured(z, layer, tip) {
+                        let (slim, _) = spoke_shape(centre, angle, &item.shape, gap, PAST + land / 2, land / 2);
+                        facing.push(Facing { pad: id, layer, trial, tip, stub, slim, centre, angle, past: gap + PAST + land / 2, half: width / 2, least: land / 2 });
+                        continue;
+                    }
+                    let whole = self.crosses(centre, angle, &item, z, layer, gap + PAST, half, land / 2, nm(zone.clearance), &within);
+                    self.spoke_trials[trial].made = if whole.is_some() { SpokeMade::Kept } else { SpokeMade::Cut };
+                    if let Some(whole) = whole {
+                        found[f].4.push(spoke_shape(centre, angle, &item.shape, gap, land, if whole { half } else { land / 2 }).0);
+                    }
                 }
             }
             // Spokes that meet: each one's tip in the other. KiCad keeps both, as a bridge from
@@ -193,11 +294,12 @@ impl Board {
                     continue;
                 }
                 let Some(item) = self.item(me.pad).cloned() else { continue };
-                let (pad_id, layer, stub) = (me.pad, me.layer, me.stub.clone());
-                if self.room_for(&stub, &item, z, layer, nm(zone.clearance)) {
-                    if let Some(entry) = found.iter_mut().find(|f| f.0 == pad_id && f.1 == layer) {
-                        entry.4.push(stub);
-                    }
+                let (pad_id, layer, trial, stub, slim) = (me.pad, me.layer, me.trial, me.stub.clone(), me.slim.clone());
+                let (centre, angle, past, half, least) = (me.centre, me.angle, me.past, me.half, me.least);
+                let whole = self.crosses(centre, angle, &item, z, layer, past, half, least, nm(zone.clearance), &within);
+                self.spoke_trials[trial].made = if whole.is_some() { SpokeMade::Kept } else { SpokeMade::Cut };
+                if let (Some(whole), Some(entry)) = (whole, found.iter_mut().find(|f| f.0 == pad_id && f.1 == layer)) {
+                    entry.4.push(if whole { stub } else { slim });
                 }
             }
             for (id, layer, footprint, count, fits) in found {
@@ -229,19 +331,35 @@ impl Board {
         }
     }
 
-    /// Whether a spoke's land `past` falls in the gap the pour leaves round another pad of the
-    /// pad's net (that of `id`, a pad on `layer`): no pour is there for the spoke to reach (two
-    /// overlapping pads of a USB-C connector's ground, say, or the row of holes under a
-    /// regulator's tab, all of one number). Each pad's gap is taken as `gap`. The pad's own
-    /// other shapes are not another pad: those of its number that are not in `mains`, the first
-    /// item of each pad.
-    fn in_a_relief(&self, past: &Shape, id: ItemId, pad: &Item, layer: usize, gap: Nm, mains: &HashSet<ItemId>) -> bool {
-        let Kind::Pad { footprint, number, .. } = &pad.kind else { return false };
-        let reach = past.bbox().grow(gap);
-        self.near(layer, reach).into_iter().filter(|&o| o != id).filter_map(|o| self.item(o).map(|it| (o, it))).any(|(o_id, o)| {
-            let own = !mains.contains(&o_id) && matches!(&o.kind, Kind::Pad { footprint: f, number: n, .. } if f == footprint && n == number);
-            matches!(o.kind, Kind::Pad { .. }) && o.net == pad.net && o.on(layer) && !own && past.gap_within(&o.shape, gap as f64) < gap as f64
-        })
+    /// Whether a spoke of `pad` at `angle`, `half` wide either side of its axis, crosses the
+    /// pad's gap, from the pad's edge to `past` it: true where the whole of it has room there
+    /// ([`Board::room_for`]), false where only a strip of it as wide as the zone's least width
+    /// (`least` either side) has, None where not even that.
+    ///
+    /// Across the gap only: under the pad the pad's own copper is there whatever is cut out of
+    /// the spoke. And any such strip will do, its middle or either side: KiCad cuts other nets'
+    /// clearances and rule areas out of the spoke and keeps what is left as wide as the least
+    /// width, so a neighbour takes the side it is on (AS5043's C3, 2026-11-20: the spokes
+    /// between two ground pads, a rule area 4 um into their side). The strip must lie in the
+    /// zone (`within`).
+    ///
+    /// All the way from the pad: KiCad's check is easier, and counts a spoke cut off short of
+    /// its pad so long as copper is left at the middle of the gap (the DS8500 board's U2:
+    /// spokes cut to a point between the pins beside them). But such a stub joins the pad to
+    /// nothing. Taken for spokes, they made pads joined that KiCad has unconnected, and the
+    /// router left them so (ErgoTravel 3 unconnected to 28, Biscay's sipm-comp 0 to 24,
+    /// 2026-11-20): a spoke here is one that joins.
+    #[allow(clippy::too_many_arguments)]
+    fn crosses(&mut self, centre: [f64; 2], angle: f64, pad: &Item, zone: usize, layer: usize, past: Nm, half: Nm, least: Nm, own: Nm, within: &dyn Fn(Point) -> bool) -> Option<bool> {
+        let across = |lo: Nm, hi: Nm| across_gap(centre, angle, &pad.shape, past, lo, hi);
+        let mut fits = |lo: Nm, hi: Nm| {
+            let strip = across(lo, hi);
+            matches!(&strip, Shape::Polygon(c) if c.iter().all(|&p| within(p))) && self.room_for(&strip, pad, zone, layer, own)
+        };
+        if fits(-half, half) {
+            return Some(true);
+        }
+        (least < half && [(-least, least), (-half, 2 * least - half), (half - 2 * least, half)].into_iter().any(|(lo, hi)| fits(lo, hi))).then_some(false)
     }
 
     /// Whether a spoke of `pad`'s zone `zone` fits on `layer` as `shape`: as the zone's own copper
@@ -254,12 +372,17 @@ impl Board {
     /// ground pad joined to the pour).
     fn room_for(&mut self, shape: &Shape, pad: &Item, zone: usize, layer: usize, own: Nm) -> bool {
         let near = shape.bbox().grow(own);
-        let crowded = self.near(layer, near).into_iter().filter_map(|o| self.item(o)).any(|o| {
+        let crowded = self.near(layer, near).into_iter().filter_map(|o| self.item(o).map(|it| (o, it))).any(|(o_id, o)| {
             let stays = match o.kind {
                 Kind::Pad { .. } => true,
                 Kind::Track | Kind::Via => o.locked,
                 Kind::Pour { kept, .. } => kept,
                 Kind::Keepout { .. } | Kind::Spoke { .. } => false,
+            };
+            // A pad with a clearance of its own is kept from by that, whatever the zone's.
+            let own = match self.pad_clearances.get(&o_id) {
+                Some(&c) if matches!(o.kind, Kind::Pad { .. }) => c.max(self.min_clearance_nm),
+                _ => own,
             };
             stays && o.net != pad.net && o.on(layer) && o.layers != 0 && shape.gap_within(&o.shape, own as f64) < own as f64
         });

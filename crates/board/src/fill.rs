@@ -412,7 +412,7 @@ pub fn fill_zones_until(board: &Board, stop: &dyn Fn() -> bool) -> Option<Vec<Fi
             if stop() {
                 return None;
             }
-            if let Some(r) = fill_one(board, zone, layer, &poured, false, false, None, false, stop)? {
+            if let Some(r) = fill_one(board, zone, layer, &poured, false, false, &|_| false, false, stop)? {
                 fills.push(Fill { zone: zone.zone, net: zone.net, layer, rects: r.rects(), pieces: r.pieces() });
                 poured.push((zone.net, layer, r));
             }
@@ -430,11 +430,9 @@ const STOP_EVERY: usize = 64;
 /// the lands of its spokes. Without, no pour on the board is looked at and every pad of the
 /// net is poured over. A strip of pour stays where it is surely as wide as the zone's minimum
 /// width; with `nearest`, where it is that wide to the nearest step.
-/// With `only`, the tracks and vias of the nets it names alone are poured round: the others are
-/// taken as not there.
+/// What `gone` names is taken as not there, and not poured round.
 #[allow(clippy::too_many_arguments)]
-fn fill_one(board: &Board, zone: &ZoneArea, layer: usize, poured: &[(u32, usize, Raster)], as_joined: bool, nearest: bool, only: Option<&[u32]>, islands: bool, stop: &dyn Fn() -> bool) -> Option<Option<Raster>> {
-    let gone = |item: &crate::model::Item| matches!(item.kind, Kind::Track | Kind::Via) && only.is_some_and(|nets| !nets.contains(&item.net));
+fn fill_one(board: &Board, zone: &ZoneArea, layer: usize, poured: &[(u32, usize, Raster)], as_joined: bool, nearest: bool, gone: &dyn Fn(&crate::model::Item) -> bool, islands: bool, stop: &dyn Fn() -> bool) -> Option<Option<Raster>> {
     let Shape::Polygon(outline) = &zone.outline else { return Some(None) };
     if outline.len() < 3 {
         return Some(None);
@@ -466,6 +464,15 @@ fn fill_one(board: &Board, zone: &ZoneArea, layer: usize, poured: &[(u32, usize,
     }
     let own = zone.clearance;
     let net = zone.net;
+    // How far the pour keeps from another net's copper: the zone's clearance or the nets',
+    // the wider; but from a pad with a clearance of its own, that one, whatever the zone's
+    // (KiCad's filler asks its rules for the clearance, and a pad's own answers before the
+    // zone's is looked at: the induction hob sensor's solder jumpers, 0.05 mm, in a zone
+    // that keeps 0.508 mm from everything else, 2026-11-20).
+    let kept_from = |id: ItemId, item: &crate::model::Item| match board.pad_clearances.get(&id) {
+        Some(&pad) if matches!(item.kind, Kind::Pad { .. }) => pad.max(board.min_clearance_nm),
+        _ => own.max(board.clearance(net, item.net)),
+    };
     let mut seeds = Vec::new();
     for (k, id) in board.near(layer, b).into_iter().enumerate() {
         if k % STOP_EVERY == 0 && stop() {
@@ -495,7 +502,12 @@ fn fill_one(board: &Board, zone: &ZoneArea, layer: usize, poured: &[(u32, usize,
                 r.clear_round(&item.shape, board.relief_pads[&(id, zone.zone)] as f64);
             }
             _ if net != 0 && item.net == net => seeds.extend(r.cells_in(&item.shape)),
-            _ => r.clear_round(&item.shape, own.max(board.clearance(net, item.net)) as f64),
+            // An unplated hole with no copper round it (its pad no wider than the hole) is kept
+            // from by the hole clearance alone, below: there is no copper there to keep the
+            // zone's clearance from (KiCad's filler, `knockoutPadClearance`; drawduino's
+            // mounting hole, 2026-11-20).
+            Kind::Pad { plated: false, .. } if bare_hole(item) => {}
+            _ => r.clear_round(&item.shape, kept_from(id, item) as f64),
         }
     }
     let holes = board.layers.len();
@@ -512,7 +524,7 @@ fn fill_one(board: &Board, zone: &ZoneArea, layer: usize, poured: &[(u32, usize,
         if net != 0 && item.net == net && item.on(layer) {
             continue;
         }
-        let reach = radius + hole_gap.max(own).max(board.clearance(net, item.net));
+        let reach = radius + if bare_hole(item) { hole_gap } else { hole_gap.max(kept_from(id, item)) };
         // A slot: every point within reach of its centre line.
         r.clear_near(a, end, reach as f64);
     }
@@ -553,6 +565,14 @@ fn fill_one(board: &Board, zone: &ZoneArea, layer: usize, poured: &[(u32, usize,
         r.keep_seeded(&seeds);
     }
     Some(r.cells.iter().any(|&c| c).then_some(r))
+}
+
+/// Whether `item` is an unplated hole with no copper round it: a pad that is not plated and
+/// reaches no farther than its hole.
+fn bare_hole(item: &crate::model::Item) -> bool {
+    let (Kind::Pad { plated: false, .. }, Some((c, r))) = (&item.kind, item.hole) else { return false };
+    let b = item.shape.bbox();
+    [b.min, b.max].iter().all(|p| (p.x - c.x).abs() <= r + 1_000 && (p.y - c.y).abs() <= r + 1_000)
 }
 
 /// The middle of a spoke's land: half the land's depth in from the spoke's far end, on its
@@ -639,26 +659,52 @@ impl Pours {
                 take
             })
             .collect();
-        Pours::over(board, true, zones, false, only, false)
+        Pours::over(board, true, zones, false, &|item| matches!(item.kind, Kind::Track | Kind::Via) && only.is_some_and(|nets| !nets.contains(&item.net)), false)
     }
 
     fn with(board: &Board, nearest: bool) -> Pours {
-        Pours::over(board, nearest, order(board), true, None, false)
+        Pours::over(board, nearest, order(board), true, &|_| false, false)
     }
 
     /// [`Pours::of`] with the islands that touch none of their net's copper kept: where a via
     /// would join a pour that nothing reaches yet, as a plane before any via goes down to it.
     pub fn with_islands(board: &Board) -> Pours {
-        Pours::over(board, false, order(board), true, None, true)
+        Pours::over(board, false, order(board), true, &|_| false, true)
     }
 
-    fn over(board: &Board, nearest: bool, zones: Vec<&ZoneArea>, spokes: bool, only: Option<&[u32]>, islands: bool) -> Pours {
+    /// The pours as KiCad most likely fills them before anything is routed: the tracks and
+    /// vias that are the router's to take up as not there, no spoke's land holding anything,
+    /// and every island kept. What KiCad's filler tests the end of a thermal spoke against
+    /// ([`Pours::poured`]): the zone less its pads' gaps and other nets' clearances, as wide
+    /// as its least width.
+    /// Of zone `zone` alone, and only what it is poured round, as [`Pours::likely_for`].
+    pub(crate) fn before_routing(board: &Board, zone: usize) -> Pours {
+        let Some(me) = board.zone_areas.iter().find(|z| z.zone == zone) else { return Pours { parts: Vec::new(), pieces: 0, bridges: Default::default() } };
+        let near = me.outline.bbox().grow(NEAR_ZONE);
+        let mut before = true;
+        let zones: Vec<&ZoneArea> = order(board)
+            .into_iter()
+            .filter(|z| {
+                let take = before && z.layers & me.layers != 0 && z.outline.bbox().overlaps(near);
+                before &= z.zone != zone;
+                take
+            })
+            .collect();
+        Pours::over(board, true, zones, false, &|item| matches!(item.kind, Kind::Track | Kind::Via) && !item.locked, true)
+    }
+
+    /// Whether zone `zone` pours `p` on `layer`.
+    pub(crate) fn poured(&self, zone: usize, layer: usize, p: Point) -> bool {
+        self.parts.iter().any(|part| part.zone == zone && part.layer == layer && Pours::at(part, p).is_some())
+    }
+
+    fn over(board: &Board, nearest: bool, zones: Vec<&ZoneArea>, spokes: bool, gone: &dyn Fn(&crate::model::Item) -> bool, islands: bool) -> Pours {
         let mut poured: Vec<(u32, usize, Raster)> = Vec::new();
         let mut parts = Vec::new();
         let mut pieces = 0u32;
         for zone in zones.into_iter().filter(|z| !z.kept) {
             for layer in (0..board.layers.len()).filter(|l| zone.layers & (1 << l) != 0) {
-                let Some(Some(r)) = fill_one(board, zone, layer, &poured, true, nearest, only, islands, &|| false) else { continue };
+                let Some(Some(r)) = fill_one(board, zone, layer, &poured, true, nearest, gone, islands, &|| false) else { continue };
                 poured.push((zone.net, layer, r.clone()));
                 if zone.net == 0 {
                     continue;
