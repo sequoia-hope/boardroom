@@ -79,8 +79,10 @@ pub struct Tie {
     pub pts: [P; 2],
 }
 
-/// A via standing in a piece of pour that joins nothing but one pad, down to the same net's
-/// pour on another layer: the pad's spokes into that piece then lead somewhere.
+/// A via that joins two pieces of a net's pour on two layers: one standing in a piece that
+/// joins nothing but one pad, so that the pad's spokes into it lead somewhere ([`stitch`]),
+/// or one where the two sides of a connection the pours leave open lie over each other
+/// ([`stitched`]).
 #[derive(Debug, Clone, Serialize)]
 pub struct Stitch {
     pub net: u32,
@@ -1385,6 +1387,7 @@ fn route_with(board: &Board, fan: Option<plan::Fan>, stop: &AtomicBool, told: &d
         return Some((plan, drawing));
     }
     drawing = pour(board, &mut plan, drawing, &poured, &mut memo, &said, stop, &|open| told(Some(open)));
+    drawing = stitched(board, &plan, drawing, &poured);
     told(None);
     if stopped() {
         return None;
@@ -1404,6 +1407,7 @@ fn route_with(board: &Board, fan: Option<plan::Fan>, stop: &AtomicBool, told: &d
         plan::bar(board, &mut other, &bars);
         let redrawn = settle(board, &mut other, &mut memo, &said, stop);
         let redrawn = pour(board, &mut other, redrawn, &poured, &mut memo, &said, stop, &|_| ());
+        let redrawn = stitched(board, &other, redrawn, &poured);
         if stopped() {
             return None;
         }
@@ -1490,6 +1494,70 @@ fn pour(board: &Board, plan: &mut Plan, mut drawing: Drawing, poured: &[u32], me
         && fewest < open(board, plan, &drawing)
     {
         (*plan, drawing) = (kept, drawn);
+    }
+    drawing
+}
+
+/// How far round a connection the pours leave open a place is looked for where a via would
+/// join its two sides, and how far apart the places looked at are, nm.
+const JOIN_REACH: i64 = 5_000_000;
+const JOIN_APART: i64 = 250_000;
+
+/// The connections the pours still leave open, joined by a via each where they can be: a
+/// connection whose two sides each reach a piece of the net's pour, one piece lying over the
+/// other on another layer, is made by a via of the net standing in both, if the checker
+/// passes one. The rounds of [`pour`] lay a wire for such a connection, and the wire can move
+/// the wires beside it to part the pours again; a via through both moves nothing.
+fn stitched(board: &Board, plan: &Plan, mut drawing: Drawing, poured: &[u32]) -> Drawing {
+    for _ in 0..SPOKES {
+        let (mut with, _) = onto(board, plan, &drawing);
+        let pours = board::Pours::of(&with);
+        let joined = board::connectivity_poured(&with, &pours);
+        // The cluster of copper each piece of pour is part of.
+        let mut cluster_of: HashMap<usize, usize> = HashMap::new();
+        for (&id, &cluster) in &joined.cluster {
+            let Some(item) = with.item(id) else { continue };
+            if !poured.contains(&item.net) {
+                continue;
+            }
+            for layer in (0..with.layers.len()).filter(|l| item.on(*l)) {
+                for piece in pours.joined(&with, id, layer) {
+                    cluster_of.insert(piece, cluster);
+                }
+            }
+        }
+        let all = (1u64 << with.layers.len()) - 1;
+        let mut made = Vec::new();
+        for line in joined.airlines.iter().filter(|a| poured.contains(&a.net)) {
+            let (Some(&a), Some(&b)) = (joined.cluster.get(&line.from_item), joined.cluster.get(&line.to_item)) else { continue };
+            let (r, drill) = plan::via_size(&with, line.net);
+            // The places round the connection where a via would stand in pour of both sides.
+            let (lo, hi) = ((line.from.x.min(line.to.x) - JOIN_REACH, line.from.y.min(line.to.y) - JOIN_REACH), (line.from.x.max(line.to.x) + JOIN_REACH, line.from.y.max(line.to.y) + JOIN_REACH));
+            let mut places: Vec<board::Point> = Vec::new();
+            for y in (lo.1..=hi.1).step_by(JOIN_APART as usize) {
+                for x in (lo.0..=hi.0).step_by(JOIN_APART as usize) {
+                    let p = board::Point::new(x, y);
+                    let here: Vec<usize> = (0..with.layers.len()).filter_map(|l| pours.piece(line.net, l, p, r).and_then(|k| cluster_of.get(&k).copied())).collect();
+                    if here.contains(&a) && here.contains(&b) {
+                        places.push(p);
+                    }
+                }
+            }
+            // The nearest the connection's two ends first.
+            places.sort_by(|p, q| (p.distance(line.from) + p.distance(line.to)).total_cmp(&(q.distance(line.from) + q.distance(line.to))).then((p.x, p.y).cmp(&(q.x, q.y))));
+            for &p in places.iter().step_by(places.len().div_ceil(STITCH_TRIES).max(1)) {
+                let id = with.insert(Item { kind: Kind::Via, net: line.net, layers: all, shape: Shape::Capsule { a: p, b: p, r }, hole: Some((p, drill)), locked: false, span: None });
+                if board::check_item(&with, id).is_empty() {
+                    made.push(Stitch { net: line.net, at: [p.x as f64 / 1e6, p.y as f64 / 1e6] });
+                    break;
+                }
+                with.remove(id);
+            }
+        }
+        if made.is_empty() {
+            break;
+        }
+        drawing.stitches.extend(made);
     }
     drawing
 }
@@ -1638,7 +1706,52 @@ mod race {
 
 #[cfg(test)]
 mod rounds {
-    use super::last_round;
+    use super::*;
+
+    /// A ground pad on the front and one on the back, each joined by spokes to ground poured
+    /// on its own layer over the given span of x: nothing joins the two pours.
+    fn two_pours(front: (f64, f64), back: (f64, f64)) -> Board {
+        let zone = |layer: &str, (x0, x1): (f64, f64)| {
+            format!(
+                "(zone (net 1) (net_name \"GND\") (layer \"{layer}\") (hatch edge 0.5) (connect_pads (clearance 0.2)) (min_thickness 0.25)
+                   (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5))
+                   (polygon (pts (xy {x0} 1) (xy {x1} 1) (xy {x1} 19) (xy {x0} 19))))"
+            )
+        };
+        let text = format!(
+            "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
+             (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
+             (net 0 \"\") (net 1 \"GND\")
+             (gr_rect (start 0 0) (end 20 20) (layer \"Edge.Cuts\") (width 0.1))
+             (footprint \"P\" (layer \"F.Cu\") (at 4 10) (property \"Reference\" \"R1\") (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net 1 \"GND\")))
+             (footprint \"P\" (layer \"B.Cu\") (at 16 10) (property \"Reference\" \"R2\") (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"B.Cu\") (net 1 \"GND\")))
+             {} {})",
+            zone("F.Cu", front),
+            zone("B.Cu", back)
+        );
+        let rules = r#"{"board":{"design_settings":{"rules":{"min_clearance":0.2,"min_copper_edge_clearance":0.3}}}}"#;
+        let (pcb, copper) = kicad::parse_board(&text).unwrap();
+        Board::new(&pcb, &copper, kicad::Rules::parse(rules).unwrap())
+    }
+
+    #[test]
+    fn pours_left_apart_are_joined_by_a_via_where_one_lies_over_the_other() {
+        let board = two_pours((1.0, 19.0), (1.0, 19.0));
+        let plan = plan::start(&board);
+        assert_eq!(open(&board, &plan, &Drawing::default()), 1, "the front's pour and the back's");
+        let drawing = stitched(&board, &plan, Drawing::default(), &[1]);
+        assert_eq!(drawing.stitches.len(), 1, "{:?}", drawing.stitches);
+        assert_eq!(open(&board, &plan, &drawing), 0);
+        // Between the two pads, where the connection is.
+        let at = drawing.stitches[0].at;
+        assert!(at[0] > 4.0 && at[0] < 16.0 && (at[1] - 10.0).abs() < 3.0, "{at:?}");
+        // Pours that lie over each other nowhere have no place for one.
+        let board = two_pours((1.0, 9.0), (11.0, 19.0));
+        let plan = plan::start(&board);
+        let drawing = stitched(&board, &plan, Drawing::default(), &[1]);
+        assert!(drawing.stitches.is_empty());
+        assert_eq!(open(&board, &plan, &drawing), 1);
+    }
 
     #[test]
     fn the_pours_rounds_go_on_while_a_connection_has_a_way_not_tried() {
