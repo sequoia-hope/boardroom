@@ -2,7 +2,7 @@
 """The new router (`boardroom route`) on a set of boards, one build or several side by side, with
 KiCad judging each routed board: the yardstick for a change to `plan` or `wire`.
 
-    tier.py SET [--bin TAG=PATH ...] [--run NAME] [--cap SECONDS] [--only id,...] [--against RUN]
+    tier.py SET [--bin TAG=PATH ...] [--run NAME] [--cap SECONDS] [--only id,...|@FILE] [--against RUN]
                 [--no-kicad] [--again] [--rows]
 
 SET is a tier of pcbench_tiers.json (smoke, focus, guard, gate: the designers' boards stripped,
@@ -180,7 +180,7 @@ def main():
     ap.add_argument("--bin", action="append", default=[], metavar="TAG=PATH", help="a build to run; several are run side by side")
     ap.add_argument("--run", help="the run's name under LAB/tier/ (default: the set and today's date)")
     ap.add_argument("--cap", type=int, default=400, help="seconds a board may take")
-    ap.add_argument("--only", help="these boards of the set only")
+    ap.add_argument("--only", help="these boards of the set only: ids with commas between, or @FILE with one id a line")
     ap.add_argument("--against", metavar="RUN", help="a pcbench run of the same designers' boards to set beside each build")
     ap.add_argument("--no-kicad", action="store_true", help="our count only")
     ap.add_argument("--again", action="store_true", help="run boards the run has already")
@@ -193,7 +193,11 @@ def main():
         if not path or not Path(path).is_file():
             sys.exit(f"tier: --bin TAG=PATH, and PATH must be a built boardroom: {b}")
         builds[tag] = Path(path).resolve()
-    todo = boards(a.set, set(a.only.split(",")) if a.only else None)
+    only = None
+    if a.only:
+        # Board ids may have spaces in them: a file of them is easier to pass than a quoted list.
+        only = {line.strip() for line in Path(a.only[1:]).read_text().splitlines() if line.strip()} if a.only.startswith("@") else set(a.only.split(","))
+    todo = boards(a.set, only)
     if a.against and a.set in ("look", "ours"):
         sys.exit("tier: --against needs a tier: a pcbench run is of the designers' boards")
     first = "WIRE_FIRST" in os.environ
