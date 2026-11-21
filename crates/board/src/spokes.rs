@@ -71,10 +71,11 @@ struct Facing {
     trial: usize,
     tip: Point,
     stub: Shape,
-    /// The same spoke where only its middle, as wide as the zone's least width, is left.
-    slim: Shape,
-    /// What made it: the pad's centre, the spoke's turn, how far past the pad it goes, and
-    /// half its width and half the least width.
+    /// What made it: the pad's gap and how far past it the spoke reaches, the pad's centre,
+    /// the spoke's turn, how far past the pad it goes, and half its width and half the least
+    /// width.
+    gap: Nm,
+    reach: Nm,
     centre: [f64; 2],
     angle: f64,
     past: Nm,
@@ -114,9 +115,9 @@ fn by_reliefs(pad: &kicad::PadCopper, zone: &kicad::Zone, through_hole: bool) ->
 }
 
 /// The spoke of a pad centred at `c` (metres) running at `angle` degrees: from the centre past
-/// the pad's edge (as far as `pad` reaches that way), across `gap`, and `land` beyond, `half`
-/// either side of its axis; and the land alone. In nanometres.
-fn spoke_shape(c: [f64; 2], angle: f64, pad: &Shape, gap: Nm, land: Nm, half: Nm) -> (Shape, Shape) {
+/// the pad's edge (as far as `pad` reaches that way), across `gap`, and `land` beyond, from
+/// `lo` to `hi` across its axis; and the land alone. In nanometres.
+fn spoke_shape(c: [f64; 2], angle: f64, pad: &Shape, gap: Nm, land: Nm, (lo, hi): (Nm, Nm)) -> (Shape, Shape) {
     let (s, co) = angle.to_radians().sin_cos();
     // KiCad's frame: y down, positive angles counter-clockwise on screen (`kicad::place`).
     let along = |p: Point| (p.x as f64 - c[0] * 1e9) * co - (p.y as f64 - c[1] * 1e9) * s;
@@ -125,8 +126,8 @@ fn spoke_shape(c: [f64; 2], angle: f64, pad: &Shape, gap: Nm, land: Nm, half: Nm
         Shape::Capsule { a, b, r } => along(*a).max(along(*b)) + *r as f64,
     };
     let rect = |from: f64, to: f64| {
-        let (from, to, half) = (from * 1e-9, to * 1e-9, half as f64 * 1e-9);
-        let corners = [[from, -half], [to, -half], [to, half], [from, half]];
+        let (from, to, lo, hi) = (from * 1e-9, to * 1e-9, lo as f64 * 1e-9, hi as f64 * 1e-9);
+        let corners = [[from, lo], [to, lo], [to, hi], [from, hi]];
         Shape::Polygon(corners.iter().map(|&q| Point::from_m(kicad::place(c, angle, q))).collect())
     };
     let past = reach + gap as f64;
@@ -269,18 +270,17 @@ impl Board {
                 let pours = crate::Pours::before_routing(self, z);
                 for Asked { found: f, trial, centre, angle, item, gap, land, half, width } in asked {
                     let (id, layer) = (found[f].0, found[f].1);
-                    let (stub, _) = spoke_shape(centre, angle, &item.shape, gap, PAST + land / 2, width / 2);
+                    let (stub, _) = spoke_shape(centre, angle, &item.shape, gap, PAST + land / 2, (-width / 2, width / 2));
                     let Shape::Polygon(c) = &stub else { continue };
                     let tip = Point::new((c[1].x + c[2].x) / 2, (c[1].y + c[2].y) / 2);
                     if !pours.poured(z, layer, tip) {
-                        let (slim, _) = spoke_shape(centre, angle, &item.shape, gap, PAST + land / 2, land / 2);
-                        facing.push(Facing { pad: id, layer, trial, tip, stub, slim, centre, angle, past: gap + PAST + land / 2, half: width / 2, least: land / 2 });
+                        facing.push(Facing { pad: id, layer, trial, tip, stub, gap, reach: PAST + land / 2, centre, angle, past: gap + PAST + land / 2, half: width / 2, least: land / 2 });
                         continue;
                     }
-                    let whole = self.crosses(centre, angle, &item, z, layer, gap + PAST, half, land / 2, nm(zone.clearance), &within);
-                    self.spoke_trials[trial].made = if whole.is_some() { SpokeMade::Kept } else { SpokeMade::Cut };
-                    if let Some(whole) = whole {
-                        found[f].4.push(spoke_shape(centre, angle, &item.shape, gap, land, if whole { half } else { land / 2 }).0);
+                    let strip = self.crosses(centre, angle, &item, z, layer, gap + PAST, half, land / 2, nm(zone.clearance), &within);
+                    self.spoke_trials[trial].made = if strip.is_some() { SpokeMade::Kept } else { SpokeMade::Cut };
+                    if let Some(strip) = strip {
+                        found[f].4.push(spoke_shape(centre, angle, &item.shape, gap, land, strip).0);
                     }
                 }
             }
@@ -294,12 +294,12 @@ impl Board {
                     continue;
                 }
                 let Some(item) = self.item(me.pad).cloned() else { continue };
-                let (pad_id, layer, trial, stub, slim) = (me.pad, me.layer, me.trial, me.stub.clone(), me.slim.clone());
+                let (pad_id, layer, trial, gap, reach) = (me.pad, me.layer, me.trial, me.gap, me.reach);
                 let (centre, angle, past, half, least) = (me.centre, me.angle, me.past, me.half, me.least);
-                let whole = self.crosses(centre, angle, &item, z, layer, past, half, least, nm(zone.clearance), &within);
-                self.spoke_trials[trial].made = if whole.is_some() { SpokeMade::Kept } else { SpokeMade::Cut };
-                if let (Some(whole), Some(entry)) = (whole, found.iter_mut().find(|f| f.0 == pad_id && f.1 == layer)) {
-                    entry.4.push(if whole { stub } else { slim });
+                let strip = self.crosses(centre, angle, &item, z, layer, past, half, least, nm(zone.clearance), &within);
+                self.spoke_trials[trial].made = if strip.is_some() { SpokeMade::Kept } else { SpokeMade::Cut };
+                if let (Some(strip), Some(entry)) = (strip, found.iter_mut().find(|f| f.0 == pad_id && f.1 == layer)) {
+                    entry.4.push(spoke_shape(centre, angle, &item.shape, gap, reach, strip).0);
                 }
             }
             for (id, layer, footprint, count, fits) in found {
@@ -331,10 +331,14 @@ impl Board {
         }
     }
 
-    /// Whether a spoke of `pad` at `angle`, `half` wide either side of its axis, crosses the
-    /// pad's gap, from the pad's edge to `past` it: true where the whole of it has room there
-    /// ([`Board::room_for`]), false where only a strip of it as wide as the zone's least width
-    /// (`least` either side) has, None where not even that.
+    /// What of a spoke of `pad` at `angle`, `half` wide either side of its axis, crosses the
+    /// pad's gap, from the pad's edge to `past` it, as from where to where across the axis:
+    /// the whole of it where that has room there ([`Board::room_for`]), else a strip of it as
+    /// wide as the zone's least width (twice `least`) that has, None where there is none. The
+    /// strip found is the room kept for the spoke, not the spoke's middle whichever it was: a
+    /// spoke left only its side away from a neighbour is gone once a track takes that side,
+    /// though the track keeps clear of its middle (esp8266_32x32panel's RN1, 2026-11-21: pad 5
+    /// counted as joined to the ground pour, which KiCad's fill stops 0.08 mm short of).
     ///
     /// Across the gap only: under the pad the pad's own copper is there whatever is cut out of
     /// the spoke. And any such strip will do, its middle or either side: KiCad cuts other nets'
@@ -350,16 +354,19 @@ impl Board {
     /// router left them so (ErgoTravel 3 unconnected to 28, Biscay's sipm-comp 0 to 24,
     /// 2026-11-20): a spoke here is one that joins.
     #[allow(clippy::too_many_arguments)]
-    fn crosses(&mut self, centre: [f64; 2], angle: f64, pad: &Item, zone: usize, layer: usize, past: Nm, half: Nm, least: Nm, own: Nm, within: &dyn Fn(Point) -> bool) -> Option<bool> {
+    fn crosses(&mut self, centre: [f64; 2], angle: f64, pad: &Item, zone: usize, layer: usize, past: Nm, half: Nm, least: Nm, own: Nm, within: &dyn Fn(Point) -> bool) -> Option<(Nm, Nm)> {
         let across = |lo: Nm, hi: Nm| across_gap(centre, angle, &pad.shape, past, lo, hi);
         let mut fits = |lo: Nm, hi: Nm| {
             let strip = across(lo, hi);
             matches!(&strip, Shape::Polygon(c) if c.iter().all(|&p| within(p))) && self.room_for(&strip, pad, zone, layer, own)
         };
         if fits(-half, half) {
-            return Some(true);
+            return Some((-half, half));
         }
-        (least < half && [(-least, least), (-half, 2 * least - half), (half - 2 * least, half)].into_iter().any(|(lo, hi)| fits(lo, hi))).then_some(false)
+        if least >= half {
+            return None;
+        }
+        [(-least, least), (-half, 2 * least - half), (half - 2 * least, half)].into_iter().find(|&(lo, hi)| fits(lo, hi))
     }
 
     /// Whether a spoke of `pad`'s zone `zone` fits on `layer` as `shape`: as the zone's own copper

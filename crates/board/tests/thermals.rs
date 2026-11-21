@@ -278,6 +278,33 @@ fn a_spoke_with_room_for_its_middle_alone_is_kept_that_wide() {
     assert_eq!(check_item(&b, cut).iter().filter(|v| v.rule == Rule::Clearance).count(), 1);
 }
 
+#[test]
+fn a_spoke_left_one_side_by_a_neighbour_is_kept_on_that_side_and_lost_to_a_track_there() {
+    // Net B's pad level with the -x spoke's upper edge (y = 9.75): the zone's 0.2 mm from it
+    // takes the spoke down to 9.95, its middle strip (9.875 to 10.125) with it. What is left,
+    // 9.95 to 10.25, is still as wide as the zone's least width, and KiCad keeps it. The room
+    // kept is on that side, not in the middle.
+    let beside = "(footprint \"P\" (layer \"F.Cu\") (at 9.05 9.45) (property \"Reference\" \"U2\")
+                    (pad \"1\" smd rect (at 0 0) (size 0.5 0.6) (layers \"F.Cu\") (net 2 \"B\")))";
+    let mut b = board(RECT, "", beside, FOUR);
+    let sides: Vec<(f64, f64)> = b
+        .items()
+        .filter_map(|(_, it)| match (&it.kind, &it.shape) {
+            (Kind::Spoke { .. }, Shape::Polygon(p)) if (p[1].x + p[2].x) / 2 < nm(9e-3) => Some((p[0].y.min(p[3].y) as f64 / 1e6, p[0].y.max(p[3].y) as f64 / 1e6)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sides.len(), 1, "{sides:?}");
+    assert!((sides[0].0 - 10.0).abs() < 1e-3 && (sides[0].1 - 10.25).abs() < 1e-3, "{sides:?}");
+    // A track under it, 0.225 mm from the spoke's middle strip and 0.1 mm from what is left
+    // of the spoke: KiCad's fill has 0.2 mm of it left there, less than the least width, and
+    // the pad is not joined that way. The track takes the spoke.
+    let under = other(&mut b, (8.6, 10.45), (9.2, 10.45));
+    let hits: Vec<Violation> = check_item(&b, under).into_iter().filter(|v| v.rule == Rule::Clearance).collect();
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert!(matches!(b.item(hits[0].b.unwrap()).unwrap().kind, Kind::Spoke { .. }));
+}
+
 /// A track of net B from (x0, y0) to (x1, y1).
 fn other(b: &mut Board, (x0, y0): (f64, f64), (x1, y1): (f64, f64)) -> ItemId {
     let id = own(b, (x0, y0), (x1, y1));
