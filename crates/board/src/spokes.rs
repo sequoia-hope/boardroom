@@ -55,6 +55,14 @@ const DEFAULT_GAP: f64 = 0.5e-3;
 const DEFAULT_WIDTH: f64 = 0.5e-3;
 /// The shallowest land kept past a spoke's gap, where a zone sets no minimum width.
 const MIN_LAND: Nm = 25_000;
+/// How much farther than its clearance KiCad's filler keeps a pour from other nets' copper
+/// (`zone_filler.cpp`, 9.0.8: every knockout is the clearance and `m_ExtraClearance`, half a
+/// micron). It decides a spoke whose pad stands from its neighbour exactly the zone's clearance
+/// past its own edge, pins 0.5 mm apart in a zone that keeps 0.5 mm: the neighbour's knockout
+/// takes the spoke to half a micron past the pad's edge, and the pour that is left touches
+/// nothing (pmw3360's J1, 2026-11-22: its ground pin is unconnected to KiCad on the designer's
+/// board too but for the track the designer ran from it).
+const FILL_MARGIN: Nm = 500;
 
 /// How far past its gap KiCad draws a spoke, to test what its tip lands in, over half the
 /// zone's minimum width (its filler's `spokesBox`: the gap, its arc error and half that width).
@@ -356,9 +364,17 @@ impl Board {
     #[allow(clippy::too_many_arguments)]
     fn crosses(&mut self, centre: [f64; 2], angle: f64, pad: &Item, zone: usize, layer: usize, past: Nm, half: Nm, least: Nm, own: Nm, within: &dyn Fn(Point) -> bool) -> Option<(Nm, Nm)> {
         let across = |lo: Nm, hi: Nm| across_gap(centre, angle, &pad.shape, past, lo, hi);
+        // The strip a hair in from each side must be clear by the filler's margin too
+        // ([`FILL_MARGIN`]): a neighbour that takes half a micron off the spoke's end at the
+        // pad leaves a spoke that touches nothing. Not the strip whole: that also takes the
+        // spokes a neighbour stands exactly its clearance beside, and of those KiCad keeps some
+        // and drops others (tried 2026-11-22: 16 more spokes agreed on the test set's
+        // GameTiger and sra_dev_board, 17 fewer on the gate tier's boards).
         let mut fits = |lo: Nm, hi: Nm| {
             let strip = across(lo, hi);
-            matches!(&strip, Shape::Polygon(c) if c.iter().all(|&p| within(p))) && self.room_for(&strip, pad, zone, layer, own)
+            matches!(&strip, Shape::Polygon(c) if c.iter().all(|&p| within(p)))
+                && self.room_for(&strip, pad, zone, layer, own)
+                && !self.crowded(&across(lo + 2 * FILL_MARGIN, hi - 2 * FILL_MARGIN), pad, layer, own, FILL_MARGIN)
         };
         if fits(-half, half) {
             return Some((-half, half));
@@ -369,17 +385,16 @@ impl Board {
         [(-least, least), (-half, 2 * least - half), (half - 2 * least, half)].into_iter().find(|&(lo, hi)| fits(lo, hi))
     }
 
-    /// Whether a spoke of `pad`'s zone `zone` fits on `layer` as `shape`: as the zone's own copper
-    /// would, clear of other nets' copper (pours refilled round it and unlocked tracks and vias
-    /// aside), the board's edge, holes and keepouts that forbid pours. A spoke is the zone's
-    /// copper, so it keeps the zone's own clearance `own` from other nets where that is the
-    /// wider: KiCad pours a spoke and then cuts every other net's clearance out of it, and a pad
-    /// between two near neighbours of other nets is left with none (kicad-cli 9.0.8,
-    /// 2026-11-13: CAL430FR's U2, 0.5 mm pitch in a zone with 0.508 mm clearance, has no
-    /// ground pad joined to the pour).
-    fn room_for(&mut self, shape: &Shape, pad: &Item, zone: usize, layer: usize, own: Nm) -> bool {
-        let near = shape.bbox().grow(own);
-        let crowded = self.near(layer, near).into_iter().filter_map(|o| self.item(o).map(|it| (o, it))).any(|(o_id, o)| {
+    /// Whether other nets' copper that stays (pours refilled round it and unlocked tracks and
+    /// vias aside) is nearer `shape`, a piece of a spoke of `pad` on `layer`, than the pour may
+    /// come to it, and `margin` more. A spoke is the zone's copper, so it keeps the zone's own
+    /// clearance `own` from other nets where that is the wider: KiCad pours a spoke and then
+    /// cuts every other net's clearance out of it, and a pad between two near neighbours of
+    /// other nets is left with none (kicad-cli 9.0.8, 2026-11-13: CAL430FR's U2, 0.5 mm pitch
+    /// in a zone with 0.508 mm clearance, has no ground pad joined to the pour).
+    fn crowded(&self, shape: &Shape, pad: &Item, layer: usize, own: Nm, margin: Nm) -> bool {
+        let near = shape.bbox().grow(own + margin);
+        self.near(layer, near).into_iter().filter_map(|o| self.item(o).map(|it| (o, it))).any(|(o_id, o)| {
             let stays = match o.kind {
                 Kind::Pad { .. } => true,
                 Kind::Track | Kind::Via => o.locked,
@@ -387,13 +402,20 @@ impl Board {
                 Kind::Keepout { .. } | Kind::Spoke { .. } => false,
             };
             // A pad with a clearance of its own is kept from by that, whatever the zone's.
-            let own = match self.pad_clearances.get(&o_id) {
-                Some(&c) if matches!(o.kind, Kind::Pad { .. }) => c.max(self.min_clearance_nm),
-                _ => own,
-            };
+            let own = margin
+                + match self.pad_clearances.get(&o_id) {
+                    Some(&c) if matches!(o.kind, Kind::Pad { .. }) => c.max(self.min_clearance_nm),
+                    _ => own,
+                };
             stays && o.net != pad.net && o.on(layer) && o.layers != 0 && shape.gap_within(&o.shape, own as f64) < own as f64
-        });
-        if crowded {
+        })
+    }
+
+    /// Whether a spoke of `pad`'s zone `zone` fits on `layer` as `shape`: as the zone's own copper
+    /// would, clear of other nets' copper ([`Board::crowded`]), the board's edge, holes and
+    /// keepouts that forbid pours.
+    fn room_for(&mut self, shape: &Shape, pad: &Item, zone: usize, layer: usize, own: Nm) -> bool {
+        if self.crowded(shape, pad, layer, own, 0) {
             return false;
         }
         let trial = self.insert(Item { kind: Kind::Pour { zone, kept: true }, net: pad.net, layers: 1 << layer, shape: shape.clone(), hole: None, locked: true, span: None });

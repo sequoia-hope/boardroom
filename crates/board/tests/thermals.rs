@@ -529,3 +529,17 @@ fn a_pin_with_a_hole_may_lose_every_spoke_on_one_side_while_the_other_joins_it()
     let fourth = on(&mut b, 1, sides[3].0, sides[3].1);
     assert_eq!(clearance(&b, fourth), 1, "no spoke left on either side");
 }
+
+/// Two pins 0.5 mm apart in a zone that keeps 0.5 mm from other nets, the lower the zone's own:
+/// the upper pin's clearance reaches the lower pin's far edge exactly, and KiCad's filler
+/// keeps half a micron more than the clearance, so the spoke down from the lower pin is cut
+/// off half a micron short of it and joins nothing (pmw3360's J1: kicad-cli 9.0.8 has the
+/// ground pin of that connector unconnected but for the designer's own track). One hair less
+/// clearance and the spoke comes onto the pin.
+#[test]
+fn a_neighbours_clearance_that_comes_to_a_pads_edge_takes_the_spoke_there() {
+    let pins = "(pad \"1\" smd rect (at 0 0) (size 1.3 0.3) (layers \"F.Cu\") (net 1 \"A\")) (pad \"2\" smd rect (at 0 -0.5) (size 1.3 0.3) (layers \"F.Cu\") (net 2 \"B\"))";
+    let down = |b: &Board| tips(b).into_iter().filter(|t| t.1 > 10.2).count();
+    assert_eq!(down(&board_keeping(0.5, pins, "", "", "")), 0, "{:?}", tips(&board_keeping(0.5, pins, "", "", "")));
+    assert_eq!(down(&board_keeping(0.499, pins, "", "", "")), 1, "{:?}", tips(&board_keeping(0.499, pins, "", "", "")));
+}
