@@ -3,7 +3,7 @@
 
     spokes.py SET [--only id,...|@FILE] [--bin PATH] [--list KIND] [--json OUT]
 
-SET is a tier (smoke, focus, guard, gate): the designers' boards stripped, with the fills KiCad
+SET is `clean` (tier.py's test set) or a tier (smoke, focus, guard, gate): the designers' boards stripped, with the fills KiCad
 wrote on the empty board (LAB/pcbench/truth/ID/bare.kicad_pcb). For every spoke a pad joined by
 thermal reliefs could have (four to a pad and layer), the board model says whether it keeps
 room for it (`crates/board/src/spokes.rs`; `cargo build --release -p board --example
@@ -98,7 +98,7 @@ def kind(row):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("set", help="a tier (smoke, focus, guard, gate)")
+    ap.add_argument("set", help="clean (the test set), or a tier (smoke, focus, guard, gate)")
     ap.add_argument("--only", help="these boards of the tier only: ids with commas between, or @FILE with one id a line")
     ap.add_argument("--bin", default=str(paths.REPO / "target" / "release" / "examples" / "spoke_trials"), help="the built spoke_trials example")
     ap.add_argument("--list", choices=["ours only", "KiCad only"], help="print each spoke of this kind")
@@ -106,7 +106,11 @@ def main():
     a = ap.parse_args()
     if not Path(a.bin).is_file():
         sys.exit(f"spokes: build it first: cargo build --release -p board --example spoke_trials ({a.bin})")
-    ids = pcbench.tier_ids(a.set)
+    if a.set == "clean":
+        import tier
+        ids = [bid for bid, _ in tier.boards("clean", None)]
+    else:
+        ids = pcbench.tier_ids(a.set)
     if a.only:
         only = {l.strip() for l in Path(a.only[1:]).read_text().splitlines() if l.strip()} if a.only.startswith("@") else set(a.only.split(","))
         ids = [b for b in ids if b in only]
