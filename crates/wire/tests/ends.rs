@@ -1,6 +1,6 @@
-//! What a connection may end on and how wide it is: any pad already joined to its pad, a pad
-//! that stands where another of its net does, and a track narrower than its class asks for
-//! where that is what fits.
+//! What a connection may end on and how wide it is: any pad already joined to its pad, on the
+//! bare board or by a strand laid before, a pad that stands where another of its net does, and
+//! a track narrower than its class asks for where that is what fits.
 
 use board::Board;
 
@@ -35,6 +35,12 @@ fn pad(x: f64, y: f64, w: f64, h: f64, net: &str) -> String {
 fn pin(x: f64, y: f64, net: &str) -> String {
     let n = ["", "A", "B", "C"].iter().position(|&k| k == net).unwrap();
     format!("(footprint \"P\" (layer \"F.Cu\") (at {x} {y}) (pad \"1\" thru_hole circle (at 0 0) (size 1.6 1.6) (drill 0.8) (layers \"*.Cu\" \"*.Mask\") (net {n} \"{net}\")))")
+}
+
+/// A square pin 2 mm across with a hole in it, on both layers.
+fn post(x: f64, y: f64, net: &str) -> String {
+    let n = ["", "A", "B", "C"].iter().position(|&k| k == net).unwrap();
+    format!("(footprint \"P\" (layer \"F.Cu\") (at {x} {y}) (pad \"1\" thru_hole rect (at 0 0) (size 2 2) (drill 0.8) (layers \"*.Cu\" \"*.Mask\") (net {n} \"{net}\")))")
 }
 
 fn whole(board: &Board) -> (plan::Plan, wire::Drawing) {
@@ -148,4 +154,25 @@ fn two_connections_of_one_net_go_through_a_narrow_gap_as_one_track() {
     }
     assert!(!drawing.spare.is_empty());
     assert!(board::connectivity_without_pours(&wire::onto(&board, &plan, &drawing).0).airlines.is_empty(), "all joined");
+}
+
+/// Nine posts in a square, 0.3 mm apart, where a track with its clearance needs 0.6: the middle
+/// one, of net A, is shut in on both layers. The post east of it is of net A too, and the
+/// net's third pad stands across the board, nearer the middle post than the east one, so its
+/// connection is asked for to the middle one. It is made to the east post, which the middle
+/// one is joined to by a strand across the slot between them (an adapter board's rows of
+/// holes behind its socket's pads, Youyue-858D-plus-MCU-adapter: the designer wires to the
+/// socket pad).
+#[test]
+fn a_pad_shut_in_is_reached_by_way_of_a_pad_it_is_wired_to() {
+    let mut parts = Vec::new();
+    for x in [7.7, 10.0, 12.3] {
+        for y in [7.7, 10.0, 12.3] {
+            parts.push(post(x, y, if y == 10.0 && x >= 10.0 { "A" } else { "" }));
+        }
+    }
+    parts.push(pad(3.0, 16.0, 1.5, 1.5, "A"));
+    let board = board(&parts.concat(), 0.2);
+    let (plan, drawing) = whole(&board);
+    assert_eq!(wire::amiss(&board, &plan, &drawing), (0, 0));
 }

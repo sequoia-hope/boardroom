@@ -9,8 +9,8 @@
 //! apart can be planned once the other nets are drawn: such a connection may end at a via
 //! standing in the pour ([`Want::into`]). A connection whose wire could not be drawn is laid
 //! again narrower, or at its narrowest barred from the gap it stuck in ([`again`]), the rest of
-//! the plan left as it is. A connection ends on its pad or on any pad already joined to it
-//! ([`Plan::joined`]), and is as wide as its net's class asks unless it has no way at that
+//! the plan left as it is. A connection ends on its pad or on any pad already joined to it,
+//! on the bare board ([`Plan::joined`]) or by the strands laid, and is as wide as its net's class asks unless it has no way at that
 //! width ([`wide`]). A part whose pads stand nearer each other than vias may can have its way
 //! out settled for the whole part before anything else is laid ([`escape`]); without that, no
 //! via of another net is put in the way straight out of such a pad ([`Spots::shuts`]). A
@@ -497,7 +497,9 @@ fn sites_of(sheets: &[Sheet], connection: usize) -> Vec<usize> {
 }
 
 /// Where a connection may start and where it may end: each pad, the pads joined to it before
-/// anything is laid, the via the stub of any of them ends in, and the hole in any of them
+/// anything is laid or by the strands laid since (a pad walled in by its neighbours, with a
+/// short strand to the pad beside it that faces open board, is reached by way of that one, as
+/// a designer wires it), the via the stub of any of them ends in, and the hole in any of them
 /// ([`Spots::holes`]). A stub starts at its pad and has no end but the via it puts in.
 fn ends(sheets: &[Sheet], wants: &[Want], joined: &Joined, connection: usize) -> (Vec<End>, Vec<End>) {
     let want = &wants[connection];
@@ -505,14 +507,56 @@ fn ends(sheets: &[Sheet], wants: &[Want], joined: &Joined, connection: usize) ->
         return (vec![End::Item(want.from)], Vec::new());
     }
     let holes = sheets.first().map_or(&[][..], |s| s.space.spots.holes.as_slice());
-    let cluster = |pad: ItemId| {
-        let others = joined.get(&pad).map_or(&[][..], |pads| pads.as_slice());
-        let pads: Vec<ItemId> = std::iter::once(pad).chain(others.iter().copied().filter(|&p| p != pad)).collect();
+    // What the strands laid join, of this net: the two ends of each, a strand of the connection
+    // itself aside. They are read as they lie, not as their connections were asked for: one
+    // asked for between two pads may have been laid to a third.
+    let mut links: std::collections::HashMap<End, Vec<End>> = std::collections::HashMap::new();
+    for strand in sheets.iter().flat_map(|s| s.laid().map(move |k| &s.strands[k])).filter(|s| s.net == want.net && s.connection != connection) {
+        links.entry(strand.from).or_default().push(strand.to);
+        links.entry(strand.to).or_default().push(strand.from);
+    }
+    let reach = |pad: ItemId| -> Vec<ItemId> {
+        let mut pads = vec![pad];
+        let mut seen: std::collections::HashSet<End> = std::collections::HashSet::from([End::Item(pad)]);
+        let mut todo = vec![End::Item(pad)];
+        while let Some(end) = todo.pop() {
+            let mut next: Vec<End> = links.get(&end).cloned().unwrap_or_default();
+            match end {
+                End::Item(p) => {
+                    next.extend(joined.get(&p).into_iter().flatten().map(|&q| End::Item(q)));
+                    next.extend(holes.iter().enumerate().filter(|(_, h)| h.0 == p).map(|(site, _)| End::Site(site)));
+                }
+                End::Site(site) => next.extend(holes.get(site).map(|h| End::Item(h.0))),
+            }
+            for n in next {
+                if seen.insert(n) {
+                    if let End::Item(p) = n {
+                        pads.push(p);
+                    }
+                    todo.push(n);
+                }
+            }
+        }
+        pads
+    };
+    let (from, mut to) = (reach(want.from), reach(want.to));
+    // Its two pads joined already, by connections laid to pads other than their own: it joins
+    // them to what is still apart, the pads of the net's other connections that they do not
+    // reach.
+    if from.contains(&want.to) {
+        let mut apart: Vec<ItemId> = wants.iter().filter(|w| w.net == want.net && !w.stub).flat_map(|w| [w.from, w.to]).filter(|p| !from.contains(p)).collect();
+        apart.sort();
+        apart.dedup();
+        if !apart.is_empty() {
+            to = apart;
+        }
+    }
+    let cluster = |pads: Vec<ItemId>| {
         let stubs = wants.iter().enumerate().filter(|(_, w)| w.stub && pads.contains(&w.from)).flat_map(|(s, _)| sites_of(sheets, s)).map(End::Site).collect::<Vec<End>>();
         let holed = holes.iter().enumerate().filter(|(_, h)| pads.contains(&h.0)).map(|(site, _)| End::Site(site)).collect::<Vec<End>>();
         pads.into_iter().map(End::Item).chain(stubs).chain(holed).collect::<Vec<End>>()
     };
-    (cluster(want.from), cluster(want.to))
+    (cluster(from), cluster(to))
 }
 
 /// How many times a way whose vias the sheets do not hold is looked for again without them.
