@@ -54,8 +54,8 @@ fn main() {
                         if !space.gap(e) || !space.free(next) || seen[next] || space.barred(next, left.net) {
                             continue;
                         }
-                        if need(e) > space.width(e) + 1e-9 {
-                            short.push((need(e) - space.width(e), e));
+                        if need(e) > space.width_for(e, left.net) + 1e-9 {
+                            short.push((need(e) - space.width_for(e, left.net), e));
                             continue;
                         }
                         seen[next] = true;
@@ -118,8 +118,8 @@ fn main() {
                         let others: Vec<String> = sheet.nets_on(e).iter().map(|&(n, w)| format!("{} {w:.2}", board.net_name(n))).collect();
                         println!(
                             "    {:>7.3},{:>7.3} ({}) to {:>7.3},{:>7.3} ({}): room {:.3}, needs {:.3} alone{}{}{}",
-                            a[0], a[1], of(edge.v[0]), b[0], b[1], of(edge.v[1]), space.width(e), alone,
-                            if alone > space.width(e) + 1e-9 { " TOO NARROW" } else { "" },
+                            a[0], a[1], of(edge.v[0]), b[0], b[1], of(edge.v[1]), space.width_for(e, left.net), alone,
+                            if alone > space.width_for(e, left.net) + 1e-9 { " TOO NARROW" } else { "" },
                             if others.is_empty() { String::new() } else { format!("; in it: {} needing {:.3}", others.join(", "), sheet.need(&board, e, None)) },
                             if space.barred(t, left.net) { "; barred to the net" } else { "" }
                         );

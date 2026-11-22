@@ -380,6 +380,10 @@ pub struct Space {
     /// ([`Space::leant_on`]).
     #[serde(skip)]
     cap: Vec<f64>,
+    /// The same for each side that leans over the edge, with the obstacle the side is of: a
+    /// strand of that obstacle's own net is not kept off it ([`Space::width_for`]).
+    #[serde(skip)]
+    caps: Vec<Vec<(f64, usize)>>,
     /// For each corner, the far corners of the obstacle sides that meet at it.
     #[serde(skip)]
     sides_at: Vec<Vec<usize>>,
@@ -982,8 +986,9 @@ impl Space {
                 tri_spots[t].push(k);
             }
         }
-        let mut space = Space { layer, obstacles, verts, vert_of, tris, edges, ends, sites, spots: spots.clone(), spot_tri, tri_spots, cap: Vec::new(), sides_at: Vec::new(), bar_of };
-        space.cap = (0..space.edges.len()).map(|e| space.leant_on(e)).collect();
+        let mut space = Space { layer, obstacles, verts, vert_of, tris, edges, ends, sites, spots: spots.clone(), spot_tri, tri_spots, cap: Vec::new(), caps: Vec::new(), sides_at: Vec::new(), bar_of };
+        space.caps = (0..space.edges.len()).map(|e| space.leant_on(e)).collect();
+        space.cap = space.caps.iter().map(|c| c.iter().map(|c| c.0).fold(f64::MAX, f64::min)).collect();
         let mut sides_at = vec![Vec::new(); space.verts.len()];
         for (e, edge) in space.edges.iter().enumerate() {
             if !space.gap(e) {
@@ -1001,10 +1006,10 @@ impl Space {
     /// that crosses the gap passes between that other corner and the side, and those are
     /// nearer: a row of pads beside a long edge has a gap from each pad's corner to the far
     /// end of the edge, each many times as long as the strip between the row and the edge is
-    /// wide.
-    fn leant_on(&self, e: usize) -> f64 {
+    /// wide. For each such side: the room it leaves, and the obstacle it is a side of.
+    fn leant_on(&self, e: usize) -> Vec<(f64, usize)> {
         let edge = &self.edges[e];
-        let mut room = f64::MAX;
+        let mut room = Vec::new();
         if !self.gap(e) {
             return room;
         }
@@ -1038,8 +1043,8 @@ impl Space {
                             // Nothing between: every corner passed is beyond the line from
                             // the corner to its foot.
                             let near = cross(pa, foot, pb);
-                            if passed.iter().all(|&q| cross(pa, foot, q) * near <= 1e-12) {
-                                room = room.min(dist(pa, foot));
+                            if let (true, Some(of)) = (passed.iter().all(|&q| cross(pa, foot, q) * near <= 1e-12), self.vert_of[b]) {
+                                room.push((dist(pa, foot), of));
                             }
                         }
                         break;
@@ -1093,6 +1098,24 @@ impl Space {
         let (a, b) = (self.verts[edge.v[0]], self.verts[edge.v[1]]);
         let (x, y) = ((b[0] - a[0]).abs(), (b[1] - a[1]).abs());
         x.max(y).max((x + y) * std::f64::consts::FRAC_1_SQRT_2).min(self.cap.get(e).copied().unwrap_or(f64::MAX))
+    }
+
+    /// [`Space::width`] for strands that are all of `net`: a side that leans over the gap
+    /// takes no room from it where it is a side of that net's own copper. Such a strand is
+    /// not passing between the side and the gap's other corner: it may lie on its own pad, or
+    /// has come out of that very side (the heater actuator board of the gate tier, 2026-11-21:
+    /// a capacitor's pad 0.5 mm from a hole of another net beside the middle of its side, and
+    /// the track its designer runs straight out of that side past the hole).
+    pub fn width_for(&self, e: usize, net: u32) -> f64 {
+        let caps = self.caps.get(e).map_or(&[][..], |c| c.as_slice());
+        if net == 0 || caps.is_empty() {
+            return self.width(e);
+        }
+        let edge = &self.edges[e];
+        let (a, b) = (self.verts[edge.v[0]], self.verts[edge.v[1]]);
+        let (x, y) = ((b[0] - a[0]).abs(), (b[1] - a[1]).abs());
+        let own = |o: usize| matches!(self.obstacles[o].what, What::Pad | What::Copper) && self.obstacles[o].net == net;
+        caps.iter().filter(|c| !own(c.1)).map(|c| c.0).fold(x.max(y).max((x + y) * std::f64::consts::FRAC_1_SQRT_2), f64::min)
     }
 
     /// The plan's vias here: the middle and the net of each.

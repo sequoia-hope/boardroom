@@ -263,9 +263,32 @@ impl Sheet {
         self.space.keep(board, e.v[0], first.0) + self.space.keep(board, e.v[1], last.0) + Self::stack(board, &nets)
     }
 
+    /// Whether the strands on `edge` have the room they need there, with one more of a net
+    /// and width `added` at a slot: [`Sheet::need`] against the gap's room, which for strands
+    /// all of one net is not shortened by that net's own copper ([`Space::width_for`]).
+    pub fn fits(&self, board: &Board, edge: usize, added: Option<(usize, u32, f64)>) -> bool {
+        let e = &self.space.edges[edge];
+        let mut nets = self.nets_on(edge);
+        if let Some((slot, net, width)) = added {
+            nets.insert(slot, (net, width));
+        }
+        let (Some(first), Some(last)) = (nets.first(), nets.last()) else { return true };
+        let need = self.space.keep(board, e.v[0], first.0) + self.space.keep(board, e.v[1], last.0) + Self::stack(board, &nets);
+        need <= self.gap_room(edge, &nets) + EPS
+    }
+
+    /// The room `edge` has for the strands `nets` across it: for strands all of one net the
+    /// gap is not shortened by that net's own copper ([`Space::width_for`]).
+    fn gap_room(&self, edge: usize, nets: &[(u32, f64)]) -> f64 {
+        match nets.first() {
+            Some(first) if nets.iter().all(|n| n.0 == first.0) => self.space.width_for(edge, first.0),
+            _ => self.space.width(edge),
+        }
+    }
+
     /// How full an edge is: what its strands need over its length (0 with none).
     pub fn fill(&self, board: &Board, edge: usize) -> f64 {
-        let len = self.space.width(edge);
+        let len = self.gap_room(edge, &self.nets_on(edge));
         if len > 0.0 { self.need(board, edge, None) / len } else { 0.0 }
     }
 
@@ -381,7 +404,7 @@ impl Sheet {
             let l = tri.e.map(|e| self.on[e].len());
             !self.space.free(t) || ((l[0] + l[1] + l[2]) % 2 == 0 && l[0] <= l[1] + l[2] && l[1] <= l[0] + l[2] && l[2] <= l[0] + l[1])
         });
-        chords && (0..self.space.edges.len()).all(|e| self.on[e].is_empty() || !self.space.gap(e) || !self.space.passed(e) || self.need(board, e, None) <= self.space.width(e) + EPS)
+        chords && (0..self.space.edges.len()).all(|e| self.on[e].is_empty() || !self.space.gap(e) || !self.space.passed(e) || self.fits(board, e, None))
     }
 
     /// The point of `edge` a share `u` of the way from its first corner to its second.

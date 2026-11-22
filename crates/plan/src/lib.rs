@@ -842,7 +842,7 @@ fn shut_in_by_spokes(board: &Board, sheets: &[Sheet], spots: &Spots) -> Vec<(Ite
                 if !space.free(next) || seen.contains(&(l, next)) || space.barred(next, net) {
                     continue;
                 }
-                if space.keep(board, space.edges[e].v[0], net) + space.keep(board, space.edges[e].v[1], net) + wide > space.width(e) + strands::EPS {
+                if space.keep(board, space.edges[e].v[0], net) + space.keep(board, space.edges[e].v[1], net) + wide > space.width_for(e, net) + strands::EPS {
                     short.push((l, e));
                     continue;
                 }

@@ -12,7 +12,7 @@ use std::collections::BinaryHeap;
 use board::Board;
 
 use crate::space::{dist, End, Map, P};
-use crate::strands::{Region, Sheet, EPS};
+use crate::strands::{Region, Sheet};
 
 /// Where a leg ends: on something that is there, or at a via the way puts in at a spot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -342,7 +342,7 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
                 let Some(next) = sheet.space.edges[e].t.iter().flatten().copied().find(|&x| x != t) else { continue };
                 let end = goals.iter().find(|g| sheet.space.ends.get(&g.0).is_some_and(|&o| sheet.space.tris[next].inside == Some(o))).copied();
                 let ends = end.is_some();
-                if !ends && (!sheet.space.free(next) || sheet.space.barred(next, net) || barred(sheet, e) || sheet.need(board, e, Some((s, net, width))) > sheet.space.width(e) + EPS) {
+                if !ends && (!sheet.space.free(next) || sheet.space.barred(next, net) || barred(sheet, e) || !sheet.fits(board, e, Some((s, net, width)))) {
                     continue;
                 }
                 let there = sheet.crossing(board, e, s, me, p, goal);
@@ -431,7 +431,7 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
                 if about.1 > std::f64::consts::PI + 1e-6 {
                     continue;
                 }
-                if !ends && sheet.need(board, e, Some((s, net, width))) > sheet.space.width(e) + EPS {
+                if !ends && !sheet.fits(board, e, Some((s, net, width))) {
                     continue;
                 }
                 // Straight from the last bend if that can be; else this crossing is a bend.
