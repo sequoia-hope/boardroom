@@ -37,8 +37,10 @@ a board project (`template/CLAUDE.md` is the board-repo version).
 - **The new router is `boardroom route <board.kicad_pcb> [--out DIR]`** (default `route/<board>/`
   in the board's project; it keeps each pour the board's pinned blocks keep joined whole, from
   `packages/` or `--packages DIR`); `boardroom check <board.kicad_pcb>` gives our checker's faults and open
-  connections. It is a prototype: judge it with `bench/tier.py` (KiCad's DRC beside ours), and
-  after a gate run rebuild the gallery the owner reviews (`bench/gallery.py`, pages in the lab).
+  connections. It is a prototype: judge it with `bench/tier.py clean` (KiCad's DRC beside ours, on
+  the boards whose designer's own finished board passes that DRC: the owner's test set since
+  2026-11-22, and no design rule is relaxed to get a board through), and after a run of it
+  rebuild the gallery the owner reviews (`bench/gallery.py`, pages in the lab).
   Board repos' `scripts/route.sh` still runs the old router (`$ULTRAROUTE`, a built binary); the
   old router's code is never brought in or built here.
 - **Making a board repo:** run `scripts/new-board.sh <dir> [--name <title>] [--github <owner>/<repo> [--private]]`,

@@ -5,8 +5,13 @@ KiCad judging each routed board: the yardstick for a change to `plan` or `wire`.
     tier.py SET [--bin TAG=PATH ...] [--run NAME] [--cap SECONDS] [--only id,...|@FILE] [--against RUN]
                 [--no-kicad] [--again] [--rows]
 
-SET is a tier of pcbench_tiers.json (smoke, focus, guard, gate: the designers' boards stripped,
-LAB/pcbench/truth/ID/bare.kicad_pcb), or `look` or `ours` (prototype.py's boards). Each --bin is
+SET is `clean`, the test set (owner, 2026-11-22): every board of the corpus whose designer's own
+finished board passes KiCad's DRC as it stands, with nothing unconnected and no violation KiCad
+calls an error (its warnings, silkscreen and library notes mostly, aside), stripped
+(LAB/pcbench/truth/ID/bare.kicad_pcb). A board its own designer could not get through DRC proves
+nothing about a router and is not worth the time. Or SET is a tier of pcbench_tiers.json (smoke,
+focus, guard, gate: boards sorted by how the old router fared on them, most of which fail DRC as
+designed), or `look` or `ours` (prototype.py's boards). Each --bin is
 a build to run, named by its tag; with none it is `head`, the release build
 (`cargo build --release -p boardroom -p kicad-text`). To try a change beside the build it
 changes, build each into its own target directory and copy the binary to its own name: a build
@@ -24,10 +29,12 @@ LAB/tier/NAME/results.json; a board already there is not run again without --aga
 cut short is taken up where it stopped, and a second build can be added to a finished run.
 
 Prints, for each build: boards whole and connections open by our count and by KiCad's (whole
-there: nothing unconnected and no error the routed copper adds), the same for the boards the
-designer routed with nothing open and no error of their own (the others cannot all be made
-whole inside the rules: what is open there is a floor, not the router's doing), track length,
-vias and time; and for two builds, each board on which they differ.
+there: nothing unconnected and no error the routed copper adds), how many boards pass KiCad's
+DRC outright (nothing unconnected and no error at all on the routed board: the measure on
+`clean`), on a tier of pcbench_tiers.json the same for the boards whose designer's routing
+leaves nothing open and adds no error (a looser thing than passing DRC: the stripped board may
+have errors already), track length, vias and time; and for two builds, each board on which they
+differ.
 
 --against RUN (a tier only) sets a pcbench run of the same designers' boards beside each build,
 the frozen old router's as a rule (`pcbench.py run --source truth`), both held to pcbench's
@@ -36,6 +43,7 @@ adds. It names the boards one router finishes and the other does not. The old ro
 read as it was stored, not run again, so the two had different clocks: say so with the figures.
 """
 import argparse
+import collections
 import concurrent.futures
 import datetime
 import json
@@ -54,9 +62,22 @@ LAB = paths.lab()
 MEMORY = "8G"
 
 
+def designer_passes(d):
+    """Whether KiCad's DRC passes the designer's own board in truth directory `d` as it stands:
+    nothing unconnected and no violation it calls an error. The stripped board must be there
+    and judged too."""
+    report, bare = d / "designer.drc.json", d / "bare.json"
+    if not (report.exists() and bare.exists() and (d / "bare.kicad_pcb").exists()) or "error" in json.loads(bare.read_text()):
+        return False
+    r = json.loads(report.read_text())
+    return not r.get("unconnected_items") and not any(v.get("severity") == "error" for v in r.get("violations", []))
+
+
 def boards(name, only):
     """(id, board file) of a set, in the order they are run."""
-    if name == "look":
+    if name == "clean":
+        found = [(d.name, d / "bare.kicad_pcb") for d in sorted((LAB / "pcbench" / "truth").iterdir()) if designer_passes(d)]
+    elif name == "look":
         found = [(bid, LAB / board) for bid, _, board in prototype.BOARDS]
     elif name == "ours":
         found = [(bid, Path(board)) for bid, _, board in prototype.OURS]
@@ -110,6 +131,10 @@ def route(binary, board, out, cap, env, judge):
             row["kicad_failed"] = k[-300:]
         else:
             row["kicad_open"], row["kicad_new"] = k[0], k[2]
+            report = out / "routed.drc.json"
+            if report.exists():
+                kinds = collections.Counter(v["type"] for v in json.loads(report.read_text()).get("violations", []) if v.get("severity") == "error")
+                row["kicad_errors"] = dict(sorted(kinds.items()))
     return row
 
 
@@ -121,6 +146,12 @@ def kicad_whole(row):
     return row.get("kicad_open") == 0 and not row.get("kicad_new")
 
 
+def kicad_passes(row):
+    """KiCad's DRC passes the routed board outright: nothing unconnected and no error on it at
+    all, the stripped board's own included."""
+    return row.get("kicad_open") == 0 and row.get("kicad_errors") == {}
+
+
 def line(tag, rows, of):
     """One build's totals over `rows` ({id: row}), said of `of` (which boards these are)."""
     done = {b: r for b, r in rows.items() if "open" in r}
@@ -129,6 +160,8 @@ def line(tag, rows, of):
     if judged:
         new = sum(sum(r["kicad_new"].values()) for r in judged)
         text += f"; KiCad: {sum(map(kicad_whole, judged))} whole, {sum(r['kicad_open'] for r in judged)} unconnected, {new} new errors"
+        if all("kicad_errors" in r for r in judged):
+            text += f", {sum(map(kicad_passes, judged))} pass DRC outright ({sum(sum(r['kicad_errors'].values()) for r in judged)} errors in all)"
         if len(judged) < len(done):
             text += f" ({len(done) - len(judged)} it could not judge)"
     stopped = sum("stopped" in r for r in rows.values())
@@ -168,7 +201,8 @@ def told(row):
     if row["faults"]:
         text += f" faults {row['faults']}"
     if "kicad_open" in row:
-        text += f"  KiCad {row['kicad_open']:3}" + (" +" + ",".join(f"{n} {t}" for t, n in sorted(row["kicad_new"].items())) if row["kicad_new"] else "")
+        errors = row.get("kicad_errors", row["kicad_new"])
+        text += f"  KiCad {row['kicad_open']:3}" + (" +" + ",".join(f"{n} {t}" for t, n in sorted(errors.items())) if errors else "")
     elif "kicad_failed" in row:
         text += "  KiCad could not judge"
     return text + f"  left {row['left']:3} undrawn {row['undrawn']:3} vias {row['vias']:4} {row['track_mm']:8.1f} mm {row['seconds']:7.1f} s"
@@ -230,21 +264,22 @@ def main():
             print(f"{tag:12} {bid[:44]:44} {told(row)}", file=sys.stderr, flush=True)
 
     ids = [bid for bid, _ in todo]
-    fair = [bid for bid, board in todo if clean(board)]
-    print(f"{a.set}: {len(ids)} boards" + (f", {len(fair)} of them routed by their designer with nothing open and no error" if fair else "")
+    fair = [] if a.set == "clean" else [bid for bid, board in todo if clean(board)]
+    print(f"{a.set}: {len(ids)} boards" + (", each passing KiCad's DRC as its designer routed it" if a.set == "clean" else "")
+          + (f", {len(fair)} of them routed by their designer with nothing open and no error added to the stripped board's" if fair else "")
           + (", first plan and drawing only (WIRE_FIRST)" if first else "") + f"; {out}")
     for tag in builds:
         mine = {bid: rows[tag][bid] for bid in ids if bid in rows.get(tag, {})}
         print(line(tag, mine, "all"))
         if fair:
-            print(line(tag, {b: r for b, r in mine.items() if b in fair}, "designer-clean"))
+            print(line(tag, {b: r for b, r in mine.items() if b in fair}, "designer adds no error"))
         done = [r for r in mine.values() if "open" in r]
         print(f"{tag:12} left {sum(r['left'] for r in done)}, undrawn {sum(r['undrawn'] for r in done)}, vias {sum(r['vias'] for r in done)}, "
               f"track {sum(r['track_mm'] for r in done) / 1000:.2f} m, {sum(r['seconds'] for r in done):.0f} s on the {len(done)} boards finished")
         if a.against:
             against(a.against, tag, mine, ids)
     tags = list(builds)
-    key = lambda r: (r.get("open"), r.get("faults"), r.get("kicad_open"), r.get("kicad_new"), "stopped" in r, "failed" in r)
+    key = lambda r: (r.get("open"), r.get("faults"), r.get("kicad_open"), r.get("kicad_new"), r.get("kicad_errors"), "stopped" in r, "failed" in r)
     for bid in ids:
         have = [rows.get(tag, {}).get(bid) for tag in tags]
         if None in have:
