@@ -543,3 +543,18 @@ fn a_neighbours_clearance_that_comes_to_a_pads_edge_takes_the_spoke_there() {
     assert_eq!(down(&board_keeping(0.5, pins, "", "", "")), 0, "{:?}", tips(&board_keeping(0.5, pins, "", "", "")));
     assert_eq!(down(&board_keeping(0.499, pins, "", "", "")), 1, "{:?}", tips(&board_keeping(0.499, pins, "", "", "")));
 }
+
+/// Two pins of the zone's net in one place, as a USB-C socket's A1 and B12 are; the next pin,
+/// of net B, takes the left half of their spokes up and down, and a mounting hole up and to
+/// the left takes the pour the spoke up would end in. Each pin's spoke up lies in the other's,
+/// end on end, and the two are no bridge: KiCad's fill has none there (sra_dev_board's J1,
+/// kicad-cli 9.0.8). The same pair turned to point left or down KiCad does keep.
+#[test]
+fn the_same_spoke_of_two_pads_in_one_place_is_a_bridge_only_as_kicad_has_it() {
+    let pins = "(pad \"A1\" smd rect (at 0 0) (size 0.6 1.45) (layers \"F.Cu\") (net 1 \"A\")) (pad \"B12\" smd rect (at 0 0) (size 0.6 1.45) (layers \"F.Cu\") (net 1 \"A\"))
+                (pad \"A4\" smd rect (at -0.8 0) (size 0.6 1.45) (layers \"F.Cu\") (net 2 \"B\"))
+                (pad \"\" np_thru_hole circle (at -0.36 -1.445) (size 0.65 0.65) (drill 0.65) (layers \"*.Cu\" \"*.Mask\"))";
+    let b = board_keeping(0.5, pins, "", "", "");
+    assert!(!tips(&b).iter().any(|t| t.1 < 9.0), "{:?}", tips(&b));
+    assert!(tips(&b).iter().any(|t| t.1 > 11.0), "{:?}", tips(&b));
+}

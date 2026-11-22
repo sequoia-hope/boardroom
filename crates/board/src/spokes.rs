@@ -297,7 +297,18 @@ impl Board {
             // another's end are in each other).
             for k in 0..facing.len() {
                 let me = &facing[k];
-                let met = facing.iter().any(|o| o.pad != me.pad && o.layer == me.layer && o.stub.contains(me.tip) && me.stub.contains(o.tip));
+                // Two pads in one place (a USB-C socket's A1 and B12) send the same spoke the
+                // same way, each one's end on the edge of the other's. KiCad's filler has such
+                // a pair meet or not as its point-in-outline test falls for a point on the
+                // outline's edge: they meet where the spoke runs towards -x, or straight
+                // towards +y, and not otherwise (zone_filler.cpp 9.0.8 and
+                // SHAPE_LINE_CHAIN_BASE::PointInside; sra_dev_board's J1, 2026-11-22: the pins'
+                // spoke towards the shield pad west of them is there, and none towards the
+                // mounting hole north of them).
+                let twin = |o: &Facing| o.centre == me.centre && (o.angle - me.angle).rem_euclid(360.0).min((me.angle - o.angle).rem_euclid(360.0)) < 1.0;
+                let (sin, cos) = me.angle.to_radians().sin_cos();
+                let twins_meet = cos < -1e-6 || (cos.abs() <= 1e-6 && sin < 0.0);
+                let met = facing.iter().any(|o| o.pad != me.pad && o.layer == me.layer && (twins_meet || !twin(o)) && o.stub.contains(me.tip) && me.stub.contains(o.tip));
                 if !met {
                     continue;
                 }
