@@ -230,3 +230,34 @@ fn a_wire_runs_over_a_pins_spokes_on_one_side_where_the_other_side_joins_it() {
     assert_eq!(wire::amiss(&board, &plan, &drawing), (0, 0));
     assert!(drawing.wires.iter().all(|w| w.layer == 1), "X's wire is on the back, where no spoke is kept");
 }
+
+/// The ground pin of the three, with a pad of another net hard by its east side as well: on
+/// the bare board it has the one spoke west, of the two the rules ask. KiCad's check passes
+/// such a pad on the bare board where the stump of a cut spoke still crosses its gap, and
+/// fails it once the wires have taken the pour the stump stood on (OpenVNAVI's driver board,
+/// gate tier, 2026-11-22: the +5V end pin of each shift register, which its designer draws a
+/// track to). It is drawn a spoke by hand all the same.
+#[test]
+fn a_pad_short_of_spokes_on_the_bare_board_is_drawn_one_by_hand_too() {
+    let parts = [hole("J1", 10.0, 7.5, 0, ""), hole("J2", 10.0, 10.0, 1, "GND"), hole("J3", 10.0, 12.5, 0, ""), smd("R2", 12.0, 10.0, 0, ""), smd("R4", 5.0, 10.0, 1, "GND")].concat();
+    let text = format!(
+        "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
+         (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
+         (net 0 \"\") (net 1 \"GND\")
+         (gr_rect (start 0 0) (end 20 20) (layer \"Edge.Cuts\") (width 0.1))
+         {parts}
+         (zone (net 1) (net_name \"GND\") (layer \"F.Cu\") (hatch edge 0.5) (connect_pads (clearance 0.2)) (min_thickness 0.25)
+           (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5))
+           (polygon (pts (xy 0.5 0.5) (xy 19.5 0.5) (xy 19.5 19.5) (xy 0.5 19.5)))))"
+    );
+    let (pcb, copper) = kicad::parse_board(&text).unwrap();
+    let board = Board::new(&pcb, &copper, kicad::Rules::parse(RULES).unwrap());
+    let before = board::Pours::likely(&board).starved(&board);
+    assert_eq!(before.len(), 1, "the pin has one spoke of two: {before:?}");
+    let (plan, drawing) = wire::route(&board);
+    assert_eq!(wire::amiss(&board, &plan, &drawing), (0, 0));
+    assert_eq!(drawing.ties.len(), 1, "{:?}", drawing.ties);
+    let tie = &drawing.ties[0];
+    assert_eq!(tie.pts[0], [10.0, 10.0], "from the pin's middle");
+    assert!(drawing.stitches.is_empty(), "{:?}", drawing.stitches);
+}

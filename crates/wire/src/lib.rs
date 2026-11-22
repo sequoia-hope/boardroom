@@ -1166,20 +1166,27 @@ fn stitch(with: &mut Board, pours: &board::Pours, s: &board::Starved) -> Option<
 /// `drawing` with a spoke drawn by hand for each pad it leaves short of spokes ([`tie`]), or,
 /// where there is no room for one, a via that joins the pour its spokes end in to the net's
 /// pour on another layer ([`stitch`]), and how many pads are short still.
+///
+/// A pad in `before`, short on the bare board already, is drawn a spoke too where there is
+/// room, though it is not counted and gets no via. KiCad may well have passed it on the bare
+/// board: its check counts the stump of a spoke that a neighbouring pad cuts off short of the
+/// pad, and the wires round the pad then take the pour such a stump stands on.
 fn tied(board: &Board, plan: &Plan, mut drawing: Drawing, before: &[(ItemId, usize)]) -> (Drawing, usize) {
     for _ in 0..SPOKES {
         let (mut with, _) = onto(board, plan, &drawing);
         let pours = board::Pours::likely(&with);
-        let short: Vec<board::Starved> = pours.starved(&with).into_iter().filter(|s| !before.contains(&(s.pad, s.layer))).collect();
-        let (mut ties, mut stitches) = (Vec::new(), Vec::new());
-        for s in &short {
+        let (mut ties, mut stitches, mut short) = (Vec::new(), Vec::new(), 0);
+        for s in &pours.starved(&with) {
+            let already = before.contains(&(s.pad, s.layer));
+            short += usize::from(!already);
             match tie(&mut with, &pours, s) {
                 Some(t) => ties.push(t),
-                None => stitches.extend(stitch(&mut with, &pours, s)),
+                None if !already => stitches.extend(stitch(&mut with, &pours, s)),
+                None => {}
             }
         }
         if ties.is_empty() && stitches.is_empty() {
-            return (drawing, short.len());
+            return (drawing, short);
         }
         drawing.ties.extend(ties);
         drawing.stitches.extend(stitches);
