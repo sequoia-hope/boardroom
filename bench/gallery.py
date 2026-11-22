@@ -85,8 +85,8 @@ def plot(pcb, layers, out, stem, box, tint):
 
 
 def marks(report, bare):
-    """(what KiCad calls unconnected, as pairs of places; the errors not on the bare board, as
-    [kind, x, y])."""
+    """(what KiCad calls unconnected, as pairs of places; its errors that are not on the bare
+    board, or with no `bare` every error, as [kind, x, y])."""
     if not report.exists():
         return [], []
     d = json.loads(report.read_text())
@@ -99,11 +99,26 @@ def marks(report, bare):
             had[key(v)] = had.get(key(v), 0) + 1
     new = []
     for v in d.get("violations", []):
+        if v.get("severity", "error") != "error":
+            continue
         if had.get(key(v), 0) > 0:
             had[key(v)] -= 1
         elif v.get("items"):
             new.append([v["type"], *place(v["items"][0])])
     return lines, new
+
+
+def errors(run_dir, truth, row):
+    """A routed board's marks: what is unconnected, and KiCad's errors on it. Where the tier kept
+    every error on the routed board (`kicad_errors`: the test set, judged by passing DRC
+    outright) all of them; else those the routed copper adds to the bare board's, and only of
+    the kinds the tier counted as added: an error the bare board has under other words is not
+    ours."""
+    report = run_dir / "routed.drc.json"
+    if "kicad_errors" in row:
+        return marks(report, None)
+    lines, new = marks(report, next((p for p in (run_dir / "bare.drc.json", truth / "bare.drc.json") if p.exists()), None))
+    return lines, [n for n in new if n[0] in (row.get("kicad_new") or {})]
 
 
 def thumb(d, layers, box, width=360):
@@ -137,7 +152,10 @@ def one(job):
     entry = {"id": bid, "group": group, "row": job["row"], "before": job["before"], "layers": [], "sides": {}}
     if (truth / "designer.json").exists():
         j = json.loads((truth / "designer.json").read_text())
-        entry["designer"] = {"open": j.get("unconnected"), "errors": sum((j.get("new_errors") or {}).values()), "vias": j.get("vias"), "track_mm": round(j.get("wirelength") or 0)}
+        # Every error KiCad finds on the designer's finished board, not only those its routing adds.
+        report = truth / "designer.drc.json"
+        count = sum(v.get("severity") == "error" for v in json.loads(report.read_text()).get("violations", [])) if report.exists() else sum((j.get("new_errors") or {}).values())
+        entry["designer"] = {"open": j.get("unconnected"), "errors": count, "vias": j.get("vias"), "track_mm": round(j.get("wirelength") or 0)}
     if ours is None:
         entry["missing"] = "not routed: " + (job["row"].get("failed") or (f"stopped after {job['row']['stopped']} s" if "stopped" in job["row"] else "no board written"))
         return entry
@@ -147,7 +165,7 @@ def one(job):
         old = json.loads(kept.read_text())
         if old.get("stamp") == stamp:
             old.update({"group": group, "row": job["row"], "before": job["before"]})
-            old["new"] = [n for n in old.get("new", []) if n[0] in (job["row"].get("kicad_new") or {})]
+            old["open"], old["new"] = errors(run_dir, truth, job["row"])
             return old
     box = None
     for side, pcb in (("ours", ours), ("designer", theirs)):
@@ -171,9 +189,7 @@ def one(job):
     if box is None:
         entry["missing"] = "could not be drawn"
         return entry
-    entry["open"], new = marks(run_dir / "routed.drc.json", next((p for p in (run_dir / "bare.drc.json", truth / "bare.drc.json") if p.exists()), None))
-    # Only the kinds the tier counted as added: an error the bare board has under other words is not ours.
-    entry["new"] = [n for n in new if n[0] in (job["row"].get("kicad_new") or {})]
+    entry["open"], entry["new"] = errors(run_dir, truth, job["row"])
     entry["colours"] = {l: colour(l, entry["layers"]) for l in entry["layers"]}
     thumb(d, entry["layers"], box)
     entry["stamp"] = stamp
@@ -217,7 +233,7 @@ def main():
         (out / "b" / e["id"] / "board.json").write_text(json.dumps({k: v for k, v in e.items() if k != "stamp"}))
         row, was = e["row"], e.get("before") or {}
         index.append({"id": e["id"], "group": e["group"], "layers": len(e.get("layers", [])), "missing": e.get("missing"),
-                      "open": row.get("kicad_open", row.get("open")), "ours_open": row.get("open"), "new": sum((row.get("kicad_new") or {}).values()),
+                      "open": row.get("kicad_open", row.get("open")), "ours_open": row.get("open"), "new": sum((row.get("kicad_errors", row.get("kicad_new")) or {}).values()),
                       "was": was.get("kicad_open", was.get("open")) if was else None, "seconds": row.get("seconds"), "vias": row.get("vias"),
                       "designer": e.get("designer"), "flag": flagged.get(e["id"])})
     meta = {"name": name, "runs": a.runs, "before": a.before, "boards": index}

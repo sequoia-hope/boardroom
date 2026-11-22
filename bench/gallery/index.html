@@ -38,11 +38,11 @@ const clean = b => b.designer && b.designer.open === 0 && !b.designer.errors;
 let data, filter = 'all', group = null;
 const filters = {
   all: ['All', b => true],
-  open: ['Not finished', b => !whole(b)],
+  open: ['Does not pass DRC', b => !whole(b)],
   worse: ['Worse than before', b => b.was != null && b.open != null && b.open > b.was],
   better: ['Better than before', b => b.was != null && b.open != null && b.open < b.was],
-  clean: ['Designer finished it, we did not', b => clean(b) && !whole(b)],
-  errors: ['Our copper adds KiCad errors', b => b.new > 0],
+  clean: ['Designer passes DRC, we do not', b => clean(b) && !whole(b)],
+  errors: ['KiCad errors on our board', b => b.new > 0],
   flag: ['Looks wrong to the agent', b => b.flag],
   notes: ['Has my notes', b => note(b.id)],
 };
@@ -69,10 +69,10 @@ function draw() {
   document.getElementById('n').textContent = `${l.length} boards shown`;
   for (const b of l) {
     const a = document.createElement('a'); a.className = 'card'; a.href = 'board.html?id=' + encodeURIComponent(b.id);
-    const state = b.missing ? `<span class="bad">${b.missing}</span>` : whole(b) ? '<span class="good">finished</span>'
-      : `<span class="bad">${b.open} open</span>` + (b.new ? ` <span class="warn">${b.new} new errors</span>` : '');
+    const state = b.missing ? `<span class="bad">${b.missing}</span>` : whole(b) ? '<span class="good">passes DRC</span>'
+      : `<span class="bad">${b.open} open</span>` + (b.new ? ` <span class="warn">${b.new} KiCad errors</span>` : '');
     const was = b.was == null || b.open == null || b.was === b.open ? '' : ` <span class="${b.open > b.was ? 'bad' : 'good'}">(was ${b.was})</span>`;
-    const des = !b.designer ? '' : `<br><span class="m">designer: ${clean(b) ? 'finished, no errors' : `${b.designer.open} open, ${b.designer.errors} errors`}</span>`;
+    const des = !b.designer ? '' : `<br><span class="m">designer: ${clean(b) ? 'passes DRC' : `${b.designer.open} open, ${b.designer.errors} errors`}</span>`;
     a.innerHTML = (b.missing ? `<div class="none">no picture</div>` : `<img loading="lazy" src="b/${encodeURIComponent(b.id)}/thumb.png" alt="">`)
       + `<div class="t"><b></b>${state}${was} <span class="m">· ${b.layers} layers</span>${des}`
       + (b.flag ? `<br><span class="warn">Agent: </span><span class="m f"></span>` : '') + (note(b.id) ? '<br><span class="warn">My note: </span><span class="m n"></span>' : '') + '</div>';
@@ -87,8 +87,8 @@ fetch('boards.json').then(r => r.json()).then(d => {
   document.getElementById('what').textContent = `Runs: ${d.runs.join(', ')}` + (d.before ? `. Compared with ${d.before}.` : '.') + ' Counts are KiCad\'s where it judged the board.';
   const rows = [...new Set(d.boards.map(b => b.group))].map(g => {
     const l = d.boards.filter(b => b.group === g), c = l.filter(clean);
-    return `<tr><td>${g}</td><td>${l.length} boards</td><td>${l.filter(whole).length} finished</td><td>${l.reduce((s, b) => s + (b.open || 0), 0)} connections open</td>`
-      + `<td>${c.length ? `designer finished ${c.length}; of those we finish ${c.filter(whole).length}` : ''}</td></tr>`;
+    return `<tr><td>${g}</td><td>${l.length} boards</td><td>${l.filter(whole).length} pass DRC</td><td>${l.reduce((s, b) => s + (b.open || 0), 0)} connections open</td>`
+      + `<td>${c.length ? `designer passes DRC on ${c.length}; of those we pass ${c.filter(whole).length}` : ''}</td></tr>`;
   });
   document.getElementById('sum').innerHTML = rows.join('');
   draw();

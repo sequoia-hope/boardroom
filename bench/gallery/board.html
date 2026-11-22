@@ -123,8 +123,8 @@ fetch(dir + 'board.json').then(r => r.json()).then(b => {
   if (b.missing) facts.push(`<span class="bad">${b.missing}</span>`);
   else facts.push(open === 0 ? '<span class="good">Nothing open</span>' : `<span class="bad">${open} open</span>`);
   if (wasOpen != null && wasOpen !== open) facts.push(`<span class="${open > wasOpen ? 'bad' : 'good'}">was ${wasOpen} in the run before</span>`);
-  const kinds = Object.entries(row.kicad_new || {}).map(([k, n]) => `${n} ${k}`);
-  if (kinds.length) facts.push(`<span class="warn">our copper adds: ${kinds.join(', ')}</span>`);
+  const kinds = Object.entries(row.kicad_errors || row.kicad_new || {}).map(([k, n]) => `${n} ${k}`);
+  if (kinds.length) facts.push(`<span class="warn">${row.kicad_errors ? 'KiCad errors on our board' : 'our copper adds'}: ${kinds.join(', ')}</span>`);
   if (row.vias != null) facts.push(`ours: ${row.vias} vias, ${Math.round(row.track_mm)} mm of track, ${row.seconds} s`);
   if (b.designer) facts.push(`designer: ${b.designer.open} open, ${b.designer.errors} errors of their own, ${b.designer.vias} vias, ${b.designer.track_mm} mm`);
   $('#facts').innerHTML = facts.join(' · ');
