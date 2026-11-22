@@ -44,6 +44,20 @@ fn drawn_copper_and_copper_text_are_obstacles() {
     assert!(check_item(&b, t).is_empty(), "between them");
 }
 
+/// A shape drawn on copper and left bare of solder mask is written with both layers
+/// (`(layers "F.Cu" "F.Mask")`, KiCad 9): it is copper all the same, its outline's width with
+/// it (ZSWatch dev kit's two arrowheads on F.Cu, 2026-11-22: a track of ours 0.07 mm from
+/// one, where the board asks 0.125, and KiCad's check said so).
+#[test]
+fn copper_drawn_with_its_mask_layer_is_an_obstacle() {
+    let mut b = board("(gr_poly (pts (xy 10 10) (xy 12 10) (xy 12 12) (xy 10 12)) (stroke (width 0.1) (type solid)) (fill yes) (layers \"F.Cu\" \"F.Mask\"))");
+    assert_eq!(b.items().filter(|(_, it)| it.drawn()).count(), 5, "the polygon and its four stroked sides");
+    let t = track(&mut b, 11.0);
+    assert!(!check_item(&b, t).is_empty(), "through the drawn polygon");
+    let t = track(&mut b, 15.5);
+    assert!(check_item(&b, t).is_empty(), "clear of it");
+}
+
 #[test]
 fn a_drill_offset_moves_the_pads_copper_off_its_hole() {
     let b = board(

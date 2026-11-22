@@ -552,7 +552,12 @@ fn stroke_texts(copper: &mut Copper, footprints: &[Footprint], texts: &[(crate::
 /// box its strokes stay within, a little generously, with the helper's request for its strokes
 /// in the footprint's frame (see [`crate::text`]).
 fn graphic(g: &Node, place: &dyn Fn([f64; 2]) -> [f64; 2], rotation: f64) -> Result<Option<(CopperGraphic, Option<crate::text::Item>)>, KicadParse> {
-    let Some(layer) = g.find("layer").and_then(|l| l.args().first()).and_then(Node::text).filter(|l| l.ends_with(".Cu") || *l == "F.Mask" || *l == "B.Mask") else {
+    // One layer, or since KiCad 9 a copper layer with its side's mask (`(layers "F.Cu" "F.Mask")`,
+    // a shape drawn on copper and left bare): the copper then.
+    let ours = |l: &&str| l.ends_with(".Cu") || *l == "F.Mask" || *l == "B.Mask";
+    let one = g.find("layer").and_then(|l| l.args().first()).and_then(Node::text).filter(ours);
+    let several = || g.find("layers").and_then(|l| l.args().iter().filter_map(Node::text).find(|l| l.ends_with(".Cu") && !l.contains('*')));
+    let Some(layer) = one.or_else(several) else {
         return Ok(None);
     };
     let width = g.find("stroke").and_then(|s| s.find("width")).or_else(|| g.find("width")).and_then(|w| w.number_arg(0, "width").ok()).unwrap_or(0.0) * MM;
