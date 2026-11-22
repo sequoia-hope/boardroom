@@ -261,3 +261,45 @@ fn a_pad_short_of_spokes_on_the_bare_board_is_drawn_one_by_hand_too() {
     assert_eq!(tie.pts[0], [10.0, 10.0], "from the pin's middle");
     assert!(drawing.stitches.is_empty(), "{:?}", drawing.stitches);
 }
+
+/// The same pin with a patch that bars pours where each diagonal spoke would end: none of the
+/// eight ways has pour at the end of a spoke as long as the pad's own. The spoke is drawn
+/// farther, on to the pour past the patch (a USB-C socket's ground pins, sra_dev_board's J1,
+/// test set, 2026-11-22: a mounting hole, the next pin and the shield's pad keep the pour a
+/// little way off). And none is drawn hard beside the spoke the pin has, though there is pour
+/// there to end in.
+#[test]
+fn a_spoke_drawn_by_hand_reaches_on_for_pour_and_is_not_drawn_beside_another() {
+    let patch = |x: f64, y: f64| {
+        format!(
+            "(zone (net 0) (net_name \"\") (layer \"F.Cu\") (hatch edge 0.5) (connect_pads (clearance 0)) (min_thickness 0.25)
+               (keepout (tracks allowed) (vias allowed) (pads allowed) (copperpour not_allowed) (footprints allowed))
+               (fill (thermal_gap 0.5) (thermal_bridge_width 0.5))
+               (polygon (pts (xy {} {}) (xy {} {}) (xy {} {}) (xy {} {}))))",
+            x - 0.3, y - 0.3, x + 0.3, y - 0.3, x + 0.3, y + 0.3, x - 0.3, y + 0.3
+        )
+    };
+    let parts = [hole("J1", 10.0, 7.5, 0, ""), hole("J2", 10.0, 10.0, 1, "GND"), hole("J3", 10.0, 12.5, 0, ""), smd("R2", 12.0, 10.0, 0, ""), smd("R4", 5.0, 10.0, 1, "GND")].concat();
+    let patches = [patch(8.6, 8.6), patch(11.4, 8.6), patch(8.6, 11.4), patch(11.4, 11.4)].concat();
+    let text = format!(
+        "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
+         (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
+         (net 0 \"\") (net 1 \"GND\")
+         (gr_rect (start 0 0) (end 20 20) (layer \"Edge.Cuts\") (width 0.1))
+         {parts}
+         (zone (net 1) (net_name \"GND\") (layer \"F.Cu\") (hatch edge 0.5) (connect_pads (clearance 0.2)) (min_thickness 0.25)
+           (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5))
+           (polygon (pts (xy 0.5 0.5) (xy 19.5 0.5) (xy 19.5 19.5) (xy 0.5 19.5))))
+         {patches})"
+    );
+    let (pcb, copper) = kicad::parse_board(&text).unwrap();
+    let board = Board::new(&pcb, &copper, kicad::Rules::parse(RULES).unwrap());
+    assert_eq!(board::Pours::likely(&board).starved(&board).len(), 1);
+    let (plan, drawing) = wire::route(&board);
+    assert_eq!(wire::amiss(&board, &plan, &drawing), (0, 0));
+    assert_eq!(drawing.ties.len(), 1, "{:?}", drawing.ties);
+    let [from, to] = drawing.ties[0].pts;
+    assert_eq!(from, [10.0, 10.0], "from the pin's middle");
+    let (dx, dy) = ((to[0] - from[0]).abs(), (to[1] - from[1]).abs());
+    assert!((dx - dy).abs() < 1e-3 && dx > 1.7, "on a diagonal, past the patch: {to:?}");
+}

@@ -1087,10 +1087,19 @@ fn extent(shape: &Shape, c: board::Point, dir: [f64; 2]) -> f64 {
     }
 }
 
+/// How much farther than across its gap and the zone's least width a spoke drawn by hand may
+/// reach for pour, nm, nearest first.
+const TIE_ON: [f64; 5] = [0.0, 250_000.0, 500_000.0, 1_000_000.0, 1_500_000.0];
+
 /// A spoke drawn by hand for pad `s` of `with`, the board with the drawing on it and `pours`
-/// its pours: a track from the pad's middle, one of the eight ways, across its gap and the
-/// zone's least width on into pour that is not shut in, where the pad has no spoke already
-/// and the checker passes it. The track is left on `with`.
+/// its pours: a straight track from the pad's middle across its gap and the zone's least
+/// width on into pour that is not shut in, where the pad has no spoke already and the checker
+/// passes it. One of the eight ways first, the diagonals before the others (a pad's own spokes
+/// mostly run along its sides); then the ways between those that are not hard beside a spoke
+/// the pad has; then each of them farther on
+/// ([`TIE_ON`]), for the pour that a hole or a neighbour's clearance keeps a little way off
+/// (a USB-C socket's ground pins beside its mounting holes, sra_dev_board's J1). The track is
+/// left on `with`.
 fn tie(with: &mut Board, pours: &board::Pours, s: &board::Starved) -> Option<Tie> {
     let pad = with.item(s.pad)?.clone();
     let b = pad.shape.bbox();
@@ -1102,27 +1111,48 @@ fn tie(with: &mut Board, pours: &board::Pours, s: &board::Starved) -> Option<Tie
     }
     let class = plan::width(with, pad.net);
     let narrow = (class / 2.0).max(with.rules.min_track_width * 1e3).max(with.min_track_width_of(pad.net) as f64 / 1e6);
-    for width in [class, narrow] {
-        let r = (width * 1e6 / 2.0).round();
-        // The diagonals first: a pad's own spokes mostly run along its sides.
-        for turn in [1, 3, 5, 7, 0, 2, 4, 6] {
-            let (sin, cos) = (turn as f64 * std::f64::consts::FRAC_PI_4).sin_cos();
-            let reach = extent(&pad.shape, c, [cos, sin]);
-            let at = |d: f64| board::Point::new(c.x + (cos * d).round() as i64, c.y + (sin * d).round() as i64);
-            let (ring, far) = (at(reach + gap / 2.0), at(reach + gap + least + r));
-            let own = |p: board::Point| {
-                with.near(s.layer, board::BBox::of([p])).into_iter().any(|q| with.item(q).is_some_and(|it| matches!(it.kind, Kind::Spoke { pad, .. } if pad == s.pad) && it.on(s.layer) && it.shape.contains(p)))
-            };
-            let leads_on = pours.piece(pad.net, s.layer, far, r as i64).is_some_and(|piece| !s.pockets.contains(&piece));
-            if !leads_on || own(ring) {
-                continue;
+    // Twenty-fourths of a turn: the eight ways, then those between them. None of those between
+    // that lies nearer than an eighth of a turn to a spoke the pad has: a track hard beside a
+    // spoke is no second way to the pour.
+    let spokes: Vec<[f64; 2]> = with
+        .near(s.layer, b)
+        .into_iter()
+        .filter_map(|q| with.item(q))
+        .filter(|it| matches!(it.kind, Kind::Spoke { pad, .. } if pad == s.pad) && it.on(s.layer))
+        .filter_map(|it| {
+            let sb = it.shape.bbox();
+            let (dx, dy) = (((sb.min.x + sb.max.x) / 2 - c.x) as f64, ((sb.min.y + sb.max.y) / 2 - c.y) as f64);
+            let d = dx.hypot(dy);
+            (d > 0.0).then(|| [dx / d, dy / d])
+        })
+        .collect();
+    let beside = |turn: usize| {
+        let (sin, cos) = (turn as f64 * std::f64::consts::TAU / 24.0).sin_cos();
+        !turn.is_multiple_of(3) && spokes.iter().any(|d| d[0] * cos + d[1] * sin > (std::f64::consts::FRAC_PI_4 - 0.01).cos())
+    };
+    let turns: Vec<usize> = [3, 9, 15, 21, 0, 6, 12, 18].into_iter().chain((0..24).filter(|t: &usize| !t.is_multiple_of(3))).filter(|&t| !beside(t)).collect();
+    for on in TIE_ON {
+        for width in [class, narrow] {
+            let r = (width * 1e6 / 2.0).round();
+            for &turn in &turns {
+                let (sin, cos) = (turn as f64 * std::f64::consts::TAU / 24.0).sin_cos();
+                let reach = extent(&pad.shape, c, [cos, sin]);
+                let at = |d: f64| board::Point::new(c.x + (cos * d).round() as i64, c.y + (sin * d).round() as i64);
+                let (ring, far) = (at(reach + gap / 2.0), at(reach + gap + least + r + on));
+                let own = |p: board::Point| {
+                    with.near(s.layer, board::BBox::of([p])).into_iter().any(|q| with.item(q).is_some_and(|it| matches!(it.kind, Kind::Spoke { pad, .. } if pad == s.pad) && it.on(s.layer) && it.shape.contains(p)))
+                };
+                let leads_on = pours.piece(pad.net, s.layer, far, r as i64).is_some_and(|piece| !s.pockets.contains(&piece));
+                if !leads_on || own(ring) {
+                    continue;
+                }
+                let id = with.insert(Item { kind: Kind::Track, net: pad.net, layers: 1 << s.layer, shape: Shape::Capsule { a: c, b: far, r: r as i64 }, hole: None, locked: false, span: None });
+                if board::check_item(with, id).is_empty() {
+                    let mm = |p: board::Point| [p.x as f64 / 1e6, p.y as f64 / 1e6];
+                    return Some(Tie { layer: s.layer, net: pad.net, width, pts: [mm(c), mm(far)] });
+                }
+                with.remove(id);
             }
-            let id = with.insert(Item { kind: Kind::Track, net: pad.net, layers: 1 << s.layer, shape: Shape::Capsule { a: c, b: far, r: r as i64 }, hole: None, locked: false, span: None });
-            if board::check_item(with, id).is_empty() {
-                let mm = |p: board::Point| [p.x as f64 / 1e6, p.y as f64 / 1e6];
-                return Some(Tie { layer: s.layer, net: pad.net, width, pts: [mm(c), mm(far)] });
-            }
-            with.remove(id);
         }
     }
     None
