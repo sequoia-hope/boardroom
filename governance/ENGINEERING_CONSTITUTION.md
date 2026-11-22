@@ -29,8 +29,11 @@ because that is where a wrong belief costs most.
 - **A look**: a picture, opened and viewed by the one who will act on it, in this session. Making
   a picture is not a look. Reading a count, a log line or a diagnostic's text is not a look.
 - **KiCad's verdict**: KiCad's own DRC on a board, run on both sides of any comparison.
-- **Designer-clean**: a board whose designer's version has nothing unconnected and no errors of
-  its own. Only on these is an open connection plainly the router's fault.
+- **Designer-clean**: a board whose designer's finished version passes KiCad's DRC as it stands:
+  nothing unconnected and no error at all. Only on these is an open connection plainly the
+  router's fault. (Not the looser thing the bench once counted under this name: no error *added*
+  to the stripped board's own.)
+- **The test set**: the designer-clean boards of the corpus (`bench/tier.py clean`).
 - **A converted failure**: a board, connection or error that a change moved from failing to
   passing.
 
@@ -130,9 +133,15 @@ A change whose gain cannot be told apart from these is not committed.
 - **C3. A change to what the checker allows is the owner's decision** whenever it accepts
   something KiCad reports as an error. It is put to the owner with pictures of the place on a
   designer's board and on ours, and with KiCad's counts before and after. Until answered,
-  nothing changes.
-- **C4. Judge on the tiers, not on one board.** One board's count swings by a few between runs.
-  Designer-clean boards are counted apart. Our own boards are always among those checked.
+  nothing changes. The owner's standing answer is no: routed boards are to pass DRC, and design
+  rules are not relaxed to get a board through. A board outside the test set is never a reason
+  to ask.
+- **C4. Judge on the test set, not on one board.** One board's count swings by a few between
+  runs. The measure is how many boards pass KiCad's DRC outright once routed. Our own boards
+  are always among those checked.
+- **C5. A board that fails DRC as its designer finished it is not tested on.** It proves nothing
+  about a router, and its odd cases (pads closer than the rules, mask openings that meet, pads
+  the designer left short of spokes) are not worked on.
 
 ---
 
@@ -195,14 +204,19 @@ made, make it first: the question often goes away.
 
 The owner reviews by looking, so there is always something current to look at.
 
-- **The gallery** (`bench/gallery.py`, pages in the lab) shows every board of the latest gate run
-  and our own boards: every copper layer, ours beside the designer's, with what is still open
-  marked. It is rebuilt after each gate run.
+- **The gallery** (`bench/gallery.py`, pages in the lab) shows every board of the latest run of
+  the test set and our own boards: every copper layer, ours beside the designer's, with what is still open
+  marked. It is rebuilt after each run of the test set.
 - Each rebuild lists at the top what changed since the last: boards that got better, boards that
   got worse, and the boards the agent itself thinks look wrong.
 - The owner's comments on a board are instructions about that kind of board, not only that one.
   When the owner corrects something, the rule goes into this file or the project's notes the
   same day.
+- 2026-11-22, the owner: "why would we pick boards that failed DRC as our test set? ... I really
+  don't wanna start relaxing design rules. I want things to pass DRC for the most part so can we
+  make a test set of only boards that actually start as zero DRC and we need to just not have
+  these weird cases it's a waste of time." Hence the test set (section 2), C3's standing answer
+  and C5.
 
 ---
 
@@ -245,7 +259,7 @@ Before a commit that changes what the router or the checker does:
 
 - [ ] The cause was seen in a picture, on every layer that matters, beside the designer's board.
 - [ ] A test fails without the fix.
-- [ ] The tier was run; KiCad judged both sides; designer-clean boards counted apart.
+- [ ] The test set was run; KiCad judged both sides.
 - [ ] The boards that got worse were looked at, and are named in the commit message.
 - [ ] The converted places were looked at, and none is converted by a means in section 4.
 - [ ] Our own boards were checked.
