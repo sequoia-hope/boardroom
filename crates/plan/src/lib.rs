@@ -298,7 +298,7 @@ pub fn via_spots(board: &Board, tight: bool) -> Spots {
     // Not for fan-outs: there each pad's via has its own place, beside its neighbours'.
     let ways_out = if tight { Vec::new() } else { ways_out(board, apart, pitch as f64 / 1e6) };
     let kept = Spots::kept_of(board, &at);
-    Spots { at, radius: r as f64 / 1e6, apart, hole, ways_out, out_keep: (r + keep) as f64 / 1e6 + width(board, 0) / 2.0, beside: (2 * r + board.max_rule_reach()) as f64 / 1e6 + 0.01, checked: Default::default(), bars: space::bars(board), kept, left_out: Default::default(), spared: Vec::new(), holes: Vec::new(), wanted: Vec::new(), middles: space::middles(board) }
+    Spots { at, radius: r as f64 / 1e6, apart, hole, ways_out, out_keep: (r + keep) as f64 / 1e6 + width(board, 0) / 2.0, beside: (2 * r + board.max_rule_reach()) as f64 / 1e6 + 0.01, checked: Default::default(), bars: space::bars(board), kept, left_out: Default::default(), spared: Vec::new(), holes: Vec::new(), wanted: Vec::new(), middles: space::middles(board), openings: space::openings(board) }
 }
 
 /// The way straight out of each pad that stands nearer another pad of its part than two vias

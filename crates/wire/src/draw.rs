@@ -58,6 +58,7 @@ pub fn layer(board: &Board, plan: &Plan, drawing: &Drawing, l: usize, faults: &[
             What::Copper => ("#e3d6b8", "#a89868"),
             What::Hole => ("#fff", "#555"),
             What::Keepout => ("#f6dede", "#c88"),
+            What::Opening => ("#fdf3d0", "#ca6"),
         };
         if o.reach > 0.0 {
             // A round thing, held as its middle or middle line: drawn as far out as it reaches.

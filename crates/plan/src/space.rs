@@ -138,6 +138,20 @@ pub struct Spots {
     /// The pads whose own middle is no place for a track to end, each with the place its
     /// tracks end at instead ([`middles`]): a pad half past the board's edge.
     pub middles: std::collections::HashMap<ItemId, P>,
+    /// The openings drawn in the mask that no track is planned across ([`openings`]), each
+    /// with the copper layers it is over.
+    pub openings: Vec<(Shape, u64)>,
+}
+
+/// The openings drawn in the solder mask that the plan keeps every track out of: those whose
+/// drawing bares one net's pour and no pad or other fixed copper ([`Board::mask_over_pour`]).
+/// An opening over a pad is that pad's own, drawn in its footprint or opened on the side the
+/// pad has no copper on, and the pad's tracks come and go through it (a USB-C socket's pins,
+/// DRM_Watch_v3: closed, with the frame drawn round each, they shut every pin in). One that
+/// bares nothing fixed and lies over no pour, or bares pads of several nets (an edge
+/// connector's fingers), is left to the checker, as all were before.
+pub fn openings(board: &Board) -> Vec<(Shape, u64)> {
+    board.mask_areas.iter().zip(&board.mask_over_pour).filter(|(_, over_pour)| **over_pour).map(|((shape, layers, _), _)| (shape.clone(), *layers)).collect()
 }
 
 /// For each pad whose middle lies off the board, or nearer its edge than the end of a track
@@ -325,6 +339,9 @@ pub const VIA_CORNER: f64 = 0.001;
 /// A spot this near a side of the triangle it is in, mm, is not used while that side is there.
 const SPOT_MARGIN: f64 = 0.005;
 
+/// How much farther than the checker asks a track is planned from an opening in the mask, mm.
+const OPENING_KEEP: f64 = 0.01;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum What {
     /// A pad, or a via: a strand of its net may end on it.
@@ -333,6 +350,9 @@ pub enum What {
     Copper,
     Hole,
     Keepout,
+    /// An opening drawn in the solder mask over one net's copper (a logo or a label left bare
+    /// over the ground pour): a track of another net there would lie bare beside that copper.
+    Opening,
     /// The board's edge and its cutouts.
     Edge,
 }
@@ -797,6 +817,17 @@ impl Space {
         // ones a wire may cut are the ones in the narrow places wires need. The rest are left
         // out, and the checker counts what is cut. A pin with a hole whose spokes on this layer
         // shut another pad in is given none here ([`Spots::spared`]): another layer joins it.
+        // The openings drawn in the mask that bare one net's copper: no other net's track may
+        // cross one (the checker's `Keepout`, KiCad's solder mask bridge). EnvOpenPico's logo
+        // and label over its ground pour stand between the chip and the debug pads (test set,
+        // 2026-11-22): the designer leads those two tracks round them, and the plan, which
+        // knew nothing of them, led them straight through for the drawing to refuse.
+        // ([`openings`] says which.)
+        for (shape, layers) in &spots.openings {
+            if layers & (1 << layer) != 0 {
+                add(What::Opening, 0, None, shape, &mut obstacles);
+            }
+        }
         let mut spokes: HashMap<ItemId, Vec<(ItemId, &board::Item)>> = HashMap::new();
         for (id, item) in board.items() {
             if let Kind::Spoke { pad, .. } = item.kind
@@ -1220,6 +1251,7 @@ impl Space {
             What::Edge => board.rules.min_copper_edge_clearance * 1e3,
             What::Hole => board.rules.min_hole_clearance * 1e3 + o.reach,
             What::Keepout => 0.0,
+            What::Opening => (board.mask_margin() as f64 / 1e6 + OPENING_KEEP) + o.reach,
             What::Pad | What::Copper if o.net == net && net != 0 => 0.0,
             // A pad that asks for more than its net does is given it, as the checker gives it.
             What::Pad | What::Copper => {

@@ -333,6 +333,10 @@ pub struct Board {
     /// pad wholly inside the opening is reached no other way. KiCad calls each such track a
     /// solder mask bridge, as it does the designer's. Empty for the others.
     pub mask_pads: Vec<Vec<u32>>,
+    /// For each of [`Board::mask_areas`]: whether the net it admits is that of a pour beneath
+    /// it, with no pad or other fixed copper bared in its drawing (a logo or a label left bare
+    /// over the ground pour).
+    pub mask_over_pour: Vec<bool>,
     /// Slice ranges in [`Board::mask_areas`] for each unclaimed mask item (`ANY_ONE_NET | group`),
     /// grouping all polygons of one KiCad `BOARD_ITEM` so one net claims the whole item together.
     pub mask_groups: Vec<std::ops::Range<usize>>,
@@ -569,6 +573,7 @@ impl Board {
             mask_web: nm(copper.solder_mask_min_width),
             mask_areas: Vec::new(),
             mask_pads: Vec::new(),
+            mask_over_pour: Vec::new(),
             mask_groups: Vec::new(),
             pad_clearances: HashMap::new(),
             soldered: HashSet::new(),
@@ -953,6 +958,7 @@ impl Board {
             // decides nothing: closing the opening for that would bury the pads of fine-pitch parts
             // whose drawn openings sit within the mask web of each other (DSKY_alarm's IC3).
             let mut pads: Vec<u32> = Vec::new();
+            let mut over_pour = false;
             let net = net.unwrap_or_else(|| {
                 let mut nets: Vec<u32> = Vec::new();
                 for shape in &shapes {
@@ -982,6 +988,7 @@ impl Board {
                         }
                     }
                 }
+                let by_fixed_copper = nets.len();
                 if nets.is_empty() {
                     let pour_banned = |s: &Shape| -> bool {
                         board.near(l, s.bbox()).into_iter().any(|kid| {
@@ -1032,6 +1039,7 @@ impl Board {
                 }
                 nets.sort_unstable();
                 nets.dedup();
+                over_pour = by_fixed_copper == 0 && nets.len() == 1 && nets[0] != 0;
                 match nets[..] {
                     [] => {
                         let g = board.mask_groups.len() as u32;
@@ -1047,6 +1055,7 @@ impl Board {
             pads.sort_unstable();
             pads.dedup();
             board.mask_pads.extend(shapes.iter().map(|_| pads.clone()));
+            board.mask_over_pour.extend(shapes.iter().map(|_| over_pour));
             board.mask_areas.extend(shapes.into_iter().map(|shape| (shape, layer, net)));
         }
         board.limits = crate::check::Limits::of(&board);
