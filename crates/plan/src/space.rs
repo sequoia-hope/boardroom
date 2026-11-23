@@ -135,6 +135,52 @@ pub struct Spots {
     pub holes: Vec<(ItemId, P, u32)>,
     /// The pads a hole has been tried for ([`crate::hole`]), whether or not one could stand.
     pub wanted: Vec<ItemId>,
+    /// The pads whose own middle is no place for a track to end, each with the place its
+    /// tracks end at instead ([`middles`]): a pad half past the board's edge.
+    pub middles: std::collections::HashMap<ItemId, P>,
+}
+
+/// For each pad whose middle lies off the board, or nearer its edge than the end of a track
+/// may: the middle of the part of its copper that is on the board and that far in. A
+/// castellated pad is half past the edge, its middle on the edge or beyond it (EnvOpenPico's
+/// two rows of header pins, test set, 2026-11-22: their middles 0.05 mm outside the board, and
+/// 17 of the first plan's 88 strands could not be drawn for starting there). A pad with no
+/// such part is left out, and keeps its middle.
+pub fn middles(board: &Board) -> std::collections::HashMap<ItemId, P> {
+    let edge: Vec<Vec<P>> = bounds(board).iter().map(|l| l.iter().map(|&q| mm(q)).collect()).collect();
+    let mut out = std::collections::HashMap::new();
+    let Some(outer) = edge.first() else { return out };
+    let (lo, hi) = outer.iter().fold(([f64::MAX; 2], [f64::MIN; 2]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])]));
+    for (id, item) in board.items() {
+        if !matches!(item.kind, Kind::Pad { .. }) || item.net == 0 {
+            continue;
+        }
+        let keep = board.rules.min_copper_edge_clearance + crate::width(board, item.net) / 2.0 + 0.02;
+        let poly = outline(&item.shape);
+        if poly.len() < 3 {
+            continue;
+        }
+        let c = centre(&poly);
+        let deep = |p: P| p[0] - lo[0] > keep && hi[0] - p[0] > keep && p[1] - lo[1] > keep && hi[1] - p[1] > keep;
+        let from_edge = |p: P| edge.iter().flat_map(|l| (0..l.len()).map(move |i| point_segment(p, l[i], l[(i + 1) % l.len()]))).fold(f64::MAX, f64::min);
+        let on = |p: P| inside(p, outer) && !edge[1..].iter().any(|h| inside(p, h)) && from_edge(p) >= keep;
+        let (plo, phi) = poly.iter().fold(([f64::MAX; 2], [f64::MIN; 2]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])]));
+        // (A pad's middle well inside the box round the board is tried against the outline
+        // itself only where its own box is not: the look at every side of the outline is the
+        // dear part, and most pads are nowhere near the edge.)
+        if (deep(plo) && deep(phi) && inside(c, outer)) || on(c) {
+            continue;
+        }
+        const N: usize = 12;
+        let good: Vec<P> = (0..=N).flat_map(|i| (0..=N).map(move |j| (i, j))).map(|(i, j)| [plo[0] + (phi[0] - plo[0]) * i as f64 / N as f64, plo[1] + (phi[1] - plo[1]) * j as f64 / N as f64]).filter(|&p| inside(p, &poly) && on(p)).collect();
+        if good.is_empty() {
+            continue;
+        }
+        let mid = centre(&good);
+        let nearest = good.iter().copied().min_by(|a, b| dist(*a, mid).total_cmp(&dist(*b, mid))).unwrap_or(mid);
+        out.insert(id, nearest);
+    }
+    out
 }
 
 /// For each layer, the sides of the board's own obstacles and of its rule areas that the
@@ -724,7 +770,8 @@ impl Space {
                         .fold(0.0, f64::max),
                     _ => 0.0,
                 };
-                obstacles.push(Obstacle { what, net, item, centre: centre(&poly), poly, reach, mask, hole, past });
+                let middle = item.filter(|_| what == What::Pad).and_then(|id| spots.middles.get(&id).copied()).unwrap_or_else(|| centre(&poly));
+                obstacles.push(Obstacle { what, net, item, centre: middle, poly, reach, mask, hole, past });
             }
         };
         for (id, item) in board.items() {

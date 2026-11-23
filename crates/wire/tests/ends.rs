@@ -176,3 +176,57 @@ fn a_pad_shut_in_is_reached_by_way_of_a_pad_it_is_wired_to() {
     let (plan, drawing) = whole(&board);
     assert_eq!(wire::amiss(&board, &plan, &drawing), (0, 0));
 }
+
+/// A castellated pin as a Pico-shaped board has along its edges: a long pad that hangs over the
+/// board's edge, its middle (and its half-hole) just outside the board, and a round pad of
+/// the same number inside.
+fn castellated(y: f64, net: &str) -> String {
+    let n = ["", "A", "B", "C"].iter().position(|&k| k == net).unwrap();
+    format!(
+        "(footprint \"P\" (layer \"F.Cu\") (at 0 {y})
+           (pad \"1\" thru_hole rect (at -0.05 0) (size 3.5 1.7) (drill 1) (layers \"*.Cu\" \"*.Mask\") (net {n} \"{net}\"))
+           (pad \"1\" thru_hole oval (at 1.65 0) (size 1.7 1.7) (drill 1) (layers \"*.Cu\" \"*.Mask\") (net {n} \"{net}\")))"
+    )
+}
+
+/// A board 20 mm square with EnvOpenPico's rules: copper may come within 0.025 mm of the edge.
+fn edge_board(parts: &str) -> Board {
+    let text = format!(
+        "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
+         (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
+         (net 0 \"\") (net 1 \"A\") (net 2 \"B\") (net 3 \"C\")
+         (gr_rect (start 0 0) (end 20 20) (layer \"Edge.Cuts\") (width 0.1))
+         {parts})"
+    );
+    let rules = r#"{"board":{"design_settings":{"rules":{"min_clearance":0.15,"min_copper_edge_clearance":0.025,"min_track_width":0.15}}},
+        "net_settings":{"classes":[{"name":"Default","clearance":0.15,"track_width":0.15,"via_diameter":0.4,"via_drill":0.2}]}}"#;
+    let (pcb, copper) = kicad::parse_board(&text).unwrap();
+    Board::new(&pcb, &copper, kicad::Rules::parse(rules).unwrap())
+}
+
+/// Three castellated pins down the board's left edge, each wired to a pin of a chip, in order
+/// and crossed over, and to pads above and below the column. A track cannot end at the middle
+/// of such a pin, which is off the board: it ends at the middle of the part of the pin that is
+/// on it. Every strand of the first plan is drawn, and in 0/45/90 (EnvOpenPico, test set,
+/// 2026-11-22: 17 of its first plan's 88 strands were not, for starting past the edge; laying
+/// them again and again took the board from 11 vias to 113 and left 10 connections open).
+#[test]
+fn a_wire_to_a_pad_that_hangs_over_the_boards_edge_ends_on_the_part_that_is_on_the_board() {
+    for targets in [
+        [pad(8.0, 9.4, 0.2, 0.9, "A"), pad(8.4, 9.4, 0.2, 0.9, "B"), pad(8.8, 9.4, 0.2, 0.9, "C")],
+        [pad(8.8, 9.4, 0.2, 0.9, "A"), pad(8.4, 9.4, 0.2, 0.9, "B"), pad(8.0, 9.4, 0.2, 0.9, "C")],
+        [pad(3.0, 3.0, 1.0, 1.0, "A"), pad(4.5, 3.0, 1.0, 1.0, "B"), pad(6.0, 3.0, 1.0, 1.0, "C")],
+        [pad(8.0, 16.0, 0.2, 0.9, "A"), pad(8.4, 16.0, 0.2, 0.9, "B"), pad(8.8, 16.0, 0.2, 0.9, "C")],
+    ] {
+        let parts = [castellated(7.46, "A"), castellated(10.0, "B"), castellated(12.54, "C"), targets.concat()].concat();
+        let board = edge_board(&parts);
+        let plan = plan::plan(&board);
+        assert!(plan.left.is_empty(), "{:?}", plan.left);
+        let drawing = wire::draw(&board, &plan);
+        assert!(drawing.undrawn.is_empty(), "{:?}", drawing.undrawn.iter().map(|u| &u.why).collect::<Vec<_>>());
+        for w in &drawing.wires {
+            assert!(!w.as_planned, "{:?}", w.pts);
+            assert!(w.pts.iter().all(|p| p[0] > 0.1), "on the board: {:?}", w.pts);
+        }
+    }
+}
