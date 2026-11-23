@@ -103,7 +103,7 @@ pub fn layer(board: &Board, plan: &Plan, drawing: &Drawing, l: usize, faults: &[
 /// already drawn on the layer (grey-blue, at their widths), the strand as it lies in the plan
 /// (`line`, dashed red), the part of each gap the wire may cross in (thick orange), and the
 /// room in front of each corner that it keeps out of (the half of a pink circle its tick is
-/// on).
+/// on). Under the picture, what each mark stands for.
 pub fn course(sheet: &plan::Sheet, course: &crate::chain::Course, found: Option<&crate::chain::Path>, drawn: &[&crate::Wire], line: &[P]) -> String {
     let all: Vec<P> = course.within.iter().flatten().copied().chain([course.a, course.b]).collect();
     let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
@@ -116,9 +116,14 @@ pub fn course(sheet: &plan::Sheet, course: &crate::chain::Course, found: Option<
     let m = 1.0;
     let (w, h) = (hi[0] - lo[0] + 2.0 * m, hi[1] - lo[1] + 2.0 * m);
     let thin = (w.max(h) / 1500.0).max(0.005);
+    let keys = keys(found.is_some());
+    // The key's letters, two columns of them under the picture.
+    let letter = w / 60.0;
+    let rows = keys.len().div_ceil(2);
+    let below = (rows as f64 * KEY_ROW + 1.0) * letter;
     let mut s = format!(
-        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='{:.3} {:.3} {w:.3} {h:.3}' stroke-linecap='round' stroke-linejoin='round' fill='none'>\n<rect x='{:.3}' y='{:.3}' width='{w:.3}' height='{h:.3}' fill='#fff'/>\n",
-        lo[0] - m, lo[1] - m, lo[0] - m, lo[1] - m
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='{:.3} {:.3} {w:.3} {:.3}' stroke-linecap='round' stroke-linejoin='round' fill='none'>\n<rect x='{:.3}' y='{:.3}' width='{w:.3}' height='{:.3}' fill='#fff'/>\n",
+        lo[0] - m, lo[1] - m, h + below, lo[0] - m, lo[1] - m, h + below
     );
     for o in &sheet.space.obstacles {
         if o.what == What::Edge {
@@ -160,6 +165,61 @@ pub fn course(sheet: &plan::Sheet, course: &crate::chain::Course, found: Option<
     for p in [course.a, course.b] {
         let _ = writeln!(s, "<circle cx='{:.4}' cy='{:.4}' r='{:.4}' fill='#000'/>", p[0], p[1], thin * 4.0);
     }
+    // The key, on white under a line across the picture's foot.
+    let (left, top) = (lo[0] - m, lo[1] - m + h);
+    let _ = writeln!(s, "<rect x='{left:.4}' y='{top:.4}' width='{w:.4}' height='{below:.4}' fill='#fff'/>");
+    let _ = writeln!(s, "<path d='M{left:.4} {top:.4}h{w:.4}' stroke='#999' stroke-width='{thin:.4}'/>");
+    for (k, (mark, colour, says)) in keys.iter().enumerate() {
+        let x = left + letter + (k / rows) as f64 * w / 2.0;
+        let y = top + ((k % rows) as f64 * KEY_ROW + 1.4) * letter;
+        let (mid, end) = (x + 1.25 * letter, x + 2.5 * letter);
+        let line = |width: f64, more: &str| format!("<path d='M{x:.4} {y:.4}L{end:.4} {y:.4}' stroke='{colour}' stroke-width='{width:.4}'{more}/>");
+        let ring = format!("<circle cx='{mid:.4}' cy='{y:.4}' r='{:.4}' stroke='{colour}' stroke-width='{:.4}'/>", 0.6 * letter, thin * 1.5);
+        let drawn = match mark {
+            Mark::Copper => format!("<rect x='{x:.4}' y='{:.4}' width='{:.4}' height='{:.4}' fill='{colour}' stroke='#999' stroke-width='{thin:.4}'/>", y - 0.5 * letter, 2.5 * letter, letter),
+            Mark::Wire => line(0.6 * letter, " stroke-opacity='0.7'"),
+            Mark::Planned => line(thin * 2.0, &format!(" stroke-dasharray='{:.4} {:.4}'", thin * 6.0, thin * 4.0)),
+            Mark::Line(by) => line(thin * by, ""),
+            Mark::End => format!("<circle cx='{mid:.4}' cy='{y:.4}' r='{:.4}' fill='{colour}'/>", thin * 4.0),
+            Mark::Ring => ring,
+            Mark::Gap => format!("{}<path d='M{:.4} {y:.4}L{:.4} {y:.4}' stroke='{colour}' stroke-width='{:.4}'/>", line(thin, ""), x + 0.8 * letter, x + 1.7 * letter, thin * 4.0),
+            Mark::Front => format!("{ring}<path d='M{mid:.4} {y:.4}L{:.4} {y:.4}' stroke='{colour}' stroke-width='{thin:.4}'/>", mid + 0.6 * letter),
+        };
+        let _ = writeln!(s, "{drawn}\n<text x='{:.4}' y='{:.4}' font-family='sans-serif' font-size='{letter:.4}' fill='#222' stroke='none'>{says}</text>", x + 3.2 * letter, y + 0.35 * letter);
+    }
     s.push_str("</svg>\n");
     s
+}
+
+/// A key's line under [`course`]'s picture, in letter heights.
+const KEY_ROW: f64 = 1.8;
+
+/// How a key shows the mark it tells of.
+enum Mark {
+    Copper,
+    Wire,
+    Planned,
+    /// A plain line, this many times the thinnest.
+    Line(f64),
+    End,
+    Ring,
+    Gap,
+    Front,
+}
+
+/// What each mark in [`course`]'s picture stands for: the mark, its colour, and the words.
+fn keys(found: bool) -> [(Mark, &'static str, &'static str); 11] {
+    [
+        (Mark::Copper, "#ddd", "pads and other copper in its way"),
+        (Mark::Wire, "#9ab", "wires already drawn"),
+        (Mark::Planned, "#d00", "this connection as the plan has it"),
+        (Mark::Line(3.0), "#000", if found { "the wire drawn for it" } else { "the wire drawn for it (none was found here)" }),
+        (Mark::End, "#000", "its two ends"),
+        (Mark::Line(1.0), "#8ad", "the area it may bend in"),
+        (Mark::Ring, "#2a2", "a corner on its left: it keeps outside the circle"),
+        (Mark::Ring, "#a2a", "a corner on its right: it keeps outside the circle"),
+        (Mark::Line(2.0), "#f80", "a side it keeps off"),
+        (Mark::Gap, "#fa0", "a gap it goes through, thick where it may cross"),
+        (Mark::Front, "#f6a", "room in front of a corner that it keeps out of"),
+    ]
 }
