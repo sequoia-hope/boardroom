@@ -825,6 +825,25 @@ impl Pours {
         out
     }
 
+    /// The pads that pad `id` is joined to on `layer` by spokes that meet, its own and theirs
+    /// (a bridge from pad to pad, with no pour between the two).
+    pub fn bridged(&self, board: &Board, id: ItemId, layer: usize) -> Vec<ItemId> {
+        let Some(item) = board.item(id) else { return Vec::new() };
+        let mut out = Vec::new();
+        for s in board.near(layer, item.shape.bbox().grow(STEP)) {
+            let Some(spoke) = board.item(s) else { continue };
+            if !matches!(spoke.kind, Kind::Spoke { pad, .. } if pad == id) || !spoke.on(layer) || !self.bridges.contains_key(&s) {
+                continue;
+            }
+            if let Some(Kind::Spoke { pad: other, .. }) = crate::check::met(board, spoke, layer).and_then(|o| board.item(o)).map(|o| &o.kind) {
+                if !out.contains(other) {
+                    out.push(*other);
+                }
+            }
+        }
+        out
+    }
+
     /// The pieces of pour that copper item `id` is joined to on `layer`. A track is joined where
     /// an end of it lies in the pour, a via where its middle does, a pad the pour joins solidly
     /// where any of it does. A pad joined by thermal spokes is joined by each spoke whose land,

@@ -303,3 +303,107 @@ fn a_spoke_drawn_by_hand_reaches_on_for_pour_and_is_not_drawn_beside_another() {
     let (dx, dy) = ((to[0] - from[0]).abs(), (to[1] - from[1]).abs());
     assert!((dx - dy).abs() < 1e-3 && dx > 1.7, "on a diagonal, past the patch: {to:?}");
 }
+
+/// A pad `w` by `h` mm on the front.
+fn pad(reference: &str, x: f64, y: f64, w: f64, h: f64, n: usize, net: &str) -> String {
+    format!("(footprint \"P\" (layer \"F.Cu\") (at {x} {y}) (property \"Reference\" \"{reference}\") (pad \"1\" smd rect (at 0 0) (size {w} {h}) (layers \"F.Cu\") (net {n} \"{net}\")))")
+}
+
+/// A two-layer board with ground poured over the front, joined to its pads by spokes, and
+/// `parts` on it.
+fn poured(parts: &str) -> Board {
+    let text = format!(
+        "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
+         (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
+         (net 0 \"\") (net 1 \"GND\")
+         (gr_rect (start 0 0) (end 20 20) (layer \"Edge.Cuts\") (width 0.1))
+         {parts}
+         (zone (net 1) (net_name \"GND\") (layer \"F.Cu\") (hatch edge 0.5) (connect_pads (clearance 0.2)) (min_thickness 0.25)
+           (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5))
+           (polygon (pts (xy 0.5 0.5) (xy 19.5 0.5) (xy 19.5 19.5) (xy 0.5 19.5)))))"
+    );
+    let (pcb, copper) = kicad::parse_board(&text).unwrap();
+    Board::new(&pcb, &copper, kicad::Rules::parse(RULES).unwrap())
+}
+
+/// Two ground pads too near each other for pour between them, the lower walled in on its
+/// other three sides: its one spoke is the one that meets the upper pad's, and KiCad's check
+/// wants two. A track is drawn from its middle to the upper pad's, along the two spokes, as
+/// the designer of TheTick draws one between R8 and the pad beside it (test set, 2026-11-22:
+/// KiCad counts a track of the pad that ends in the pour, and the upper pad's spoke is pour
+/// from its middle out).
+#[test]
+fn a_pad_joined_by_a_spoke_that_meets_anothers_is_drawn_a_track_to_that_pad() {
+    let parts = [
+        pad("U1", 10.0, 10.0, 1.0, 0.6, 1, "GND"),
+        pad("U2", 10.0, 11.74, 1.0, 0.6, 1, "GND"),
+        pad("W1", 8.7, 11.8, 1.0, 2.4, 0, ""),
+        pad("W2", 11.3, 11.8, 1.0, 2.4, 0, ""),
+        pad("W3", 10.0, 13.1, 3.6, 1.0, 0, ""),
+    ]
+    .concat();
+    let board = poured(&parts);
+    let before = board::Pours::likely(&board).starved(&board);
+    assert_eq!(before.len(), 1, "the lower pad has the one spoke: {before:?}");
+    let (plan, drawing) = wire::route(&board);
+    assert_eq!(wire::amiss(&board, &plan, &drawing), (0, 0));
+    assert_eq!(drawing.ties.len(), 1, "{:?}", drawing.ties);
+    assert_eq!(drawing.ties[0].pts, [[10.0, 11.74], [10.0, 10.0]], "from the lower pad's middle to the upper's");
+}
+
+/// The ground pin with one spoke west, its other ways taken: pins above and below, a pad
+/// hard by its east side, and a small pad where each diagonal spoke would end. No second way
+/// to the pour is to be had, and it is not short for anything the wires did (so no via is put
+/// in): a track is drawn beside the spoke it has, into the same pour, which is more copper on
+/// the one way there is. hm-mod-rpi-rtc's designer runs a track from C3's pad along its one
+/// spoke into the pour (test set, 2026-11-22), and KiCad's check counts it.
+#[test]
+fn a_pad_with_no_second_way_to_the_pour_is_drawn_a_track_beside_its_spoke() {
+    let dot = |x: f64, y: f64| pad("D", x, y, 0.5, 0.5, 0, "");
+    let parts = [
+        hole("J1", 10.0, 7.5, 0, ""),
+        hole("J2", 10.0, 10.0, 1, "GND"),
+        hole("J3", 10.0, 12.5, 0, ""),
+        smd("R2", 12.0, 10.0, 0, ""),
+        smd("R4", 5.0, 10.0, 1, "GND"),
+        dot(8.6, 8.6),
+        dot(11.4, 8.6),
+        dot(8.6, 11.4),
+        dot(11.4, 11.4),
+    ]
+    .concat();
+    let board = poured(&parts);
+    assert_eq!(board::Pours::likely(&board).starved(&board).len(), 1);
+    let (plan, drawing) = wire::route(&board);
+    assert_eq!(wire::amiss(&board, &plan, &drawing), (0, 0));
+    assert_eq!(drawing.ties.len(), 1, "{:?}", drawing.ties);
+    let [from, to] = drawing.ties[0].pts;
+    assert_eq!(from, [10.0, 10.0], "from the pin's middle");
+    assert!(to[0] < 8.5 && (to[1] - 10.0).abs() < 1.0, "west, beside the pin's spoke: {to:?}");
+    assert!(drawing.stitches.is_empty(), "{:?}", drawing.stitches);
+}
+
+/// A ground pad shut in a pen of other pads with a scrap of pour beside it, which its one
+/// spoke ends in and which joins nothing else; its net reaches it by a wire. KiCad's check
+/// counts the one spoke and wants two (TheTick's U2, test set, 2026-11-22). No wire can take
+/// the scrap away, so a track of the pad is drawn into it: the scrap then joins two things,
+/// and the check has its spoke and its track.
+#[test]
+fn a_pad_whose_one_spoke_ends_in_a_scrap_of_pour_is_drawn_a_track_into_the_scrap() {
+    let parts = [
+        pad("U2", 10.0, 10.0, 1.0, 0.6, 1, "GND"),
+        pad("W1", 9.0, 8.5, 4.8, 1.0, 0, ""),
+        pad("W2", 9.0, 11.5, 4.8, 1.0, 0, ""),
+        pad("W3", 6.9, 10.0, 0.6, 2.0, 0, ""),
+        pad("W4", 11.1, 10.0, 0.6, 2.0, 0, ""),
+        smd("R4", 3.0, 10.0, 1, "GND"),
+    ]
+    .concat();
+    let board = poured(&parts);
+    let (plan, drawing) = wire::route(&board);
+    assert_eq!(wire::open(&board, &plan, &drawing), 0);
+    assert_eq!(drawing.ties.len(), 1, "{:?}", drawing.ties);
+    let [from, to] = drawing.ties[0].pts;
+    assert_eq!(from, [10.0, 10.0], "from the pad's middle");
+    assert!(to[0] > 7.4 && to[0] < 9.0 && to[1] > 9.2 && to[1] < 10.8, "in the scrap: {to:?}");
+}

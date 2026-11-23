@@ -1100,7 +1100,7 @@ const TIE_ON: [f64; 5] = [0.0, 250_000.0, 500_000.0, 1_000_000.0, 1_500_000.0];
 /// ([`TIE_ON`]), for the pour that a hole or a neighbour's clearance keeps a little way off
 /// (a USB-C socket's ground pins beside its mounting holes, sra_dev_board's J1). The track is
 /// left on `with`.
-fn tie(with: &mut Board, pours: &board::Pours, s: &board::Starved) -> Option<Tie> {
+fn tie(with: &mut Board, pours: &board::Pours, s: &board::Starved, how: Hand) -> Option<Tie> {
     let pad = with.item(s.pad)?.clone();
     let b = pad.shape.bbox();
     let c = board::Point::new((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2);
@@ -1111,6 +1111,23 @@ fn tie(with: &mut Board, pours: &board::Pours, s: &board::Starved) -> Option<Tie
     }
     let class = plan::width(with, pad.net);
     let narrow = (class / 2.0).max(with.rules.min_track_width * 1e3).max(with.min_track_width_of(pad.net) as f64 / 1e6);
+    if how == Hand::Bridge {
+        // Straight to the middle of a pad its spoke meets the spoke of.
+        for other in pours.bridged(with, s.pad, s.layer) {
+            let Some(ob) = with.bbox(other) else { continue };
+            let far = board::Point::new((ob.min.x + ob.max.x) / 2, (ob.min.y + ob.max.y) / 2);
+            for width in [class, narrow] {
+                let r = (width * 1e6 / 2.0).round() as i64;
+                let id = with.insert(Item { kind: Kind::Track, net: pad.net, layers: 1 << s.layer, shape: Shape::Capsule { a: c, b: far, r }, hole: None, locked: false, span: None });
+                if board::check_item(with, id).is_empty() {
+                    let mm = |p: board::Point| [p.x as f64 / 1e6, p.y as f64 / 1e6];
+                    return Some(Tie { layer: s.layer, net: pad.net, width, pts: [mm(c), mm(far)] });
+                }
+                with.remove(id);
+            }
+        }
+        return None;
+    }
     // Twenty-fourths of a turn: the eight ways, then those between them. None of those between
     // that lies nearer than an eighth of a turn to a spoke the pad has: a track hard beside a
     // spoke is no second way to the pour.
@@ -1130,7 +1147,7 @@ fn tie(with: &mut Board, pours: &board::Pours, s: &board::Starved) -> Option<Tie
         let (sin, cos) = (turn as f64 * std::f64::consts::TAU / 24.0).sin_cos();
         !turn.is_multiple_of(3) && spokes.iter().any(|d| d[0] * cos + d[1] * sin > (std::f64::consts::FRAC_PI_4 - 0.01).cos())
     };
-    let turns: Vec<usize> = [3, 9, 15, 21, 0, 6, 12, 18].into_iter().chain((0..24).filter(|t: &usize| !t.is_multiple_of(3))).filter(|&t| !beside(t)).collect();
+    let turns: Vec<usize> = [3, 9, 15, 21, 0, 6, 12, 18].into_iter().chain((0..24).filter(|t: &usize| !t.is_multiple_of(3))).filter(|&t| how != Hand::Apart || !beside(t)).collect();
     for on in TIE_ON {
         for width in [class, narrow] {
             let r = (width * 1e6 / 2.0).round();
@@ -1142,8 +1159,8 @@ fn tie(with: &mut Board, pours: &board::Pours, s: &board::Starved) -> Option<Tie
                 let own = |p: board::Point| {
                     with.near(s.layer, board::BBox::of([p])).into_iter().any(|q| with.item(q).is_some_and(|it| matches!(it.kind, Kind::Spoke { pad, .. } if pad == s.pad) && it.on(s.layer) && it.shape.contains(p)))
                 };
-                let leads_on = pours.piece(pad.net, s.layer, far, r as i64).is_some_and(|piece| !s.pockets.contains(&piece));
-                if !leads_on || own(ring) {
+                let leads_on = pours.piece(pad.net, s.layer, far, r as i64).is_some_and(|piece| how == Hand::Scrap || !s.pockets.contains(&piece));
+                if !leads_on || (how == Hand::Apart && own(ring)) {
                     continue;
                 }
                 let id = with.insert(Item { kind: Kind::Track, net: pad.net, layers: 1 << s.layer, shape: Shape::Capsule { a: c, b: far, r: r as i64 }, hole: None, locked: false, span: None });
@@ -1156,6 +1173,29 @@ fn tie(with: &mut Board, pours: &board::Pours, s: &board::Starved) -> Option<Tie
         }
     }
     None
+}
+
+/// Where a spoke drawn by hand may go ([`tie`]), the first that can be done taken.
+#[derive(Clone, Copy, PartialEq)]
+enum Hand {
+    /// Well away from the spokes the pad has, into pour that leads on: a second way to the
+    /// pour.
+    Apart,
+    /// Along a spoke that meets another pad's, to that pad's middle: the track a designer
+    /// draws between two pads of a net that stand too near for pour between them and are
+    /// joined by their spokes alone (TheTick's R8, test set).
+    Bridge,
+    /// Beside a spoke the pad has, or along it, into pour that leads on: more copper on the
+    /// way it has, as a designer runs a track from such a pad along its one spoke into the
+    /// pour (hm-mod-rpi-rtc's C3, test set). KiCad's check counts a track of the pad that ends
+    /// in the pour as a spoke, wherever it runs.
+    Beside,
+    /// Into a scrap of pour that the pad's spoke ends in and that joins nothing else: the pad
+    /// is joined to its net by its own wire, and the scrap, which no wire can take away, is
+    /// what KiCad's check counts its one spoke by (TheTick's U2, BMS-bq76940's BMS1, test
+    /// set). With a track of the pad in it the scrap joins two things and the check has its
+    /// two.
+    Scrap,
 }
 
 /// How far apart the places tried for a via in a piece of pour are, nm, and how many of them
@@ -1195,7 +1235,9 @@ fn stitch(with: &mut Board, pours: &board::Pours, s: &board::Starved) -> Option<
 
 /// `drawing` with a spoke drawn by hand for each pad it leaves short of spokes ([`tie`]), or,
 /// where there is no room for one, a via that joins the pour its spokes end in to the net's
-/// pour on another layer ([`stitch`]), and how many pads are short still.
+/// pour on another layer ([`stitch`]), or failing that a spoke drawn along one that meets
+/// another pad's, beside one it has, or into the scrap of pour its spoke ends in ([`Hand`]),
+/// and how many pads are short still.
 ///
 /// A pad in `before`, short on the bare board already, is drawn a spoke too where there is
 /// room, though it is not counted and gets no via. KiCad may well have passed it on the bare
@@ -1209,11 +1251,15 @@ fn tied(board: &Board, plan: &Plan, mut drawing: Drawing, before: &[(ItemId, usi
         for s in &pours.starved(&with) {
             let already = before.contains(&(s.pad, s.layer));
             short += usize::from(!already);
-            match tie(&mut with, &pours, s) {
-                Some(t) => ties.push(t),
-                None if !already => stitches.extend(stitch(&mut with, &pours, s)),
-                None => {}
+            if let Some(t) = tie(&mut with, &pours, s, Hand::Apart) {
+                ties.push(t);
+                continue;
             }
+            if !already && let Some(via) = stitch(&mut with, &pours, s) {
+                stitches.push(via);
+                continue;
+            }
+            ties.extend(tie(&mut with, &pours, s, Hand::Bridge).or_else(|| tie(&mut with, &pours, s, Hand::Beside)).or_else(|| tie(&mut with, &pours, s, Hand::Scrap)));
         }
         if ties.is_empty() && stitches.is_empty() {
             return (drawing, short);
