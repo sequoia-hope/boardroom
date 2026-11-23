@@ -301,3 +301,22 @@ fn a_mask_drawing_on_a_pad_and_unnetted_copper_admits_no_net() {
     let v = via(&mut b, 2, 9.4125, 10.4875);
     assert!(check_item(&b, v).iter().any(|x| x.rule == Rule::Keepout), "bare via opening bridges into the jumper frame");
 }
+
+/// A text in an outline font carries its letters as KiCad drew them, and KiCad draws those
+/// where it has not the font. They are the opening, not the text set again in another font
+/// or the box about where it would be (EnvOpenPico's "env" on the back's mask, test set,
+/// 2026-11-22: a track let between our letters lay bare in KiCad's).
+#[test]
+fn a_texts_letters_as_the_file_holds_them_are_its_opening() {
+    let drawn = "(gr_text \"I\" (at 3 3 0) (layer \"F.Mask\") (effects (font (face \"Some Font\") (size 2 2) (thickness 0.3)))
+                   (render_cache \"I\" 0 (polygon (pts (xy 9.8 9.5) (xy 13 9.5) (xy 13 10.5) (xy 9.8 10.5)))))";
+    let mut b = plain("(pad_to_mask_clearance 0)", drawn);
+    assert_eq!(b.mask_areas.len(), 1);
+    let bb = b.mask_areas[0].0.bbox();
+    assert_eq!((bb.min.x, bb.min.y, bb.max.x, bb.max.y), (nm(9.8e-3), nm(9.5e-3), nm(13e-3), nm(10.5e-3)));
+    assert_eq!(b.mask_areas[0].2, 1, "it bares net A's pad");
+    let other = track_at(&mut b, 2, 12.0, 1);
+    assert!(check_item(&b, other).iter().any(|v| v.rule == Rule::Keepout), "net B would be bared beside A");
+    let clear = track_at(&mut b, 2, 3.0, 1);
+    assert!(check_item(&b, clear).is_empty(), "where the text is anchored there is no opening");
+}

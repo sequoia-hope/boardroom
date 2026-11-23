@@ -620,6 +620,20 @@ fn graphic(g: &Node, place: &dyn Fn([f64; 2]) -> [f64; 2], rotation: f64) -> Res
             if hidden(g) || effects.is_some_and(hidden) {
                 return Ok(None);
             }
+            // A text in an outline font carries its letters as KiCad drew them
+            // (`render_cache`), and KiCad uses those where it has not the font: they are the
+            // text's shape, whatever fonts this machine has. (EnvOpenPico's "env" on the back's
+            // mask, in a font of its designer's, 2026-11-22: stroked in KiCad's own font the
+            // letters lay elsewhere, a track was let between them, and KiCad's check found it
+            // bared in the real ones.) On the board only: a footprint's are left as they were.
+            if let Some(cache) = g.find("render_cache").filter(|_| head == "gr_text") {
+                let letters: Vec<Vec<[f64; 2]>> = cache.args().iter().filter(|n| n.head() == Some("polygon")).filter_map(|n| n.find("pts")).map(pts).collect::<Result<_, _>>()?;
+                let letters: Vec<Vec<[f64; 2]>> = letters.into_iter().filter(|l| l.len() >= 3).collect();
+                if !letters.is_empty() {
+                    let net = g.find("net").and_then(|n| n.number_arg(0, "net").ok()).map_or(0, |n| n as u32);
+                    return Ok(Some((CopperGraphic { layer: layer.to_string(), net, polygons: letters, footprint: None }, None)));
+                }
+            }
             // `(gr_text "T" ...)`, `(fp_text reference "T" ...)`, `(property "Reference" "T" ...)`.
             let string = if head == "gr_text" { g.args().first() } else { g.args().get(1) }.and_then(Node::text).unwrap_or("");
             let font = effects.and_then(|e| e.find("font"));
