@@ -98,9 +98,10 @@ pub fn layer(board: &Board, plan: &Plan, drawing: &Drawing, l: usize, faults: &[
 }
 
 /// One strand's course as SVG: obstacles, where it may bend (thin blue), each corner it keeps
-/// from as a circle of that distance (green where the corner is on the wire's left, purple on
-/// its right), the sides it keeps from (orange), and the wire found (black). Also the wires
-/// already drawn on the layer (grey-blue, at their widths), the strand as it lies in the plan
+/// from as a circle of that distance with a cross at the corner (green where the corner is on
+/// the wire's left, purple on its right), the sides it keeps from (orange), and the wire found
+/// (black). Also the wires already drawn on the layer (grey-blue, at their widths), the strand
+/// as it lies in the plan
 /// (`line`, dashed red), the part of each gap the wire may cross in (thick orange), and the
 /// room in front of each corner that it keeps out of (the half of a pink circle its tick is
 /// on). Under the picture, what each mark stands for.
@@ -153,7 +154,10 @@ pub fn course(sheet: &plan::Sheet, course: &crate::chain::Course, found: Option<
         let _ = writeln!(s, "<path d='{}' stroke='#d00' stroke-width='{:.4}' stroke-dasharray='{:.4} {:.4}'/>", path(line, false), thin * 2.0, thin * 6.0, thin * 4.0);
     }
     for c in course.corners.iter().chain(course.stages.iter().flat_map(|s| &s.corners)) {
-        let _ = writeln!(s, "<circle cx='{:.4}' cy='{:.4}' r='{:.4}' stroke='{}' stroke-width='{:.4}'/>", c.at[0], c.at[1], c.r, if c.left { "#2a2" } else { "#a2a" }, thin * 1.5);
+        let colour = if c.left { "#2a2" } else { "#a2a" };
+        let _ = writeln!(s, "<circle cx='{:.4}' cy='{:.4}' r='{:.4}' stroke='{colour}' stroke-width='{:.4}'/>", c.at[0], c.at[1], c.r, thin * 1.5);
+        // The corner itself, a cross: the circle is a distance from it and no copper.
+        let _ = writeln!(s, "{}", cross(c.at, thin * 8.0, colour, thin * 1.5));
     }
     for wall in course.walls.iter().chain(course.stages.iter().flat_map(|s| &s.walls)) {
         let _ = writeln!(s, "<path d='{}' stroke='#f80' stroke-width='{:.4}'/>", path(&[wall.a, wall.b], false), thin * 2.0);
@@ -174,13 +178,14 @@ pub fn course(sheet: &plan::Sheet, course: &crate::chain::Course, found: Option<
         let (mid, end) = (x + 1.25 * letter, x + 2.5 * letter);
         let line = |width: f64, more: &str| format!("<path d='M{x:.4} {y:.4}L{end:.4} {y:.4}' stroke='{colour}' stroke-width='{width:.4}'{more}/>");
         let ring = format!("<circle cx='{mid:.4}' cy='{y:.4}' r='{:.4}' stroke='{colour}' stroke-width='{:.4}'/>", 0.6 * letter, thin * 1.5);
+        let centred = format!("{ring}{}", cross([mid, y], 0.2 * letter, colour, thin * 1.5));
         let drawn = match mark {
             Mark::Copper => format!("<rect x='{x:.4}' y='{:.4}' width='{:.4}' height='{:.4}' fill='{colour}' stroke='#999' stroke-width='{thin:.4}'/>", y - 0.5 * letter, 2.5 * letter, letter),
             Mark::Wire => line(0.6 * letter, " stroke-opacity='0.7'"),
             Mark::Planned => line(thin * 2.0, &format!(" stroke-dasharray='{:.4} {:.4}'", thin * 6.0, thin * 4.0)),
             Mark::Line(by) => line(thin * by, ""),
             Mark::End => format!("<circle cx='{mid:.4}' cy='{y:.4}' r='{:.4}' fill='{colour}'/>", thin * 4.0),
-            Mark::Ring => ring,
+            Mark::Ring => centred,
             Mark::Gap => format!("{}<path d='M{:.4} {y:.4}L{:.4} {y:.4}' stroke='{colour}' stroke-width='{:.4}'/>", line(thin, ""), x + 0.8 * letter, x + 1.7 * letter, thin * 4.0),
             Mark::Front => format!("{ring}<path d='M{mid:.4} {y:.4}L{:.4} {y:.4}' stroke='{colour}' stroke-width='{thin:.4}'/>", mid + 0.6 * letter),
         };
@@ -188,6 +193,11 @@ pub fn course(sheet: &plan::Sheet, course: &crate::chain::Course, found: Option<
     }
     s.push_str("</svg>\n");
     s
+}
+
+/// A cross at a point, its arms this long.
+fn cross(at: P, arm: f64, colour: &str, width: f64) -> String {
+    format!("<path d='M{:.4} {:.4}h{:.4}M{:.4} {:.4}v{:.4}' stroke='{colour}' stroke-width='{width:.4}'/>", at[0] - arm, at[1], 2.0 * arm, at[0], at[1] - arm, 2.0 * arm)
 }
 
 /// A key's line under [`course`]'s picture, in letter heights.
@@ -216,8 +226,8 @@ fn keys(found: bool) -> [(Mark, &'static str, &'static str, &'static str); 11] {
         (Mark::End, "#000", "Black dots", "the two points the connection joins."),
         (Mark::Copper, "#ddd", "Grey shapes", "what the track must keep clear of: pads, vias, room kept for a pad's link to its pour."),
         (Mark::Wire, "#9ab", "Thick grey-blue lines", "tracks already drawn for other connections."),
-        (Mark::Ring, "#2a2", "Green circle", "round a corner the track passes on its left. The track's centre line must stay outside it."),
-        (Mark::Ring, "#a2a", "Purple circle", "the same, round a corner the track passes on its right."),
+        (Mark::Ring, "#2a2", "Green circle", "not copper. The track's centre line must stay outside it. Its centre (+) is a corner passed on the track's left."),
+        (Mark::Ring, "#a2a", "Purple circle", "the same, round a corner passed on the track's right."),
         (Mark::Line(2.0), "#f80", "Orange line", "a side of something the track runs past and must keep its clearance from."),
         (Mark::Gap, "#fa0", "Yellow line", "a gap the route goes through. The track's centre must cross it in the thick part."),
         (Mark::Front, "#f6a", "Pink circle with a tick", "room kept at a corner for other tracks that pass between it and this one."),

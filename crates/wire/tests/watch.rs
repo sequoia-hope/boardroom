@@ -30,7 +30,7 @@ fn the_picture_of_a_strands_course_says_what_its_marks_are() {
     let (drawing, picture) = wire::draw_watching(&board, &plan, Some((0, 0)));
     assert_eq!(drawing.wires.len(), 1);
     let picture = picture.expect("the strand watched has a picture");
-    for says in ["Dashed red line:", "Black line:</tspan> the track drawn along that route.<", "Black dots:", "Grey shapes:", "Thick grey-blue lines:", "Green circle:", "Purple circle:", "Orange line:", "Yellow line:", "Pink circle with a tick:", "Thin blue outline:"] {
+    for says in ["Dashed red line:", "Black line:</tspan> the track drawn along that route.<", "Black dots:", "Grey shapes:", "Thick grey-blue lines:", "Green circle:</tspan> not copper.", "Purple circle:", "Orange line:", "Yellow line:", "Pink circle with a tick:", "Thin blue outline:"] {
         assert!(picture.contains(says), "the key has no line for: {says}");
     }
     // The key lies under the picture: each of its lines starts below every mark of the course.
