@@ -981,22 +981,29 @@ const HOLE_TRIES: i64 = 5;
 /// Whether a pad could hold a hole: it is on one layer, has none, its net may have vias, a
 /// via of its net is no wider than it either way, and nothing is soldered to it. A hole in a
 /// pad that takes solder draws the solder down it unless the board is made with its holes
-/// filled, which nothing written on a board says: where designers stand a via on such a pad it
+/// filled and capped: where designers stand a via on such a pad of a board that is not, it
 /// is at the pad's end or corner, and none of the gate tier's puts one in a ball of a grid
 /// array (PocketBone's U2, 2026-11-21: every ball leaves by a short track to a via between the
-/// balls). Such a pad's connection is left open, and said to be.
+/// balls). Such a pad's connection is left open, and said to be. On a board that is made so
+/// ([`Board::filled_vias`]) a soldered pad holds one as a bare one does, and so does a pad
+/// narrower than the via, a fine-pitch part's pin, if it is as wide as the via's hole (the
+/// owner's parallelogram board as the old router left it, 2026-11-24: 152 of its 724 vias
+/// stand in soldered pads, 29 of them in pins 0.2 mm wide).
 fn holds_a_hole(board: &Board, pad: ItemId) -> bool {
     let (Some(item), Some(b)) = (board.item(pad), board.bbox(pad)) else { return false };
-    let d = 2 * via_size(board, item.net).0;
-    matches!(item.kind, Kind::Pad { .. }) && !board.soldered.contains(&pad) && item.net != 0 && item.layers.count_ones() == 1 && item.hole.is_none() && !board.no_vias(item.net) && b.max.x - b.min.x >= d && b.max.y - b.min.y >= d
+    let (r, drill) = via_size(board, item.net);
+    let d = 2 * if board.filled_vias { drill } else { r };
+    matches!(item.kind, Kind::Pad { .. }) && (board.filled_vias || !board.soldered.contains(&pad)) && item.net != 0 && item.layers.count_ones() == 1 && item.hole.is_none() && !board.no_vias(item.net) && b.max.x - b.min.x >= d && b.max.y - b.min.y >= d
 }
 
 /// A hole for each of `wanted` that can hold one: a via of the pad's net wholly inside the
 /// pad's copper, at its middle or as near it as the exact checker lets one stand beside the
 /// plan's vias (`standing`) and the holes already found. What a designer does with a grid of bare pads too close for a track
 /// between them (the 120-channel test board of the gate tier: a via on each pad and its track
-/// on the other side). A via that would reach past its pad is not tried: the map of the pad's
-/// own layer has no place for it.
+/// on the other side). On a board whose vias are filled and capped the via's hole is wholly
+/// inside the pad's copper and its ring may reach past the pad's sides and its end (the old
+/// router's stand anywhere along a pin, to its very end): the pad is then that much wider to
+/// everything on its own layer ([`space::Space::new`]).
 pub fn holes(board: &Board, wanted: &[ItemId], standing: &[(space::P, u32)]) -> Vec<(ItemId, space::P, u32)> {
     let mut scratch = board.clone();
     for &(at, net) in standing {
@@ -1009,17 +1016,19 @@ pub fn holes(board: &Board, wanted: &[ItemId], standing: &[(space::P, u32)]) -> 
     for (pad, net) in pads {
         let Some(item) = board.item(pad) else { continue };
         let (Some(b), copper) = (board.bbox(pad), space::outline(&item.shape)) else { continue };
-        let r = via_size(board, net).0;
-        let (cx, cy, hx, hy) = ((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2, (b.max.x - b.min.x) / 2 - r, (b.max.y - b.min.y) / 2 - r);
+        let (r, drill) = via_size(board, net);
+        // What of the via must lie inside the pad: all of it, or its hole.
+        let within = if board.filled_vias { drill } else { r };
+        let (cx, cy, hx, hy) = ((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2, (b.max.x - b.min.x) / 2 - within, (b.max.y - b.min.y) / 2 - within);
         if hx < 0 || hy < 0 || copper.len() < 3 {
             continue;
         }
         // The middle first, then outwards.
-        let mut places: Vec<(i64, i64)> = (-HOLE_TRIES..=HOLE_TRIES).flat_map(|i| (-HOLE_TRIES..=HOLE_TRIES).map(move |j| (i, j))).collect();
+        let mut places: Vec<(i64, i64)> = (-HOLE_TRIES..=HOLE_TRIES).flat_map(|i| (-HOLE_TRIES..=HOLE_TRIES).map(move |j| (i, j))).filter(|&(i, j)| (hx > 0 || i == 0) && (hy > 0 || j == 0)).collect();
         places.sort_by_key(|&(i, j)| (i * i + j * j, i, j));
         let rim = |at: space::P| (0..16).all(|k| {
             let a = std::f64::consts::TAU * k as f64 / 16.0;
-            space::inside([at[0] + r as f64 / 1e6 * a.cos(), at[1] + r as f64 / 1e6 * a.sin()], &copper)
+            space::inside([at[0] + within as f64 / 1e6 * a.cos(), at[1] + within as f64 / 1e6 * a.sin()], &copper)
         });
         for (i, j) in places {
             let at = [(cx + hx * i / HOLE_TRIES) as f64 / 1e6, (cy + hy * j / HOLE_TRIES) as f64 / 1e6];

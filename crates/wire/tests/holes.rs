@@ -79,6 +79,80 @@ fn a_pad_that_takes_solder_is_given_no_hole() {
     assert_eq!(wire::open(&board, &plan, &drawing), 1);
 }
 
+/// The same soldered pads on a board made with its vias filled and capped: the hole takes no
+/// solder, and the shut-in pad leaves by one as a bare pad does.
+#[test]
+fn a_pad_that_takes_solder_is_given_a_hole_where_the_vias_are_filled() {
+    let mut parts = Vec::new();
+    for (i, x) in [7.7, 10.0, 12.3].into_iter().enumerate() {
+        for (j, y) in [7.7, 10.0, 12.3].into_iter().enumerate() {
+            let middle = (i, j) == (1, 1);
+            parts.push(pad_on(&format!("P{i}{j}"), x, y, if middle { 1 } else { 0 }, if middle { "A" } else { "" }, "\"F.Cu\" \"F.Paste\" \"F.Mask\""));
+        }
+    }
+    parts.push(pad("Q", 3.0, 16.0, 1, "A"));
+    let mut board = board(20.0, &parts);
+    // Two layers: not filled unless said.
+    assert!(!board.filled_vias);
+    board.filled_vias = true;
+    let (plan, drawing) = wire::route(&board);
+    assert_eq!(plan.vias.iter().filter(|v| within(&board, "P11", v.at)).count(), 1, "{:?}", plan.vias);
+    assert_eq!(wire::open(&board, &plan, &drawing), 0);
+    assert_eq!(wire::amiss(&board, &plan, &drawing), (0, 0));
+}
+
+/// Nine soldered pins 0.5 mm wide and 2 long, 0.5 apart side by side and 0.3 end to end: no
+/// track passes between any two, and a via, 0.8 across, is wider than a pin. Where the vias
+/// are filled the middle pin holds one all the same, its hole inside the pin and its ring
+/// 0.15 past each side, 0.35 from the pins beside it; where they are not it is left open.
+#[test]
+fn a_pin_narrower_than_a_via_holds_one_where_the_vias_are_filled() {
+    let pin = |reference: &str, x: f64, y: f64, n: usize, net: &str| {
+        format!("(footprint \"P\" (layer \"F.Cu\") (at {x} {y}) (property \"Reference\" \"{reference}\") (pad \"1\" smd rect (at 0 0) (size 0.5 2) (layers \"F.Cu\" \"F.Paste\" \"F.Mask\") (net {n} \"{net}\")))")
+    };
+    let mut parts = Vec::new();
+    for (i, x) in [9.0, 10.0, 11.0].into_iter().enumerate() {
+        for (j, y) in [7.7, 10.0, 12.3].into_iter().enumerate() {
+            let middle = (i, j) == (1, 1);
+            parts.push(pin(&format!("P{i}{j}"), x, y, if middle { 1 } else { 0 }, if middle { "A" } else { "" }));
+        }
+    }
+    parts.push(pad("Q", 3.0, 16.0, 1, "A"));
+    let mut board = board(20.0, &parts);
+    let (plan, drawing) = wire::route(&board);
+    assert!(plan.vias.is_empty(), "{:?}", plan.vias);
+    assert_eq!(wire::open(&board, &plan, &drawing), 1);
+    board.filled_vias = true;
+    let (plan, drawing) = wire::route(&board);
+    assert_eq!(plan.vias.iter().filter(|v| within(&board, "P11", v.at)).count(), 1, "{:?}", plan.vias);
+    assert_eq!(wire::open(&board, &plan, &drawing), 0);
+    assert_eq!(wire::amiss(&board, &plan, &drawing), (0, 0));
+}
+
+/// On its own layer a pin with a via wider than itself is the two together: the map holds
+/// the pin as reaching 0.15 mm farther, the via's ring past its side, and a track of another
+/// net keeps the rules' 0.25 from the hole, 0.2 inside that ring, which is 0.05 from the ring.
+#[test]
+fn a_pin_with_a_via_wider_than_itself_is_wider_in_the_map() {
+    let pin = "(footprint \"P\" (layer \"F.Cu\") (at 10 10) (property \"Reference\" \"P\") (pad \"1\" smd rect (at 0 0) (size 0.5 2) (layers \"F.Cu\" \"F.Paste\" \"F.Mask\") (net 1 \"A\")))".to_string();
+    let mut board = board(20.0, &[pin]);
+    board.filled_vias = true;
+    let pad = board.items().find(|(_, i)| matches!(i.kind, Kind::Pad { .. })).map(|(id, _)| id).unwrap();
+    let mut spots = plan::via_spots(&board, false);
+    spots.holes = plan::holes(&board, &[pad], &[]);
+    assert_eq!(spots.holes.len(), 1);
+    let vias: Vec<_> = spots.holes.iter().map(|h| (h.1, h.2)).collect();
+    let of_pad = |spots: plan::Spots, layer: usize| {
+        let space = plan::Space::new(&board, layer, &vias, &std::sync::Arc::new(spots));
+        space.obstacles.iter().find(|o| o.item == Some(pad)).map(|o| (o.past, o.hole))
+    };
+    let (past, hole) = of_pad(spots.clone(), 0).unwrap();
+    assert!((past - 0.15).abs() < 1e-6 && (hole - 0.05).abs() < 1e-6, "{past} {hole}");
+    // Without the via the pin is its own width.
+    spots.holes.clear();
+    assert_eq!(of_pad(spots, 0), Some((0.0, 0.0)));
+}
+
 /// Where no pad is shut in, no hole is made: the same pads with room between them.
 #[test]
 fn a_pad_with_a_way_out_is_given_no_hole() {

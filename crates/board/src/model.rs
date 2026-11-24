@@ -289,6 +289,9 @@ impl Block {
     }
 }
 
+/// How many copper layers a board has from which its fab fills and caps its vias unasked.
+pub const FILLED_FREE_LAYERS: usize = 6;
+
 #[derive(Debug, Clone)]
 pub struct Board {
     pub layers: Vec<String>,
@@ -347,6 +350,12 @@ pub struct Board {
     /// Pads solder paste is printed on (a paste layer among the pad's own): a part is soldered
     /// there, and a hole in such a pad draws the solder down it.
     pub soldered: HashSet<ItemId>,
+    /// Whether the board is made with its vias filled and capped, so that one may stand in a
+    /// pad a part is soldered to. Nothing in a KiCad 9 board says: it is taken from the board's
+    /// make-up as the owner's fab has it (JLCPCB fills and caps every via of a board of
+    /// [`FILLED_FREE_LAYERS`] copper layers or more at no charge; owner, 2026-11-24), and said
+    /// outright for a board ordered so with fewer (`boardroom route --filled-vias yes`).
+    pub filled_vias: bool,
     /// Pads no zone of their net joins (KiCad's zone connection "none", the pad's own, its
     /// footprint's or the zone's).
     pub pad_zone_connect: HashMap<ItemId, u8>,
@@ -577,6 +586,7 @@ impl Board {
             mask_groups: Vec::new(),
             pad_clearances: HashMap::new(),
             soldered: HashSet::new(),
+            filled_vias: layers.len() >= FILLED_FREE_LAYERS,
             pad_zone_connect: HashMap::new(),
             zones_without_pads: copper.zones.iter().enumerate().filter(|(_, z)| z.no_pads).map(|(i, _)| i).collect(),
             relief_pads: Default::default(),

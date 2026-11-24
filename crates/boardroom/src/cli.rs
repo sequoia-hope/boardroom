@@ -15,7 +15,7 @@
 //!     boardroom link remove <project-path> <id>
 //!     boardroom push <project-path>                 push the current branch to its upstream
 //!     boardroom snapshot [--ccomp P] <out> <dir>... a static copy for the web-only build
-//!     boardroom route <board.kicad_pcb> [--out DIR] [--packages DIR]  route a board (into DIR, else route/<board>/ in its project), keeping its blocks' pours joined
+//!     boardroom route <board.kicad_pcb> [--out DIR] [--packages DIR] [--filled-vias yes|no]  route a board (into DIR, else route/<board>/ in its project), keeping its blocks' pours joined; a via may stand in a soldered pad where the board's vias are filled and capped (six layers or more, unless said)
 //!     boardroom check <board.kicad_pcb> [--json]    the checker's faults and open connections
 //!     boardroom pours <board.kicad_pcb> [--zone NAME] [--cut-by NET[,NET]] [--json]  each pour's pieces after a refill and where each is narrow
 //!     boardroom blocks <board.kicad_pcb> [--pin REF=PACKAGE/LAYOUT] [--accept REF[:NAME]|all] [--decline REF:NAME]  each chip's block against its package
@@ -643,11 +643,20 @@ fn route_dir(board: &std::path::Path) -> PathBuf {
 
 fn route_cmd(args: &[String]) -> Result<(), String> {
     // The board: the first word that is neither a flag nor the value after `--out`.
-    let board = args.iter().enumerate().find(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--out", "--packages"].contains(&args[i - 1].as_str()))).map(|(_, a)| a).ok_or("usage: boardroom route <board.kicad_pcb> [--out DIR] [--packages DIR]")?;
+    const USAGE: &str = "usage: boardroom route <board.kicad_pcb> [--out DIR] [--packages DIR] [--filled-vias yes|no]";
+    let board = args.iter().enumerate().find(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--out", "--packages", "--filled-vias"].contains(&args[i - 1].as_str()))).map(|(_, a)| a).ok_or(USAGE)?;
     let board = PathBuf::from(board);
     let out = flag(args, "out").map(PathBuf::from).unwrap_or_else(|| route_dir(&board));
     let packages = flag(args, "packages").map(PathBuf::from).unwrap_or_else(|| repo_dir().join("packages"));
-    let report = route::route(&board, &out, Some(&packages))?;
+    // Whether the board is ordered with its vias filled and capped: said here, or taken from
+    // how many layers it has.
+    let filled = match flag(args, "filled-vias").as_deref() {
+        None => None,
+        Some("yes") => Some(true),
+        Some("no") => Some(false),
+        Some(_) => return Err(USAGE.into()),
+    };
+    let report = route::route(&board, &out, Some(&packages), filled)?;
     // The report on stdout, one line, for scripts; what matters on stderr, for people.
     println!("{report}");
     for note in report["notes"].as_array().into_iter().flatten() {

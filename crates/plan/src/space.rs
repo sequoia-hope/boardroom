@@ -899,6 +899,19 @@ impl Space {
                 }
             }
         }
+        // A pad with a via of the plan in it ([`Spots::holes`]) is, on its own layer, the pad
+        // and the via together: wider by what the via's ring reaches past the pad's side, and
+        // kept from as a via is for the sake of its hole.
+        for &(pad, at, net) in &spots.holes {
+            let Some(o) = obstacles.iter_mut().find(|o| o.what == What::Pad && o.item == Some(pad)) else { continue };
+            let (r, drill) = crate::via_size(board, net);
+            let (r, drill) = (r as f64 / 1e6, drill as f64 / 1e6);
+            // How far the via's middle is inside the pad's copper as the map has it.
+            let sides = (0..o.poly.len()).map(|i| point_segment(at, o.poly[i], o.poly[(i + 1) % o.poly.len()])).fold(f64::MAX, f64::min);
+            let deep = if inside(at, &o.poly) { sides + o.reach } else { o.reach - sides };
+            o.past = o.past.max(r - deep);
+            o.hole = o.hole.max(board.rules.min_hole_clearance * 1e3 - (deep.max(r) - drill));
+        }
         let loops: Vec<Vec<P>> = bounds(board).iter().map(|l| l.iter().map(|&p| mm(p)).collect()).collect();
         let first_edge = obstacles.len();
         for l in &loops {

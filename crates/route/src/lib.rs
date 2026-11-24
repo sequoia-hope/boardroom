@@ -29,8 +29,15 @@ use serde_json::{json, Value};
 /// With `packages` (Boardroom's `packages/`), each pour the board's pinned blocks keep joined
 /// is kept so: no track or via laid may break a section of it that is whole on the bare board,
 /// and a via in it costs dearly ([`board::Board::keep_joined`]).
-pub fn route(path: &Path, out: &Path, packages: Option<&Path>) -> Result<Value, String> {
-    let (original, text) = board::Board::load(path).map_err(|e| e.to_string())?;
+///
+/// `filled_vias` says whether the board is made with its vias filled and capped, so that one may
+/// stand in a pad a part is soldered to; with none it is as the board's make-up has it
+/// ([`board::Board::filled_vias`]).
+pub fn route(path: &Path, out: &Path, packages: Option<&Path>, filled_vias: Option<bool>) -> Result<Value, String> {
+    let (mut original, text) = board::Board::load(path).map_err(|e| e.to_string())?;
+    if let Some(filled) = filled_vias {
+        original.filled_vias = filled;
+    }
     let mut notes: Vec<String> = Vec::new();
     // Copper text taken as boxes covers pads its letters do not: say so.
     if let Some(note) = original.text_note.as_deref().filter(|n| n.contains("as boxes")) {
@@ -97,6 +104,19 @@ pub fn route(path: &Path, out: &Path, packages: Option<&Path>) -> Result<Value, 
         tell_pours(&board, &routed, &pours, &lines);
     }
 
+    // The new vias that stand in a pad a part is soldered to: the board must be ordered with
+    // its vias filled and capped, and whoever orders it is told so.
+    let in_pads = new
+        .iter()
+        .filter_map(|&id| routed.item(id))
+        .filter(|i| matches!(i.kind, board::Kind::Via))
+        .filter_map(|i| i.hole)
+        .filter(|&(at, _)| routed.soldered.iter().any(|&pad| routed.item(pad).is_some_and(|p| p.shape.contains(at))))
+        .count();
+    if in_pads > 0 {
+        notes.push(format!("{in_pads} of the vias stand in a pad a part is soldered to: the board must be ordered with its vias filled and capped"));
+    }
+
     std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
     let write = |name: &str, bytes: &str| std::fs::write(out.join(name), bytes).map_err(|e| format!("{}: {e}", out.join(name).display()));
     if let Some(svg) = watched {
@@ -144,6 +164,8 @@ pub fn route(path: &Path, out: &Path, packages: Option<&Path>) -> Result<Value, 
         }),
         "left": plan.left.len(),
         "vias": plan.vias.len(),
+        "filled_vias": board.filled_vias,
+        "vias_in_soldered_pads": in_pads,
         "ties": drawing.ties.len(),
         "stitches": drawing.stitches.len(),
         "faults": rules,
