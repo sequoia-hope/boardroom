@@ -182,6 +182,12 @@ pub fn traces(board: &Board, sheet: &Sheet, number: &dyn Fn(usize) -> Option<usi
 /// One layer triangulated with `vias`, and the strands of `traces` read off against it: none
 /// if a strand cannot be read, or if what was read is not strands that never cross.
 pub fn sheet(board: &Board, layer: usize, vias: &[(P, u32)], spots: &Arc<Spots>, traces: &[Trace]) -> Option<Sheet> {
+    sheet_or_full(board, layer, vias, spots, traces).ok()
+}
+
+/// [`sheet`], and where it cannot be made only because some gaps hold more than their room,
+/// the connections of the strands in those gaps; nothing where it cannot for another reason.
+pub fn sheet_or_full(board: &Board, layer: usize, vias: &[(P, u32)], spots: &Arc<Spots>, traces: &[Trace]) -> Result<Sheet, Vec<usize>> {
     let space = Space::new(board, layer, vias, spots);
     let sides: Sides = space
         .edges
@@ -195,7 +201,7 @@ pub fn sheet(board: &Board, layer: usize, vias: &[(P, u32)], spots: &Arc<Spots>,
     let mut sheet = Sheet::new(space);
     let mut places: Vec<Vec<(f64, usize, usize)>> = vec![Vec::new(); sheet.space.edges.len()];
     for trace in traces {
-        let read = read(&sheet.space, &sides, trace)?;
+        let read = read(&sheet.space, &sides, trace).ok_or(Vec::new())?;
         let id = sheet.strands.len();
         for (k, &(e, u)) in read.iter().enumerate() {
             places[e].push((u, id, k));
@@ -207,10 +213,16 @@ pub fn sheet(board: &Board, layer: usize, vias: &[(P, u32)], spots: &Arc<Spots>,
         sheet.on[e] = there.into_iter().map(|(_, s, k)| (s, k)).collect();
     }
     if !sheet.sound(board) {
-        return None;
+        if (0..sheet.space.tris.len()).any(|t| sheet.space.free(t) && !sheet.paired(t)) {
+            return Err(Vec::new());
+        }
+        let mut full: Vec<usize> = sheet.full(board).into_iter().flat_map(|e| sheet.on[e].iter().map(|&(s, _)| sheet.strands[s].connection)).collect();
+        full.sort_unstable();
+        full.dedup();
+        return Err(full);
     }
     // Where its strands lie, worked out here and now: the next search asks, and here the
     // layers are side by side.
     sheet.places(board);
-    Some(sheet)
+    Ok(sheet)
 }

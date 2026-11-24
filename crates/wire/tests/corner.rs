@@ -178,3 +178,53 @@ fn a_pin_behind_a_gap_that_others_fill_has_them_moved() {
     plan::add(&board, &mut plan, lines(&board));
     assert!(plan.left.is_empty(), "left: {:?}", left(&board, &plan));
 }
+
+/// On a board made with its vias filled, a pin with a connection that has no way is given a
+/// via in itself, and the stubs in that via's way (its own and its neighbours' ways out,
+/// settled first) are lifted for good. A connection laid from such a stub's via is then laid
+/// again from its pin: before, it stayed as it was, ending in a via that reached nothing,
+/// and the drawing trimmed it off as a dead end (the six-layer copy of the owner's
+/// parallelogram board, 2026-11-24: a driver pin unconnected in the result with nothing
+/// left and nothing undrawn to say so).
+#[test]
+fn a_connection_from_a_stub_lifted_for_a_via_in_a_pin_is_laid_again() {
+    let mut board = corner(&FLASH);
+    board.filled_vias = true;
+    let wants = lines(&board);
+    let (spots, stubs) = plan::escape(&board, &wants, plan::Fan::Tight);
+    let mut first = plan::start_from(&board, spots);
+    plan::add(&board, &mut first, stubs);
+    plan::add(&board, &mut first, wants);
+    // Each strand end in a via, with its connection and whether that is a stub.
+    let ends = |plan: &plan::Plan| -> Vec<(usize, usize, bool)> {
+        plan.sheets
+            .iter()
+            .flat_map(|s| s.laid().map(move |k| &s.strands[k]))
+            .flat_map(|st| [st.from, st.to].into_iter().filter_map(move |e| if let plan::End::Site(k) = e { Some((k, st.connection, plan.wants[st.connection].stub)) } else { None }))
+            .collect()
+    };
+    // The connections laid from a stub's via.
+    let before = ends(&first);
+    let mut from_stubs: Vec<usize> = before.iter().filter(|e| !e.2 && before.iter().any(|s| s.2 && s.0 == e.0)).map(|e| e.1).collect();
+    from_stubs.dedup();
+    assert!(!from_stubs.is_empty());
+    let mut lifted = 0;
+    for &c in &from_stubs {
+        // A second connection of the same pin with no way, as when another LED of its net is
+        // shut in: its pin is given a via.
+        let mut plan = first.clone();
+        let twin = plan.wants[c].clone();
+        plan.left.push(plan::Left { connection: plan.wants.len(), net: twin.net, from: twin.from, to: twin.to, why: String::new() });
+        plan.wants.push(twin);
+        if !plan::hole(&board, &mut plan) {
+            continue;
+        }
+        let after = ends(&plan);
+        lifted += before.iter().filter(|e| e.2).count() - after.iter().filter(|e| e.2).count();
+        // No connection ends in a via nothing else comes to.
+        let holes = plan.sheets[0].space.spots.holes.len();
+        let alone: Vec<_> = after.iter().filter(|e| !e.2 && e.0 >= holes && after.iter().filter(|o| o.0 == e.0).count() < 2).collect();
+        assert!(alone.is_empty(), "{alone:?}");
+    }
+    assert!(lifted > 0);
+}

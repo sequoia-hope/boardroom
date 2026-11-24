@@ -72,6 +72,10 @@ pub struct Plan {
     /// copper that stays: all of them, itself among them. A connection to one may end on any.
     #[serde(skip)]
     pub joined: Arc<Joined>,
+    /// The pads a hole was asked for that have none: no place in the pad for one, or the plan
+    /// could not take it ([`hole`]). They are not asked about again.
+    #[serde(skip)]
+    pub refused: Vec<ItemId>,
 }
 
 /// The pads each pad is joined to before anything is laid.
@@ -1069,7 +1073,7 @@ pub fn start_from(board: &Board, spots: Spots) -> Plan {
     let planes: Vec<usize> = if poured.len() <= 2 || poured.iter().all(|s| *s >= board::PLANE_SHARE) { Vec::new() } else { (0..poured.len()).filter(|&l| poured[l] >= board::PLANE_SHARE).collect() };
     let stated = |l: usize| spots.bars.iter().any(|b| !b.nets[l].is_empty());
     let closed = planes.iter().copied().filter(|&l| l != 0 && l + 1 != board.layers.len() && !stated(l)).collect();
-    Plan { sheets, planes, closed, vias: Vec::new(), left: Vec::new(), wants: Vec::new(), joined: Arc::new(joined(board)) }
+    Plan { sheets, planes, closed, vias: Vec::new(), left: Vec::new(), wants: Vec::new(), joined: Arc::new(joined(board)), refused: Vec::new() }
 }
 
 /// The pads of the connections the plan found no way for that could hold a hole and have not
@@ -1077,7 +1081,7 @@ pub fn start_from(board: &Board, spots: Spots) -> Plan {
 pub fn wanting_holes(board: &Board, plan: &Plan) -> Vec<ItemId> {
     let Some(first) = plan.sheets.first() else { return Vec::new() };
     let spots = &first.space.spots;
-    let mut pads: Vec<ItemId> = plan.left.iter().flat_map(|l| [l.from, l.to]).filter(|&pad| holds_a_hole(board, pad) && !spots.wanted.contains(&pad) && !spots.holes.iter().any(|h| h.0 == pad)).collect();
+    let mut pads: Vec<ItemId> = plan.left.iter().flat_map(|l| [l.from, l.to]).filter(|&pad| holds_a_hole(board, pad) && !spots.wanted.contains(&pad) && !plan.refused.contains(&pad) && !spots.holes.iter().any(|h| h.0 == pad)).collect();
     pads.sort();
     pads.dedup();
     pads
@@ -1086,17 +1090,47 @@ pub fn wanting_holes(board: &Board, plan: &Plan) -> Vec<ItemId> {
 /// Gives a hole to each pad that could hold one of the connections the plan found no way for,
 /// and lays those connections again: a pad shut in by its neighbours, or by their strands once
 /// those have taken the way round, leaves by its own hole as a designer has it do. A strand
-/// that lies where a hole goes on another layer is lifted and laid again with them. False if
-/// no pad was given one.
+/// that lies where a hole goes on another layer is lifted and laid again with them, and so is
+/// one the pad leaves too little room once it is the wider for its via. Where the plan cannot
+/// take all the holes together it takes them one by one, and a pad whose hole it cannot take
+/// at all is not asked about again ([`Plan::refused`]). False if no pad was given one.
 pub fn hole(board: &Board, plan: &mut Plan) -> bool {
     let pads = wanting_holes(board, plan);
     let Some(first) = plan.sheets.first() else { return false };
-    let spots = first.space.spots.clone();
     let standing = first.space.vias();
     let found = holes(board, &pads, &standing);
     if found.is_empty() {
         return false;
     }
+    if holed(board, plan, &pads, &found) {
+        return true;
+    }
+    let mut any = false;
+    for h in &found {
+        if holed(board, plan, &[h.0], std::slice::from_ref(h)) {
+            any = true;
+        } else {
+            plan.refused.push(h.0);
+        }
+    }
+    // The pads no hole was found for are not looked at again either.
+    let Some(first) = plan.sheets.first() else { return any };
+    let spots = &first.space.spots;
+    plan.refused.extend(pads.iter().copied().filter(|p| !spots.wanted.contains(p) && !found.iter().any(|h| h.0 == *p)));
+    any
+}
+
+/// How many times the strands a hole's pad leaves too little room are lifted and the holes
+/// tried again ([`holed`]).
+const HOLE_LIFTS: usize = 4;
+
+/// Puts the holes `found` into the plan, for `pads` (those asked about, to be marked as tried),
+/// and lays again what was in their way and the connections that have one now. False, with
+/// the plan as it was, if the strands that stay cannot be carried onto the layers with the
+/// holes in them.
+fn holed(board: &Board, plan: &mut Plan, pads: &[ItemId], found: &[(ItemId, space::P, u32)]) -> bool {
+    let Some(first) = plan.sheets.first() else { return false };
+    let spots = first.space.spots.clone();
     // The strands in a hole's way, on any layer: nearer its middle than two vias may stand.
     let mut which: Vec<usize> = Vec::new();
     for sheet in &plan.sheets {
@@ -1107,25 +1141,52 @@ pub fn hole(board: &Board, plan: &mut Plan) -> bool {
             }
         }
     }
-    which.sort_unstable();
-    which.dedup();
-    let mut sheets = plan.sheets.clone();
-    for &c in &which {
-        let Some(lifted) = lift(board, &sheets, c) else { return false };
-        sheets = lifted;
-    }
-    // The holes are the first of the vias: those there already, the new ones, then the rest.
-    let Some(first) = sheets.first() else { return false };
+    // A stub in the way goes for good, as one that cannot be drawn does ([`relay`]): what
+    // started from its via is laid again from the pad, which may have a hole now.
+    let from_stubs = |which: &mut Vec<usize>| {
+        for s in which.clone() {
+            if plan.wants[s].stub {
+                let sites = sites_of(&plan.sheets, s);
+                which.extend(plan.sheets.iter().flat_map(|sh| sh.laid().map(move |k| &sh.strands[k])).filter(|st| [st.from, st.to].iter().any(|e| matches!(e, End::Site(x) if sites.contains(x)))).map(|st| st.connection));
+            }
+        }
+    };
     let (old, new) = (spots.holes.len(), found.len());
-    let mut vias = first.space.vias();
-    vias.splice(old..old, found.iter().map(|h| (h.1, h.2)));
     let mut with = (*spots).clone();
-    with.holes.extend(found);
-    with.wanted.extend(pads);
+    with.holes.extend(found.iter().copied());
+    with.wanted.extend(pads.iter().copied());
     let with = Arc::new(with);
     let number = |k: usize| Some(if k < old { k } else { k + new });
-    let Some(holed) = side_by_side(sheets.iter().collect(), |sheet| carry::sheet(board, sheet.space.layer, &vias, &with, &carry::traces(board, sheet, &number)?)).into_iter().collect::<Option<Vec<Sheet>>>() else { return false };
-    plan.sheets = holed;
+    let mut taken = None;
+    for _ in 0..HOLE_LIFTS {
+        from_stubs(&mut which);
+        which.sort_unstable();
+        which.dedup();
+        let mut sheets = plan.sheets.clone();
+        for &c in &which {
+            let Some(lifted) = lift(board, &sheets, c) else { return false };
+            sheets = lifted;
+        }
+        // The holes are the first of the vias: those there already, the new ones, then the rest.
+        let Some(first) = sheets.first() else { return false };
+        let mut vias = first.space.vias();
+        vias.splice(old..old, found.iter().map(|h| (h.1, h.2)));
+        let made = side_by_side(sheets.iter().collect(), |sheet| carry::sheet_or_full(board, sheet.space.layer, &vias, &with, &carry::traces(board, sheet, &number).ok_or(Vec::new())?));
+        // A pad with a via wider than itself is wider on its own layer, and so is one whose
+        // via is near its edge, for the hole's sake: the strands in the gaps that are now
+        // too full are lifted too.
+        let full: Vec<usize> = made.iter().filter_map(|m| m.as_ref().err()).flatten().copied().collect();
+        if made.iter().all(|m| m.is_ok()) {
+            taken = Some(made.into_iter().filter_map(Result::ok).collect::<Vec<Sheet>>());
+            break;
+        }
+        if full.is_empty() || made.iter().any(|m| m.as_ref().is_err_and(|f| f.is_empty())) {
+            return false;
+        }
+        which.extend(full);
+    }
+    let Some(taken) = taken else { return false };
+    plan.sheets = taken;
     // Laid again: what was lifted, and of the connections with no way those with a hole now.
     // (Not every connection with no way: on a board with many, looking again for each costs
     // as much as the plan did.)

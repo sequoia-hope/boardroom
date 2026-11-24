@@ -153,6 +153,40 @@ fn a_pin_with_a_via_wider_than_itself_is_wider_in_the_map() {
     assert_eq!(of_pad(spots, 0), Some((0.0, 0.0)));
 }
 
+/// Two pins side by side, 0.5 mm apart, walled in but for the slot between them, which opens
+/// into a channel one track wide: one pin's track takes it and the other pin is left with no
+/// way. Its via, wider than the pin, leaves the first pin's track too little room in the slot
+/// (0.55 mm wanted of 0.5). That track is lifted for the via and then has no way itself, and
+/// its pin is given a via too. (Before, the plan could not take the first via with the track
+/// there and gave it up: on the owner's parallelogram board, 2026-11-24, eleven pads' vias
+/// were found after the first plan and none was put in.)
+#[test]
+fn a_via_that_squeezes_a_neighbours_track_has_it_lifted() {
+    let part = |reference: &str, x: f64, y: f64, w: f64, h: f64, n: usize, net: &str| {
+        format!("(footprint \"P\" (layer \"F.Cu\") (at {x} {y}) (property \"Reference\" \"{reference}\") (pad \"1\" smd rect (at 0 0) (size {w} {h}) (layers \"F.Cu\" \"F.Paste\" \"F.Mask\") (net {n} \"{net}\")))")
+    };
+    let parts = vec![
+        part("PA", 10.5, 10.0, 0.5, 2.0, 1, "A"),
+        part("PB", 9.5, 10.0, 0.5, 2.0, 2, "B"),
+        // Walls round the pins, too near for a track between: 0.36 mm to the left and to the
+        // right (a via's ring reaches 0.15 past a pin's side), 0.3 below and above each pin,
+        // the two above 0.7 apart over the slot.
+        part("WL", 8.445, 9.85, 0.89, 2.3, 0, ""),
+        part("WR", 11.555, 9.85, 0.89, 2.3, 0, ""),
+        part("WD", 10.0, 11.75, 4.6, 0.9, 0, ""),
+        part("WA", 11.175, 8.25, 1.65, 0.9, 0, ""),
+        part("WB", 8.825, 8.25, 1.65, 0.9, 0, ""),
+        pad("QA", 16.0, 3.0, 1, "A"),
+        pad("QB", 4.0, 3.0, 2, "B"),
+    ];
+    let mut board = board(20.0, &parts);
+    board.filled_vias = true;
+    let (plan, drawing) = wire::route(&board);
+    assert_eq!(wire::open(&board, &plan, &drawing), 0, "{:?} {:?}", plan.left, drawing.undrawn);
+    assert_eq!(wire::amiss(&board, &plan, &drawing), (0, 0));
+    assert!(plan.vias.iter().any(|v| within(&board, "PA", v.at)) || plan.vias.iter().any(|v| within(&board, "PB", v.at)), "{:?}", plan.vias);
+}
+
 /// Where no pad is shut in, no hole is made: the same pads with room between them.
 #[test]
 fn a_pad_with_a_way_out_is_given_no_hole() {

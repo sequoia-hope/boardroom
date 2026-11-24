@@ -458,7 +458,12 @@ impl Sheet {
     /// one's sides run between the other's corners.
     pub fn sound(&self, board: &Board) -> bool {
         let chords = (0..self.space.tris.len()).all(|t| !self.space.free(t) || self.paired(t));
-        chords && (0..self.space.edges.len()).all(|e| self.on[e].is_empty() || !self.space.gap(e) || !self.space.passed(e) || self.fits(board, e, None))
+        chords && self.full(board).is_empty()
+    }
+
+    /// The gaps that hold more than their room.
+    pub fn full(&self, board: &Board) -> Vec<usize> {
+        (0..self.space.edges.len()).filter(|&e| !(self.on[e].is_empty() || !self.space.gap(e) || !self.space.passed(e) || self.fits(board, e, None))).collect()
     }
 
     /// The point of `edge` a share `u` of the way from its first corner to its second.
