@@ -3,7 +3,7 @@
 KiCad judging each routed board: the yardstick for a change to `plan` or `wire`.
 
     tier.py SET [--bin TAG=PATH ...] [--run NAME] [--cap SECONDS] [--only id,...|@FILE] [--against RUN]
-                [--no-kicad] [--again] [--rows]
+                [--route-args WORDS] [--no-kicad] [--again] [--rows]
 
 SET is `clean`, the test set (owner, 2026-11-22): every board of the corpus whose designer's own
 finished board passes KiCad's DRC as it stands, with nothing unconnected and no violation KiCad
@@ -108,12 +108,12 @@ def clean(board):
     return d.get("unconnected") == 0 and not d.get("new_errors")
 
 
-def route(binary, board, out, cap, env, judge):
+def route(binary, board, out, cap, env, judge, more=()):
     """One board routed by one build, and judged: the row kept in results.json."""
     out.mkdir(parents=True, exist_ok=True)
     for old in ("report.json", "routed.kicad_pcb"):
         (out / old).unlink(missing_ok=True)
-    cmd = ["systemd-run", "--user", "--scope", "-q", "-p", f"MemoryMax={MEMORY}", "-p", "MemorySwapMax=0", "timeout", str(cap), str(binary), "route", str(board), "--out", str(out)]
+    cmd = ["systemd-run", "--user", "--scope", "-q", "-p", f"MemoryMax={MEMORY}", "-p", "MemorySwapMax=0", "timeout", str(cap), str(binary), "route", str(board), "--out", str(out), *more]
     r = subprocess.run(cmd, capture_output=True, text=True, env=env)
     (out / "route.log").write_text(r.stderr)
     if r.returncode == 124:
@@ -215,6 +215,7 @@ def main():
     ap.add_argument("--run", help="the run's name under LAB/tier/ (default: the set and today's date)")
     ap.add_argument("--cap", type=int, default=400, help="seconds a board may take")
     ap.add_argument("--only", help="these boards of the set only: ids with commas between, or @FILE with one id a line")
+    ap.add_argument("--route-args", default="", metavar="WORDS", help="more words for `boardroom route`, the same for every board and build of the run (\"--filled-vias yes\" for a board ordered so)")
     ap.add_argument("--against", metavar="RUN", help="a pcbench run of the same designers' boards to set beside each build")
     ap.add_argument("--no-kicad", action="store_true", help="our count only")
     ap.add_argument("--again", action="store_true", help="run boards the run has already")
@@ -248,13 +249,15 @@ def main():
     results = json.loads(store.read_text()) if store.exists() else {}
     if results.get("first", first) != first:
         sys.exit(f"tier: {name} was run {'with' if results['first'] else 'without'} WIRE_FIRST; give this run another --run name")
-    results.update(set=a.set, first=first)
+    if results.get("route_args", a.route_args) != a.route_args:
+        sys.exit(f"tier: {name} was run with --route-args {results['route_args']!r}; give this run another --run name")
+    results.update(set=a.set, first=first, route_args=a.route_args)
     rows = results.setdefault("rows", {})
     jobs = [(tag, bid, board) for bid, board in todo for tag in builds if a.again or bid not in rows.get(tag, {})]
 
     def one(job):
         tag, bid, board = job
-        return tag, bid, route(builds[tag], board, out / tag / bid, a.cap, env, not (a.no_kicad or first))
+        return tag, bid, route(builds[tag], board, out / tag / bid, a.cap, env, not (a.no_kicad or first), a.route_args.split())
 
     workers = max(1, int(os.environ.get("RESERVED_CORES", "3")) // 3)
     with concurrent.futures.ThreadPoolExecutor(workers) as pool:
