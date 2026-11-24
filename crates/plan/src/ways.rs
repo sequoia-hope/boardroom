@@ -80,6 +80,9 @@ struct Seen {
     push: Option<(usize, usize, usize)>,
     /// The end the way left from, on its first crossing, or came to, on its last.
     end: Option<End>,
+    /// The connections whose strands fill the gap just crossed, or the corner just turned,
+    /// so that this one fits there only with them out of it.
+    shoved: Vec<usize>,
 }
 
 #[derive(PartialEq)]
@@ -260,7 +263,7 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
                         let c = holed(src) + terms.dear[l] * dist(start, at);
                         let key = (l, e, slot, outer);
                         if best.get(&key).is_none_or(|b| c < b.cost) {
-                            best.insert(key, Seen { cost: c, prev: None, at, bend_at: start, bend_cost: 0.0, bend: None, starts: true, over: None, about: None, push: None, end: Some(src) });
+                            best.insert(key, Seen { cost: c, prev: None, at, bend_at: start, bend_cost: 0.0, bend: None, starts: true, over: None, about: None, push: None, end: Some(src), shoved: Vec::new() });
                             heap.push(Open { order: c + cheapest * left(at), cost: c, key });
                         }
                     }
@@ -279,7 +282,7 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
         if terms.into.contains(&c) {
             let (key, cost) = ((l, VIA, c, GOAL), cost + terms.drop);
             if best.get(&key).is_none_or(|b| cost < b.cost) {
-                best.insert(key, Seen { cost, prev: Some(prev), at: p, bend_at: p, bend_cost: cost, bend: None, starts: false, over: None, about: None, push, end: None });
+                best.insert(key, Seen { cost, prev: Some(prev), at: p, bend_at: p, bend_cost: cost, bend: None, starts: false, over: None, about: None, push, end: None, shoved: Vec::new() });
                 heap.push(Open { order: cost, cost, key });
             }
         }
@@ -302,7 +305,7 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
                 }
             };
             if take {
-                best.insert(key, Seen { cost, prev: Some(prev), at: p, bend_at: p, bend_cost: cost, bend: None, starts: false, over: None, about: None, push, end: None });
+                best.insert(key, Seen { cost, prev: Some(prev), at: p, bend_at: p, bend_cost: cost, bend: None, starts: false, over: None, about: None, push, end: None, shoved: Vec::new() });
                 heap.push(Open { order: cost + cheapest * left(p), cost, key });
             }
         }
@@ -349,7 +352,7 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
                 let c = cost + terms.dear[l] * dist(p, there);
                 let (to_key, c) = match end { Some(g) => ((l, e, s, GOAL), c + terms.dear[l] * dist(there, g.1) + holed(g.0)), None => ((l, e, s, next), c) };
                 if best.get(&to_key).is_none_or(|b| c < b.cost && !through(&best, key, to_key)) {
-                    found.push((to_key, Seen { cost: c, prev: Some(key), at: there, bend_at: p, bend_cost: cost, bend: None, starts: true, over: None, about: None, push: None, end: end.map(|g| g.0) }));
+                    found.push((to_key, Seen { cost: c, prev: Some(key), at: there, bend_at: p, bend_cost: cost, bend: None, starts: true, over: None, about: None, push: None, end: end.map(|g| g.0), shoved: Vec::new() }));
                 }
             }
             for &c in &sheet.space.tri_spots[t] {
@@ -383,7 +386,7 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
                     let other = &sheet.strands[other];
                     let (to_key, c) = ((l, edge, slot2, into), cost + cross);
                     if other.net != net && !terms.keep.contains(&other.connection) && best.get(&to_key).is_none_or(|b| c < b.cost && !through(&best, key, to_key)) {
-                        found.push((to_key, Seen { cost: c, prev: Some(key), at: here, bend_at: here, bend_cost: c, bend: Some(key), starts: false, over: Some(other.connection), about: best[&key].about, push: None, end: None }));
+                        found.push((to_key, Seen { cost: c, prev: Some(key), at: here, bend_at: here, bend_cost: c, bend: Some(key), starts: false, over: Some(other.connection), about: best[&key].about, push: None, end: None, shoved: Vec::new() }));
                     }
                 }
             }
@@ -410,8 +413,14 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
                 if !ends && (!sheet.space.free(next) || sheet.space.barred(next, net) || barred(sheet, e)) {
                     continue;
                 }
+                // With others' strands in the way of it at a corner or in a gap that would
+                // hold it alone: across them all, where going across is let.
+                let mut shoved: Vec<usize> = Vec::new();
                 if !sheet.throat(board, into, corner, net, width) {
-                    continue;
+                    match terms.cross.and_then(|_| sheet.throat_alone(board, into, corner, net, width, terms.keep)) {
+                        Some(out) => shoved.extend(out),
+                        None => continue,
+                    }
                 }
                 // No way turns more than half-way round one corner (or one round thing): that
                 // is a way back to where it came from, and no wire can be drawn along it.
@@ -432,8 +441,13 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
                     continue;
                 }
                 if !ends && !sheet.fits(board, e, Some((s, net, width))) {
-                    continue;
+                    match terms.cross.and_then(|_| sheet.fits_alone(board, e, net, width, terms.keep)) {
+                        Some(out) => shoved.extend(out.into_iter().filter(|c| !shoved.contains(c)).collect::<Vec<_>>()),
+                        None => continue,
+                    }
                 }
+                // Each of them costs a crossing, once for as long as the way runs on beside it.
+                let dearer = terms.cross.unwrap_or(0.0) * shoved.iter().filter(|c| !best[&key].shoved.contains(c)).count() as f64;
                 // Straight from the last bend if that can be; else this crossing is a bend.
                 let straight = sheet.crossing(board, e, s, me, bend_at, goal);
                 let (there, c, bend, bend_at, bend_cost) = if seen_from_bend(straight) {
@@ -443,9 +457,10 @@ pub fn find(board: &Board, sheets: &[Sheet], terms: &Terms, net: u32, width: f64
                     (there, cost + TURN + terms.dear[l] * dist(here, there), Some(key), here, cost + TURN)
                 };
                 // The end's own side is the last crossing; then the way ends at its middle.
+                let (c, bend_cost) = (c + dearer, bend_cost + dearer);
                 let (to_key, c) = match end { Some(g) => ((l, e, s, GOAL), c + terms.dear[l] * dist(there, g.1) + holed(g.0)), None => ((l, e, s, next), c) };
                 if best.get(&to_key).is_none_or(|b| c < b.cost && !through(&best, key, to_key)) {
-                    found.push((to_key, Seen { cost: c, prev: Some(key), at: there, bend_at, bend_cost, bend, starts: false, over: None, about: Some(about), push: None, end: end.map(|g| g.0) }));
+                    found.push((to_key, Seen { cost: c, prev: Some(key), at: there, bend_at, bend_cost, bend, starts: false, over: None, about: Some(about), push: None, end: end.map(|g| g.0), shoved }));
                 }
             }
         }
@@ -518,6 +533,11 @@ fn legs(best: &Map<Key, Seen>, last: Key) -> Option<(Vec<Leg>, Vec<usize>, Vec<(
                 over.push(c);
             }
         } else {
+            for &c in &best[&k].shoved {
+                if !over.contains(&c) {
+                    over.push(c);
+                }
+            }
             leg.steps.push((k.1, k.2));
         }
         at = prev;

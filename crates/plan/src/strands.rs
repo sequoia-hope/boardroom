@@ -373,6 +373,42 @@ impl Sheet {
         need <= room + EPS
     }
 
+    /// Where one more strand of `net` and `width` does not fit round corner `c` of triangle
+    /// `t` ([`Sheet::throat`]) but would with no other there: the connections whose strands
+    /// cut the corner off. None where it would not fit alone either, or one of them is of
+    /// `keep` and stays.
+    pub fn throat_alone(&self, board: &Board, t: usize, c: usize, net: u32, width: f64, keep: &[usize]) -> Option<Vec<usize>> {
+        let tri = &self.space.tris[t];
+        let wall = &self.space.edges[tri.e[c]];
+        let v = &self.space.verts;
+        let room = point_segment(v[tri.v[c]], v[wall.v[0]], v[wall.v[1]]);
+        if self.space.keep(board, tri.v[c], net) + self.space.keep(board, wall.v[0], net).max(self.space.keep(board, wall.v[1], net)) + width > room + EPS {
+            return None;
+        }
+        let side = tri.e[(c + 1) % 3];
+        let n = self.corners(t)[c];
+        let from_first = self.space.edges[side].v[0] == tri.v[c];
+        // (A strand of its own net lies on it, and is not in its way.)
+        let mut out: Vec<usize> = (0..n).map(|q| &self.strands[self.on[side][if from_first { q } else { self.on[side].len() - 1 - q }].0]).filter(|s| s.net != net || net == 0).map(|s| s.connection).collect();
+        out.sort_unstable();
+        out.dedup();
+        (!out.is_empty() && !out.iter().any(|c| keep.contains(c))).then_some(out)
+    }
+
+    /// Where one more strand of `net` and `width` does not fit in `edge` ([`Sheet::fits`]) but
+    /// would with no other there: the connections whose strands are in it. None where it would
+    /// not fit alone either, or one of them is of `keep` and stays.
+    pub fn fits_alone(&self, board: &Board, edge: usize, net: u32, width: f64, keep: &[usize]) -> Option<Vec<usize>> {
+        let e = &self.space.edges[edge];
+        if self.space.keep(board, e.v[0], net) + self.space.keep(board, e.v[1], net) + width > self.space.width_for(edge, net) + EPS {
+            return None;
+        }
+        let mut out: Vec<usize> = self.on[edge].iter().map(|&(s, _)| &self.strands[s]).filter(|s| s.net != net || net == 0).map(|s| s.connection).collect();
+        out.sort_unstable();
+        out.dedup();
+        (!out.is_empty() && !out.iter().any(|c| keep.contains(c))).then_some(out)
+    }
+
     /// Lays a strand along `steps` (each an edge and the slot taken in it, counted from the
     /// edge's first corner among the strands there before), found on this sheet as it is now.
     pub fn lay(&mut self, net: u32, connection: usize, width: f64, from: End, to: End, steps: &[(usize, usize)]) -> usize {
