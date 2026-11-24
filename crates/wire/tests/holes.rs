@@ -225,3 +225,36 @@ fn a_pad_left_with_no_way_once_its_neighbours_are_laid_is_given_a_hole() {
     assert_eq!(plan.vias.iter().filter(|v| within(&board, "P0", v.at) || within(&board, "P1", v.at)).count(), 1, "{:?}", plan.vias);
     assert!(!plan.vias.iter().any(|v| ["Q0", "Q1", "Q2"].iter().any(|q| within(&board, q, v.at))), "{:?}", plan.vias);
 }
+
+/// Ground poured over the back, and a bare ground pad on the front shut in by its neighbours.
+/// A poured net is left to its pours at first, and what they leave open is planned after
+/// them: the pad's connection has no way then, and the pad is given its hole then, down into
+/// the pour. (Before, pads were given holes after the first plan only, and this one stayed
+/// open.)
+#[test]
+fn a_pad_the_pours_leave_open_with_no_way_is_given_a_hole() {
+    let mut parts = Vec::new();
+    for (i, x) in [7.7, 10.0, 12.3].into_iter().enumerate() {
+        for (j, y) in [7.7, 10.0, 12.3].into_iter().enumerate() {
+            let middle = (i, j) == (1, 1);
+            parts.push(pad(&format!("P{i}{j}"), x, y, if middle { 1 } else { 0 }, if middle { "A" } else { "" }));
+        }
+    }
+    let text = format!(
+        "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
+         (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
+         (net 0 \"\") (net 1 \"A\") (net 2 \"B\") (net 3 \"C\")
+         (gr_rect (start 0 0) (end 20 20) (layer \"Edge.Cuts\") (width 0.1))
+         {}
+         (footprint \"P\" (layer \"F.Cu\") (at 3 16) (property \"Reference\" \"J\") (pad \"1\" thru_hole circle (at 0 0) (size 1.6 1.6) (drill 0.8) (layers \"*.Cu\" \"*.Mask\") (net 1 \"A\")))
+         (zone (net 1) (net_name \"A\") (layer \"B.Cu\") (hatch edge 0.5) (connect_pads yes (clearance 0.2)) (min_thickness 0.25)
+           (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5))
+           (polygon (pts (xy 0.5 0.5) (xy 19.5 0.5) (xy 19.5 19.5) (xy 0.5 19.5)))))",
+        parts.concat()
+    );
+    let (pcb, copper) = kicad::parse_board(&text).unwrap();
+    let board = Board::new(&pcb, &copper, kicad::Rules::parse(RULES).unwrap());
+    let (plan, drawing) = wire::route(&board);
+    assert_eq!(wire::open(&board, &plan, &drawing), 0, "{:?} {:?}", plan.left, drawing.undrawn);
+    assert_eq!(plan.vias.iter().filter(|v| within(&board, "P11", v.at)).count(), 1, "{:?}", plan.vias);
+}

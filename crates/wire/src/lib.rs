@@ -996,6 +996,22 @@ fn outcome(plan: &Plan, drawing: &Drawing, stuck: &[(usize, plan::space::GapKey)
 /// it does hold depends on
 /// what stands round it, and drawing is what finds that out. The plan is left as it was
 /// when fewest of its connections were open.
+/// A connection with no way whose pad could hold a hole: the pad is given one, and it and
+/// whatever lay in the hole's way are laid again. After the first plan, and after each time
+/// connections are laid again or what the pours leave open is planned: a poured net's
+/// connections are planned only then, and laying again leaves others with no way that had
+/// one (the six-layer copy of the owner's parallelogram board, 2026-11-24: 7 and 5
+/// connections open with holes given after the first plan only, none in four runs with
+/// these; without the one after laying again, one open in one run of three).
+fn holed(board: &Board, plan: &mut Plan, said: &dyn Fn(&str, &Plan, Option<&Drawing>), stop: &AtomicBool) {
+    for _ in 0..HOLE_ROUNDS {
+        if stop.load(Ordering::Relaxed) || !plan::hole(board, plan) {
+            break;
+        }
+        said("holes put in pads", plan, None);
+    }
+}
+
 fn settle(board: &Board, plan: &mut Plan, memo: &mut chain::Memo, said: &dyn Fn(&str, &Plan, Option<&Drawing>), stop: &AtomicBool) -> Drawing {
     let mut best: Option<(usize, Plan, Drawing)> = None;
     // A round that only made wires narrower is not counted: a few of those.
@@ -1024,6 +1040,8 @@ fn settle(board: &Board, plan: &mut Plan, memo: &mut chain::Memo, said: &dyn Fn(
             rounds -= 1;
         }
         said("laid again", plan, None);
+        // Laying again can leave a connection no way that had one.
+        holed(board, plan, said, stop);
     }
     let (_, kept, drawing) = best.unwrap_or_else(|| (0, plan.clone(), Drawing::default()));
     *plan = kept;
@@ -1466,14 +1484,7 @@ fn route_with(board: &Board, fan: Option<plan::Fan>, stop: &AtomicBool, told: &d
     }
     plan::add(board, &mut plan, wants);
     said("planned", &plan, None);
-    // A connection with no way whose pad could hold a hole: the pad is given one, and it and
-    // whatever lay in the hole's way are laid again.
-    for _ in 0..HOLE_ROUNDS {
-        if stopped() || !plan::hole(board, &mut plan) {
-            break;
-        }
-        said("holes put in pads", &plan, None);
-    }
+    holed(board, &mut plan, &said, stop);
     // WIRE_FIRST: the first plan and its drawing, with nothing laid again and no pours: what
     // the plan lays that cannot be drawn.
     if std::env::var("WIRE_FIRST").is_ok() {
@@ -1585,6 +1596,7 @@ fn pour(board: &Board, plan: &mut Plan, mut drawing: Drawing, poured: &[u32], me
         plan::renew(board, plan, renewed);
         plan::add(board, plan, rest);
         said("planned", plan, None);
+        holed(board, plan, said, stop);
         drawing = settle(board, plan, memo, said, stop);
         if stalled {
             break;
