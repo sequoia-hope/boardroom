@@ -794,6 +794,19 @@ pub fn plan(board: &Board) -> Plan {
 /// Airlines as connections to plan, shortest first.
 pub fn wants(airlines: &[board::Airline]) -> Vec<Want> {
     let mut wants: Vec<Want> = airlines.iter().map(Want::of).collect();
+    // PLAN_JITTER=SEED (for measuring only): the order shaken a little, each length taken as
+    // up to 3% more or less than it is, to see how far a result turns on the order alone.
+    if let Some(seed) = std::env::var("PLAN_JITTER").ok().and_then(|s| s.parse::<u64>().ok()) {
+        let shake = |w: &Want| {
+            let mut h = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ ((w.apart * 1e6) as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9) ^ (w.net as u64).wrapping_mul(0x94D0_49BB_1331_11EB);
+            h ^= h >> 31;
+            h = h.wrapping_mul(0xD6E8_FEB8_6659_FD93);
+            h ^= h >> 29;
+            w.apart * (1.0 + 0.03 * ((h % 2001) as f64 / 1000.0 - 1.0))
+        };
+        wants.sort_by(|a, b| shake(a).total_cmp(&shake(b)));
+        return wants;
+    }
     wants.sort_by(|a, b| a.apart.total_cmp(&b.apart));
     wants
 }

@@ -11,8 +11,12 @@
 //! Environment, for looking into a run: `WIRE_WATCH=LAYER:STRAND` also writes `watch.svg`, that
 //! strand's course as the drawing saw it; `WIRE_POURS` tells each connection still open, with
 //! what its ends are, and what each pad of a poured net is joined to; `WIRE_TIMES` (in `wire`)
-//! tells each round's stages; `WIRE_FIRST` (in `wire`) stops at the first plan and its drawing,
-//! with nothing laid again and no pours. Copper text is shaped by `kicad-text` where
+//! tells each round's stages, and with `WIRE_LEFT` names at each stage the connections the plan
+//! has no way for (with how many gaps each has been barred from) and the wires not drawn (with
+//! why); `WIRE_FIRST` (in `wire`) stops at the first plan and its drawing, with nothing laid
+//! again and no pours; `PLAN_JITTER=SEED` (in `plan`, for measuring only) shakes the order the
+//! connections are planned in a little, so that a hard board can be routed several times over
+//! and a change judged against how far its result turns on the order alone. Copper text is shaped by `kicad-text` where
 //! `ULTRAROUTE_TEXT_HELPER` names it; without it text is boxes, which cover pads its letters do
 //! not, and the report says so.
 

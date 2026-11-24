@@ -1435,6 +1435,15 @@ fn route_with(board: &Board, fan: Option<plan::Fan>, stop: &AtomicBool, told: &d
     let said = |what: &str, plan: &Plan, drawing: Option<&Drawing>| {
         if times {
             eprintln!("{:7.2} s  {}{what}: {} strands, {} vias, {} left{}", clock.elapsed().as_secs_f64(), match fan { Some(plan::Fan::Spread) => "ways out first, ", Some(plan::Fan::Tight) => "ways out at the tips, ", None => "" }, plan.sheets.iter().map(|s| s.laid().count()).sum::<usize>(), plan.vias.len(), plan.left.len(), drawing.map_or(String::new(), |d| format!(", {} drawn, {} not", d.wires.len(), d.undrawn.len())));
+            if std::env::var("WIRE_LEFT").is_ok() {
+                let pad = |id: ItemId| match board.item(id).map(|it| &it.kind) {
+                    Some(board::Kind::Pad { footprint, number, .. }) => format!("{}-{number}", board.footprints[*footprint].reference),
+                    _ => "?".to_string(),
+                };
+                let left: Vec<String> = plan.left.iter().map(|l| format!("{} {} to {} (barred from {} gaps{})", board.net_name(l.net), pad(l.from), pad(l.to), plan.wants[l.connection].avoid.len(), plan.wants[l.connection].narrow.map_or(String::new(), |n| format!(", {n:.3} mm wide")))).collect();
+                let not: Vec<String> = drawing.map_or(Vec::new(), |d| d.undrawn.iter().map(|u| format!("{} [{}]", board.net_name(u.net), u.why)).collect());
+                eprintln!("           no way: {}; not drawn: {}", if left.is_empty() { "none".to_string() } else { left.join(", ") }, if not.is_empty() { "none".to_string() } else { not.join(", ") });
+            }
         }
     };
     // Told to stop: at the end of each thing it does, it does no more.
