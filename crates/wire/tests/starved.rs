@@ -407,3 +407,49 @@ fn a_pad_whose_one_spoke_ends_in_a_scrap_of_pour_is_drawn_a_track_into_the_scrap
     assert_eq!(from, [10.0, 10.0], "from the pad's middle");
     assert!(to[0] > 7.4 && to[0] < 9.0 && to[1] > 9.2 && to[1] < 10.8, "in the scrap: {to:?}");
 }
+
+/// Three pins of a chip in a row, 0.3 mm wide and 0.5 mm apart: a signal pin, a ground pin
+/// and another, with a pad close east of the ground pin. Ground is poured over the front and
+/// keeps 0.5 mm from other nets' tracks (the pins have a clearance of their own, 0.1 mm, and
+/// the pour comes that near them), so the ground pin has one spoke, west, where it needs two.
+/// The signal pin's other pad is south-west: its track leaves the pin west and turns south
+/// across where that spoke would be, as the designer of the test set's BMS board runs SDA
+/// past the battery chip's ground pin 3 (2026-11-23). With the one spoke kept, the track was
+/// refused from the first piece of it, on its own pad (0.25 mm from the spoke's room, of the
+/// 0.5 the pour keeps), and the connection was laid again and again and left open.
+#[test]
+fn a_track_is_drawn_past_a_pad_whose_pour_has_one_spoke_for_it_where_it_needs_two() {
+    let pin = |x: f64, y: f64, w: f64, n: usize, net: &str| format!("(footprint \"P\" (layer \"F.Cu\") (at {x} {y}) (pad \"1\" smd rect (at 0 0) (size {w} 0.3) (layers \"F.Cu\") (net {n} \"{net}\") (clearance 0.1)))");
+    let parts = [pin(10.0, 9.5, 1.6, 2, "S"), pin(10.0, 10.0, 1.6, 1, "GND"), pin(10.0, 10.5, 1.6, 3, "T"), pin(11.5, 10.0, 1.0, 3, "T"), pin(8.0, 11.5, 1.0, 2, "S")].concat();
+    let text = format!(
+        "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
+         (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
+         (net 0 \"\") (net 1 \"GND\") (net 2 \"S\") (net 3 \"T\")
+         (gr_rect (start 0 0) (end 20 20) (layer \"Edge.Cuts\") (width 0.1))
+         {parts}
+         (zone (net 1) (net_name \"GND\") (layer \"F.Cu\") (hatch edge 0.5) (connect_pads (clearance 0.5)) (min_thickness 0.25)
+           (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5))
+           (polygon (pts (xy 0.5 0.5) (xy 19.5 0.5) (xy 19.5 19.5) (xy 0.5 19.5)))))"
+    );
+    let rules = r#"{"board":{"design_settings":{"rules":{"min_clearance":0.2,"min_copper_edge_clearance":0.3,"min_track_width":0.2}}},
+        "net_settings":{"classes":[{"name":"Default","clearance":0.2,"track_width":0.2,"via_diameter":0.8,"via_drill":0.4}]}}"#;
+    let (pcb, copper) = kicad::parse_board(&text).unwrap();
+    let board = Board::new(&pcb, &copper, kicad::Rules::parse(rules).unwrap());
+    let spokes: Vec<u8> = board.items().filter_map(|(_, it)| match it.kind {
+        board::Kind::Spoke { need, .. } => Some(need),
+        _ => None,
+    }).collect();
+    assert_eq!(spokes, vec![2], "the ground pin has one spoke and needs two");
+    let wants: Vec<plan::Want> = plan::wants(&board::connectivity_without_pours(&board).airlines).into_iter().filter(|w| w.net == 2).collect();
+    let mut plan = plan::start(&board);
+    plan::add(&board, &mut plan, wants);
+    assert!(plan.left.is_empty(), "{:?}", plan.left);
+    let drawing = wire::draw(&board, &plan);
+    assert!(drawing.undrawn.is_empty(), "{:?}", drawing.undrawn.iter().map(|u| &u.why).collect::<Vec<_>>());
+    assert!(plan.vias.is_empty(), "on the front, with no via: {:?}", plan.vias);
+    assert!(drawing.wires.iter().all(|w| !w.as_planned), "{:?}", drawing.wires.iter().map(|w| &w.pts).collect::<Vec<_>>());
+    // The room for that spoke is no obstacle in the plan either: a strand has the whole of
+    // the gap beside the pin, not what the spoke's 0.5 mm would leave of it.
+    let kept = plan.sheets[0].space.obstacles.iter().filter(|o| o.item.and_then(|id| board.item(id)).is_some_and(|i| matches!(i.kind, board::Kind::Spoke { .. }))).count();
+    assert_eq!(kept, 0, "spokes that are obstacles in the plan");
+}

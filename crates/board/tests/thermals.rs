@@ -558,3 +558,22 @@ fn the_same_spoke_of_two_pads_in_one_place_is_a_bridge_only_as_kicad_has_it() {
     assert!(!tips(&b).iter().any(|t| t.1 < 9.0), "{:?}", tips(&b));
     assert!(tips(&b).iter().any(|t| t.1 > 11.0), "{:?}", tips(&b));
 }
+
+/// Net B's pads close above, below and east of the pad take its spokes those ways: the pour
+/// has one spoke for it, west, where it needs two. KiCad faults such a pad with its one spoke
+/// and passes over it with none (`testZoneLayer`, 9.0.8: no spoke at all is "not connected at
+/// all"), so the one is not worth keeping: a track of another net may cross it. On the test
+/// set's BMS board (2026-11-23) the battery chip's ground pin 3 is such a pad between two
+/// signal pins: its designer joins it by track and runs the next pin's track where the spoke
+/// would be, and with the spoke kept that pin's track could not be drawn.
+#[test]
+fn the_one_spoke_of_a_pad_that_needs_two_is_not_kept_from_other_nets() {
+    let near = |x: f64, y: f64| format!("(footprint \"P\" (layer \"F.Cu\") (at {x} {y}) (pad \"1\" smd rect (at 0 0) (size 1 0.6) (layers \"F.Cu\") (net 2 \"B\")))");
+    let mut b = board(RECT, "", &[near(10.0, 9.1), near(10.0, 10.9), near(11.3, 10.0)].concat(), "");
+    assert_eq!(tips(&b).len(), 1, "one spoke, west: {:?}", tips(&b));
+    assert!(tips(&b)[0].0 < 9.5, "{:?}", tips(&b));
+    assert_eq!(needs(&b), vec![2]);
+    let across_it = track(&mut b, 8.9);
+    let hits: Vec<Violation> = check_item(&b, across_it).into_iter().filter(|v| v.rule == Rule::Clearance).collect();
+    assert!(hits.is_empty(), "{hits:?}");
+}

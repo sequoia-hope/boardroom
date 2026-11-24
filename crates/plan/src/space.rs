@@ -844,6 +844,11 @@ impl Space {
             let mut of = spokes.remove(&pad).unwrap_or_default();
             let Some(&(_, first)) = of.first() else { continue };
             let Kind::Spoke { need, clearance, .. } = first.kind else { continue };
+            // A pad with fewer spokes than it needs has none worth a wire's way: it is short
+            // with them and let be without (the checker's `short_of_spokes`).
+            if of.len() < need as usize {
+                continue;
+            }
             let room = |id: ItemId, net: u32| {
                 let Some(b) = board.bbox(id) else { return 0.0 };
                 let (x, y) = ((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2);

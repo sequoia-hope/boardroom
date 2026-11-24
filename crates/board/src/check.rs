@@ -303,6 +303,12 @@ pub(crate) fn cut(board: &Board, sid: ItemId, spoke: &Item, layer: usize, but: O
     alone(sid, spoke) || met(board, spoke, layer).is_some_and(|o| board.item(o).is_some_and(|other| alone(o, other)))
 }
 
+/// Whether the pour has fewer spokes for `pad` on `layer` than the `need` of them it must
+/// keep, cut or whole: no track can leave such a pad with enough, and none takes them from it.
+pub fn short_of_spokes(board: &Board, pad: ItemId, pad_box: BBox, need: u8, layer: usize) -> bool {
+    board.near(layer, pad_box).into_iter().filter_map(|s| board.item(s)).filter(|it| matches!(it.kind, Kind::Spoke { pad: p, .. } if p == pad) && it.on(layer)).count() < need as usize
+}
+
 /// Whether cutting spoke `sid` leaves its pad fewer whole spokes on `layer` than it needs,
 /// the others cut by other nets' tracks and vias but `id`. A track of the pad's net that leaves
 /// it counts as a spoke, as KiCad counts one that ends in the pour (kicad-cli 9.0.8: a pad with
@@ -314,6 +320,13 @@ fn spokes_left(board: &Board, id: ItemId, sid: ItemId, spoke: &Item, layer: usiz
     let Kind::Spoke { pad, need, .. } = spoke.kind else { return false };
     // A pad's spokes all start at its centre, so all of them meet its box.
     let (Some(pad_box), Some(pad_item)) = (board.bbox(pad), board.item(pad)) else { return true };
+    // A pad the pour has fewer spokes for than it needs is short of them whether this one
+    // stays or goes, and KiCad faults it with one spoke and lets it be with none (its
+    // `testZoneLayer`: a pad no spoke reaches is "not connected at all" and is passed over).
+    // Its designer joins it by track, and runs the next pin's track where the spoke would be.
+    if short_of_spokes(board, pad, pad_box, need, layer) {
+        return false;
+    }
     let in_a_pad = |layer: usize, p: Point| {
         board.near(layer, BBox::of([p, p])).into_iter().filter_map(|q| board.item(q)).any(|q| matches!(q.kind, Kind::Pad { .. }) && q.on(layer) && q.shape.contains(p))
     };
