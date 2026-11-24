@@ -97,7 +97,8 @@ pub fn layer(board: &Board, plan: &Plan, drawing: &Drawing, l: usize, faults: &[
     s
 }
 
-/// One strand's course as SVG: obstacles, where it may bend (thin blue), each corner it keeps
+/// One strand's course as SVG: obstacles (the room kept for a pad's spoke pale orange with a
+/// broken outline, the rest grey), where it may bend (thin blue), each corner it keeps
 /// from as a circle of that distance with a cross at the corner (green where the corner is on
 /// the wire's left, purple on its right), the sides it keeps from (orange), and the wire found
 /// (black). Also the wires already drawn on the layer (grey-blue, at their widths), the strand
@@ -105,7 +106,7 @@ pub fn layer(board: &Board, plan: &Plan, drawing: &Drawing, l: usize, faults: &[
 /// (`line`, dashed red), the part of each gap the wire may cross in (thick orange), and the
 /// room in front of each corner that it keeps out of (the half of a pink circle its tick is
 /// on). Under the picture, what each mark stands for.
-pub fn course(sheet: &plan::Sheet, course: &crate::chain::Course, found: Option<&crate::chain::Path>, drawn: &[&crate::Wire], line: &[P]) -> String {
+pub fn course(board: &Board, sheet: &plan::Sheet, course: &crate::chain::Course, found: Option<&crate::chain::Path>, drawn: &[&crate::Wire], line: &[P]) -> String {
     let all: Vec<P> = course.within.iter().flatten().copied().chain([course.a, course.b]).collect();
     let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
     for p in &all {
@@ -133,7 +134,15 @@ pub fn course(sheet: &plan::Sheet, course: &crate::chain::Course, found: Option<
             let _ = writeln!(s, "<path d='{}' stroke='#ddd' stroke-width='{:.4}'/>", path(&o.poly, true), 2.0 * o.reach);
             continue;
         }
+        if kept_room(board, o) {
+            continue;
+        }
         let _ = writeln!(s, "<path d='{}' fill='#ddd' stroke='#999' stroke-width='{:.4}'/>", path(&o.poly, true), thin);
+    }
+    // Room kept for a pad's bridge to its pour is no copper, and lies half on its pad: over
+    // the pads, pale and with a broken outline, so that it is not taken for a second pad.
+    for o in sheet.space.obstacles.iter().filter(|o| kept_room(board, o)) {
+        let _ = writeln!(s, "<path d='{}' fill='#fb6' fill-opacity='0.35' stroke='#c60' stroke-width='{:.4}' stroke-dasharray='{:.4} {:.4}'/>", path(&o.poly, true), thin * 1.5, thin * 5.0, thin * 4.0);
     }
     for t in &course.within {
         let _ = writeln!(s, "<path d='{}' stroke='#8ad' stroke-width='{:.4}'/>", path(t, true), thin);
@@ -181,6 +190,7 @@ pub fn course(sheet: &plan::Sheet, course: &crate::chain::Course, found: Option<
         let centred = format!("{ring}{}", cross([mid, y], 0.2 * letter, colour, thin * 1.5));
         let drawn = match mark {
             Mark::Copper => format!("<rect x='{x:.4}' y='{:.4}' width='{:.4}' height='{:.4}' fill='{colour}' stroke='#999' stroke-width='{thin:.4}'/>", y - 0.5 * letter, 2.5 * letter, letter),
+            Mark::Kept => format!("<rect x='{x:.4}' y='{:.4}' width='{:.4}' height='{:.4}' fill='{colour}' fill-opacity='0.35' stroke='#c60' stroke-width='{:.4}' stroke-dasharray='{:.4} {:.4}'/>", y - 0.5 * letter, 2.5 * letter, letter, thin * 1.5, thin * 5.0, thin * 4.0),
             Mark::Wire => line(0.6 * letter, " stroke-opacity='0.7'"),
             Mark::Planned => line(thin * 2.0, &format!(" stroke-dasharray='{:.4} {:.4}'", thin * 6.0, thin * 4.0)),
             Mark::Line(by) => line(thin * by, ""),
@@ -195,6 +205,11 @@ pub fn course(sheet: &plan::Sheet, course: &crate::chain::Course, found: Option<
     s
 }
 
+/// Whether an obstacle is the room kept for a pad's spoke to its pour, and no copper.
+fn kept_room(board: &Board, o: &plan::space::Obstacle) -> bool {
+    o.item.and_then(|id| board.item(id)).is_some_and(|i| matches!(i.kind, board::Kind::Spoke { .. }))
+}
+
 /// A cross at a point, its arms this long.
 fn cross(at: P, arm: f64, colour: &str, width: f64) -> String {
     format!("<path d='M{:.4} {:.4}h{:.4}M{:.4} {:.4}v{:.4}' stroke='{colour}' stroke-width='{width:.4}'/>", at[0] - arm, at[1], 2.0 * arm, at[0], at[1] - arm, 2.0 * arm)
@@ -206,6 +221,7 @@ const KEY_ROW: f64 = 1.8;
 /// How a key shows the mark it tells of.
 enum Mark {
     Copper,
+    Kept,
     Wire,
     Planned,
     /// A plain line, this many times the thinnest.
@@ -219,12 +235,13 @@ enum Mark {
 /// What each mark in [`course`]'s picture stands for: the mark, its colour, what it looks
 /// like and what it means, for a reader who has not seen the code. The connection's own marks
 /// first, then what is round it, then what holds the track.
-fn keys(found: bool) -> [(Mark, &'static str, &'static str, &'static str); 11] {
+fn keys(found: bool) -> [(Mark, &'static str, &'static str, &'static str); 12] {
     [
         (Mark::Planned, "#d00", "Dashed red line", "the route planned for this connection: which way it goes, not yet a track."),
         (Mark::Line(3.0), "#000", "Black line", if found { "the track drawn along that route." } else { "the track drawn along that route. None here: no track could be fitted." }),
         (Mark::End, "#000", "Black dots", "the two points the connection joins."),
-        (Mark::Copper, "#ddd", "Grey shapes", "what the track must keep clear of: pads, vias, room kept for a pad's link to its pour."),
+        (Mark::Copper, "#ddd", "Grey shapes", "copper the track must keep clear of: pads and vias."),
+        (Mark::Kept, "#fb6", "Pale orange box, broken outline", "not copper. Room kept free for a pad's bridge to its pour; the track keeps clear of it too."),
         (Mark::Wire, "#9ab", "Thick grey-blue lines", "tracks already drawn for other connections."),
         (Mark::Ring, "#2a2", "Green circle", "not copper. The track's centre line must stay outside it. Its centre (+) is a corner passed on the track's left."),
         (Mark::Ring, "#a2a", "Purple circle", "the same, round a corner passed on the track's right."),

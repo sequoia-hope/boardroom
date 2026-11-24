@@ -584,7 +584,7 @@ fn one(easel: &Easel, work: &mut Board, wires: &[Wire], tracks: &HashMap<ItemId,
             let places = sheet.places(board);
             let line: Vec<P> = std::iter::once(course.a).chain(strand.crossings.iter().enumerate().map(|(k, &e)| sheet.point(e, places[s][k]))).chain([course.b]).collect();
             let drawn: Vec<&Wire> = wires.iter().filter(|w| w.layer == layer).collect();
-            *watched = Some(draw::course(sheet, &course, found.as_ref().ok(), &drawn, &line));
+            *watched = Some(draw::course(board, sheet, &course, found.as_ref().ok(), &drawn, &line));
         }
         // The gap the search did not get across.
         let stuck = found.as_ref().err().and_then(|&m| course.gaps.get(m).or(course.gaps.last())).map(|g| g.ends);
