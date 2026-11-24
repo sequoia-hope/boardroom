@@ -671,6 +671,9 @@ const CROSS: f64 = 12.0;
 const WORTH: f64 = 2.0;
 /// How many different sets of connections are lifted for one that has no way.
 const OTHERS: usize = 4;
+/// How many times a way across others is looked for again without the spots of one that goes
+/// across nothing and that the sheets do not hold.
+const ACROSS_AGAIN: usize = 24;
 /// How deep lifting goes: a connection lifted to let one through may itself have others lifted
 /// to be laid again, this many times over.
 const DEEP: usize = 2;
@@ -734,13 +737,29 @@ impl Job<'_> {
 
     /// What the cheapest way for `c` would cost if it might go across other connections'
     /// strands, and which it would go across: none of those in `keep`.
-    fn across(&self, sheets: &[Sheet], c: usize, keep: &[usize]) -> Option<(f64, Vec<usize>)> {
+    ///
+    /// With `stuck`, `c` is known to have no way the sheets hold ([`Job::best`] found none): a
+    /// way that goes across nothing is then one whose vias the sheets do not hold, and it is
+    /// looked for again without those spots, as [`lay`] does, until one goes across something
+    /// or there is none.
+    fn across(&self, sheets: &[Sheet], c: usize, keep: &[usize], stuck: bool) -> Option<(f64, Vec<usize>)> {
         let want = &self.wants[c];
         // A stub that another connection starts from stays where it is.
         let keep: Vec<usize> = keep.iter().copied().chain((0..self.wants.len()).filter(|&s| self.wants[s].stub && used(sheets, s))).collect();
         let (from, to) = ends(sheets, self.wants, self.joined, c);
-        let way = ways::find(self.board, sheets, &ways::Terms { keep: &keep, into: &want.into, avoid: &want.avoid, ..self.terms(true, true) }, want.net, wide(self.board, want), &from, &to)?;
-        Some((way.cost, way.over))
+        let mut ban: Vec<usize> = Vec::new();
+        for _ in 0..ACROSS_AGAIN {
+            let way = ways::find(self.board, sheets, &ways::Terms { keep: &keep, ban: &ban, into: &want.into, avoid: &want.avoid, ..self.terms(true, true) }, want.net, wide(self.board, want), &from, &to)?;
+            if !stuck || !way.over.is_empty() {
+                return Some((way.cost, way.over));
+            }
+            let before = ban.len();
+            ban.extend(way.legs.iter().flat_map(|l| [l.from, l.to]).filter_map(|s| if let Stop::Spot(c) = s { Some(c) } else { None }));
+            if ban.len() == before {
+                return None;
+            }
+        }
+        None
     }
 
     /// Lays `c` by lifting the connections in its way and laying each of those again after
@@ -751,9 +770,15 @@ impl Job<'_> {
         // they are the next time, and another way across is looked for: a few times.
         let mut keep: Vec<usize> = Vec::new();
         for _ in 0..OTHERS {
-            let (_, mut over) = self.across(sheets, c, &keep)?;
+            let (_, mut over) = self.across(sheets, c, &keep, false)?;
             if over.is_empty() {
-                return Some(self.best(sheets, c)?.1);
+                if let Some(best) = self.best(sheets, c) {
+                    return Some(best.1);
+                }
+                over = self.across(sheets, c, &keep, true)?.1;
+                if over.is_empty() {
+                    return None;
+                }
             }
             over.sort();
             if let Some(laid) = self.lifting(sheets, c, &over, deep) {
@@ -1495,7 +1520,7 @@ fn place(board: &Board, plan: &mut Plan, which: &[usize]) {
             // With no way: the connections in its way are lifted for it. With a way that is
             // longer by [`WORTH`] than one across other connections would be: those are lifted,
             // all are laid again, and the plan that costs less of the two is kept.
-            let across = job.across(&sheets, c, &[]).filter(|(_, over)| !over.is_empty());
+            let across = job.across(&sheets, c, &[], best.is_none()).filter(|(_, over)| !over.is_empty());
             let lifted = match (&best, across) {
                 (None, Some(_)) => job.through(&sheets, c, DEEP),
                 (Some(laid), Some((cost, over))) => {
