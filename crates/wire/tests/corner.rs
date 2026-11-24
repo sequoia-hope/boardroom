@@ -104,3 +104,19 @@ fn a_pin_shut_in_by_its_neighbours_line_has_that_line_moved() {
     assert_eq!(plan.wants.len(), 7);
     assert!(plan.left.is_empty(), "left: {:?}", left(&board, &plan));
 }
+
+/// With each pin's way out settled first, a via at its tip: the LED's pads on the other side
+/// stand opposite the tips of four of the pins, and no via may stand there. Each of those has
+/// its via at the nearest place there is beside its tip instead; before, its track went
+/// wherever a via could stand within reach, across the front of its neighbours, and one of
+/// the six was left.
+#[test]
+fn a_pin_with_no_room_for_a_via_at_its_tip_has_one_as_near_as_may_be() {
+    let board = corner(&FLASH);
+    let wants = lines(&board);
+    let (spots, stubs) = plan::escape(&board, &wants, plan::Fan::Tight);
+    let mut plan = plan::start_from(&board, spots);
+    plan::add(&board, &mut plan, stubs);
+    plan::add(&board, &mut plan, wants);
+    assert!(plan.left.is_empty(), "left: {:?}", left(&board, &plan));
+}

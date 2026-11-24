@@ -1138,6 +1138,13 @@ const OUT_STEPS: [f64; 11] = [-0.1, -0.2, -0.3, -0.45, -0.6, -0.8, 0.15, 0.3, 0.
 /// How much farther than its pad's tip a tight fan's via is tried, mm, nearest first.
 const TIGHT_STEPS: [f64; 6] = [0.0, 0.05, 0.1, 0.2, 0.3, 0.45];
 
+/// Where a tight fan's via has no place at its pad's tip: how far apart the places tried are,
+/// mm, how many of them out from the tip, and how many to each side of the pad's line (a
+/// quarter of a millimetre: farther aside it stands in front of the next pad).
+const NEAR_STEP: f64 = 0.05;
+const NEAR_OUT: i64 = 24;
+const NEAR_ASIDE: i64 = 5;
+
 /// How a fine-pitch part's rows of vias stand ([`escape`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fan {
@@ -1259,6 +1266,36 @@ fn slots(board: &Board, apart: f64, radius: f64, hole: f64, row: &[(ItemId, spac
             if best.iter().all(|p| p.is_some()) {
                 break;
             }
+        }
+        // A pad with no place at its tip (a pad on another layer stands opposite it): the
+        // place nearest the tip that the checker passes beside the row's other vias, a
+        // little to one side of the pad's line or farther out. Without one its stub went to
+        // any spot within reach, across the front of its neighbours.
+        let stood: Vec<ItemId> = row.iter().zip(&best).filter_map(|(&(pad, _), at)| Some(scratch.insert(via_item(board, (*at)?, board.item(pad).map_or(0, |i| i.net))))).collect();
+        let mut more: Vec<ItemId> = Vec::new();
+        let along = [-dir[1], dir[0]];
+        let mut tries: Vec<(f64, f64)> = (0..=NEAR_OUT).flat_map(|i| (-NEAR_ASIDE..=NEAR_ASIDE).map(move |j| (i as f64 * NEAR_STEP, j as f64 * NEAR_STEP))).collect();
+        tries.sort_by(|a, b| (a.0 + 2.0 * a.1.abs()).total_cmp(&(b.0 + 2.0 * b.1.abs())).then(a.1.total_cmp(&b.1)));
+        for (k, &(pad, centre)) in row.iter().enumerate() {
+            if best[k].is_some() {
+                continue;
+            }
+            let net = board.item(pad).map_or(0, |i| i.net);
+            let tip = reach(pad, dir) + radius;
+            for &(out, aside) in &tries {
+                let p = [centre[0] + dir[0] * (tip + out) + along[0] * aside, centre[1] + dir[1] * (tip + out) + along[1] * aside];
+                let q = board::Point::new((p[0] * 1e6).round() as i64, (p[1] * 1e6).round() as i64);
+                let id = scratch.insert(via_item(board, p, net));
+                if bounds.first().is_none_or(|o| board::inside(q, o)) && board::check_item(scratch, id).is_empty() {
+                    best[k] = Some(p);
+                    more.push(id);
+                    break;
+                }
+                scratch.remove(id);
+            }
+        }
+        for id in stood.into_iter().chain(more) {
+            scratch.remove(id);
         }
         best
     };
