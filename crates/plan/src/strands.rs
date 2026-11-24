@@ -292,8 +292,22 @@ impl Sheet {
         if len > 0.0 { self.need(board, edge, None) / len } else { 0.0 }
     }
 
-    /// How many strands cut each corner of triangle `t` off.
+    /// Whether the strands across the sides of triangle `t` can be chords that each cut one
+    /// corner off: no side holds more than the other two together, and the three hold an
+    /// even number ([`Sheet::sound`]).
+    pub fn paired(&self, t: usize) -> bool {
+        let l = self.space.tris[t].e.map(|e| self.on[e].len());
+        (l[0] + l[1] + l[2]) % 2 == 0 && l[0] <= l[1] + l[2] && l[1] <= l[0] + l[2] && l[2] <= l[0] + l[1]
+    }
+
+    /// How many strands cut each corner of triangle `t` off: none where its strands are not
+    /// such chords ([`Sheet::paired`]). (The counts were taken from each other unguarded, and
+    /// a triangle whose sides did not pair up gave a count of 2^63: parallelogram p2-132-usb6
+    /// stopped there, 13 minutes into a run, 2026-11-24.)
     pub fn corners(&self, t: usize) -> [usize; 3] {
+        if !self.paired(t) {
+            return [0; 3];
+        }
         let l = self.space.tris[t].e.map(|e| self.on[e].len());
         [(l[1] + l[2] - l[0]) / 2, (l[0] + l[2] - l[1]) / 2, (l[0] + l[1] - l[2]) / 2]
     }
@@ -308,6 +322,10 @@ impl Sheet {
     /// Where a strand that came into triangle `t` through `edge` at `slot` may leave it: the
     /// side, the slot there, and the corner it then cuts off.
     pub fn ways_on(&self, t: usize, edge: usize, slot: usize) -> Vec<(usize, usize, usize)> {
+        // Through a triangle whose strands do not pair up there is no telling which way.
+        if !self.paired(t) {
+            return Vec::new();
+        }
         let tri = &self.space.tris[t];
         let i = tri.e.iter().position(|&e| e == edge).unwrap();
         let (j, k) = ((i + 1) % 3, (i + 2) % 3);
@@ -334,6 +352,9 @@ impl Sheet {
         let beyond = wall.t.iter().flatten().find(|&&x| x != t);
         if beyond.is_some_and(|&x| self.space.free(x)) {
             return true;
+        }
+        if !self.paired(t) {
+            return false;
         }
         let v = &self.space.verts;
         let room = point_segment(v[tri.v[c]], v[wall.v[0]], v[wall.v[1]]);
@@ -400,10 +421,7 @@ impl Sheet {
     /// whoever its corners belong to: where two pads of one net stand in one place, each
     /// one's sides run between the other's corners.
     pub fn sound(&self, board: &Board) -> bool {
-        let chords = self.space.tris.iter().enumerate().all(|(t, tri)| {
-            let l = tri.e.map(|e| self.on[e].len());
-            !self.space.free(t) || ((l[0] + l[1] + l[2]) % 2 == 0 && l[0] <= l[1] + l[2] && l[1] <= l[0] + l[2] && l[2] <= l[0] + l[1])
-        });
+        let chords = (0..self.space.tris.len()).all(|t| !self.space.free(t) || self.paired(t));
         chords && (0..self.space.edges.len()).all(|e| self.on[e].is_empty() || !self.space.gap(e) || !self.space.passed(e) || self.fits(board, e, None))
     }
 
