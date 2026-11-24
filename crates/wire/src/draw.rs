@@ -117,10 +117,9 @@ pub fn course(sheet: &plan::Sheet, course: &crate::chain::Course, found: Option<
     let (w, h) = (hi[0] - lo[0] + 2.0 * m, hi[1] - lo[1] + 2.0 * m);
     let thin = (w.max(h) / 1500.0).max(0.005);
     let keys = keys(found.is_some());
-    // The key's letters, two columns of them under the picture.
-    let letter = w / 60.0;
-    let rows = keys.len().div_ceil(2);
-    let below = (rows as f64 * KEY_ROW + 1.0) * letter;
+    // The key's letters: a line under the picture for each kind of mark, a sentence long.
+    let letter = w / 70.0;
+    let below = (keys.len() as f64 * KEY_ROW + 1.0) * letter;
     let mut s = format!(
         "<svg xmlns='http://www.w3.org/2000/svg' viewBox='{:.3} {:.3} {w:.3} {:.3}' stroke-linecap='round' stroke-linejoin='round' fill='none'>\n<rect x='{:.3}' y='{:.3}' width='{w:.3}' height='{:.3}' fill='#fff'/>\n",
         lo[0] - m, lo[1] - m, h + below, lo[0] - m, lo[1] - m, h + below
@@ -169,9 +168,9 @@ pub fn course(sheet: &plan::Sheet, course: &crate::chain::Course, found: Option<
     let (left, top) = (lo[0] - m, lo[1] - m + h);
     let _ = writeln!(s, "<rect x='{left:.4}' y='{top:.4}' width='{w:.4}' height='{below:.4}' fill='#fff'/>");
     let _ = writeln!(s, "<path d='M{left:.4} {top:.4}h{w:.4}' stroke='#999' stroke-width='{thin:.4}'/>");
-    for (k, (mark, colour, says)) in keys.iter().enumerate() {
-        let x = left + letter + (k / rows) as f64 * w / 2.0;
-        let y = top + ((k % rows) as f64 * KEY_ROW + 1.4) * letter;
+    for (k, (mark, colour, name, says)) in keys.iter().enumerate() {
+        let x = left + letter;
+        let y = top + (k as f64 * KEY_ROW + 1.4) * letter;
         let (mid, end) = (x + 1.25 * letter, x + 2.5 * letter);
         let line = |width: f64, more: &str| format!("<path d='M{x:.4} {y:.4}L{end:.4} {y:.4}' stroke='{colour}' stroke-width='{width:.4}'{more}/>");
         let ring = format!("<circle cx='{mid:.4}' cy='{y:.4}' r='{:.4}' stroke='{colour}' stroke-width='{:.4}'/>", 0.6 * letter, thin * 1.5);
@@ -185,7 +184,7 @@ pub fn course(sheet: &plan::Sheet, course: &crate::chain::Course, found: Option<
             Mark::Gap => format!("{}<path d='M{:.4} {y:.4}L{:.4} {y:.4}' stroke='{colour}' stroke-width='{:.4}'/>", line(thin, ""), x + 0.8 * letter, x + 1.7 * letter, thin * 4.0),
             Mark::Front => format!("{ring}<path d='M{mid:.4} {y:.4}L{:.4} {y:.4}' stroke='{colour}' stroke-width='{thin:.4}'/>", mid + 0.6 * letter),
         };
-        let _ = writeln!(s, "{drawn}\n<text x='{:.4}' y='{:.4}' font-family='sans-serif' font-size='{letter:.4}' fill='#222' stroke='none'>{says}</text>", x + 3.2 * letter, y + 0.35 * letter);
+        let _ = writeln!(s, "{drawn}\n<text x='{:.4}' y='{:.4}' font-family='sans-serif' font-size='{letter:.4}' fill='#222' stroke='none'><tspan font-weight='bold'>{name}:</tspan> {says}</text>", x + 3.2 * letter, y + 0.35 * letter);
     }
     s.push_str("</svg>\n");
     s
@@ -207,19 +206,21 @@ enum Mark {
     Front,
 }
 
-/// What each mark in [`course`]'s picture stands for: the mark, its colour, and the words.
-fn keys(found: bool) -> [(Mark, &'static str, &'static str); 11] {
+/// What each mark in [`course`]'s picture stands for: the mark, its colour, what it looks
+/// like and what it means, for a reader who has not seen the code. The connection's own marks
+/// first, then what is round it, then what holds the track.
+fn keys(found: bool) -> [(Mark, &'static str, &'static str, &'static str); 11] {
     [
-        (Mark::Copper, "#ddd", "pads and other copper in its way"),
-        (Mark::Wire, "#9ab", "wires already drawn"),
-        (Mark::Planned, "#d00", "this connection as the plan has it"),
-        (Mark::Line(3.0), "#000", if found { "the wire drawn for it" } else { "the wire drawn for it (none was found here)" }),
-        (Mark::End, "#000", "its two ends"),
-        (Mark::Line(1.0), "#8ad", "the area it may bend in"),
-        (Mark::Ring, "#2a2", "a corner on its left: it keeps outside the circle"),
-        (Mark::Ring, "#a2a", "a corner on its right: it keeps outside the circle"),
-        (Mark::Line(2.0), "#f80", "a side it keeps off"),
-        (Mark::Gap, "#fa0", "a gap it goes through, thick where it may cross"),
-        (Mark::Front, "#f6a", "room in front of a corner that it keeps out of"),
+        (Mark::Planned, "#d00", "Dashed red line", "the route planned for this connection: which way it goes, not yet a track."),
+        (Mark::Line(3.0), "#000", "Black line", if found { "the track drawn along that route." } else { "the track drawn along that route. None here: no track could be fitted." }),
+        (Mark::End, "#000", "Black dots", "the two points the connection joins."),
+        (Mark::Copper, "#ddd", "Grey shapes", "what the track must keep clear of: pads, vias, room kept for a pad's link to its pour."),
+        (Mark::Wire, "#9ab", "Thick grey-blue lines", "tracks already drawn for other connections."),
+        (Mark::Ring, "#2a2", "Green circle", "round a corner the track passes on its left. The track's centre line must stay outside it."),
+        (Mark::Ring, "#a2a", "Purple circle", "the same, round a corner the track passes on its right."),
+        (Mark::Line(2.0), "#f80", "Orange line", "a side of something the track runs past and must keep its clearance from."),
+        (Mark::Gap, "#fa0", "Yellow line", "a gap the route goes through. The track's centre must cross it in the thick part."),
+        (Mark::Front, "#f6a", "Pink circle with a tick", "room kept at a corner for other tracks that pass between it and this one."),
+        (Mark::Line(1.0), "#8ad", "Thin blue outline", "the track may bend only inside this area."),
     ]
 }

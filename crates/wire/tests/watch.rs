@@ -8,9 +8,10 @@ fn pad(x: f64, y: f64, n: usize, net: &str) -> String {
 }
 
 /// Two pads of one net with a third between them: the one wire's picture has a key under it,
-/// a line for each kind of mark, and the key says the wire was found. Before, the picture had
-/// no words at all and its colours were told only in the code (the owner asked for a legend on
-/// the BMS board's picture, 2026-11-23).
+/// a line for each kind of mark that names the mark and says in a sentence what it means, and
+/// the key says the track was drawn. Before, the picture had no words at all and its colours
+/// were told only in the code (the owner asked for a legend on the BMS board's picture, and
+/// then for clearer words in it, 2026-11-23).
 #[test]
 fn the_picture_of_a_strands_course_says_what_its_marks_are() {
     let parts = [pad(5.0, 10.0, 1, "A"), pad(15.0, 10.0, 1, "A"), pad(10.0, 10.0, 2, "B")].concat();
@@ -29,7 +30,7 @@ fn the_picture_of_a_strands_course_says_what_its_marks_are() {
     let (drawing, picture) = wire::draw_watching(&board, &plan, Some((0, 0)));
     assert_eq!(drawing.wires.len(), 1);
     let picture = picture.expect("the strand watched has a picture");
-    for says in ["pads and other copper in its way", "wires already drawn", "this connection as the plan has it", ">the wire drawn for it<", "its two ends", "the area it may bend in", "a corner on its left", "a corner on its right", "a side it keeps off", "a gap it goes through", "room in front of a corner"] {
+    for says in ["Dashed red line:", "Black line:</tspan> the track drawn along that route.<", "Black dots:", "Grey shapes:", "Thick grey-blue lines:", "Green circle:", "Purple circle:", "Orange line:", "Yellow line:", "Pink circle with a tick:", "Thin blue outline:"] {
         assert!(picture.contains(says), "the key has no line for: {says}");
     }
     // The key lies under the picture: each of its lines starts below every mark of the course.
