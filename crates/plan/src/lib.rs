@@ -675,6 +675,10 @@ const OTHERS: usize = 4;
 /// to be laid again, this many times over.
 const DEEP: usize = 2;
 
+/// A wire in 0/45/90 is at most this many times as long as its strand pulled tight: a line
+/// half-way between two of its eight directions, and a little for its bends.
+const DRAWN: f64 = 1.1;
+
 /// What the planner is told of the board's layers, and each connection with the length a way
 /// for it on one layer may be and still be taken without a thought for vias.
 struct Job<'a> {
@@ -698,11 +702,27 @@ impl Job<'_> {
         if want.stub {
             return lay(self.board, sheets, &with_vias, self.wants, self.joined, c);
         }
-        match lay(self.board, sheets, &self.terms(false, false), self.wants, self.joined, c) {
+        // A way that takes its net past the length a rule holds it to is no way.
+        let within = |laid: Option<(f64, Vec<Sheet>)>| laid.filter(|l| self.within(&l.1, want.net));
+        match within(lay(self.board, sheets, &self.terms(false, false), self.wants, self.joined, c)) {
             // With a pour to end in, a via into it is always weighed against the way without.
             Some(on_one) if want.into.is_empty() && on_one.0 <= DIRECT * want.apart + SLACK => Some(on_one),
-            on_one => [on_one, lay(self.board, sheets, &with_vias, self.wants, self.joined, c)].into_iter().flatten().min_by(|a, b| a.0.total_cmp(&b.0)),
+            on_one => [on_one, within(lay(self.board, sheets, &with_vias, self.wants, self.joined, c))].into_iter().flatten().min_by(|a, b| a.0.total_cmp(&b.0)),
         }
+    }
+
+    /// Whether `net`'s strands in `sheets` are no longer than a custom rule lets the net's
+    /// copper be (`length (max …)`: a flash chip's lines, a crystal's), as KiCad counts it:
+    /// its tracks and the height of its vias. A strand is a rubber band, and its wire in
+    /// 0/45/90 is longer: [`DRAWN`] times as long at most. A net so held is laid first, while
+    /// its straight way is open; without this, lifted to let another through, it was laid
+    /// again any way round (parallelogram p2-132-usb6's flash select, 9 mm from pad to pad
+    /// and held to 25: laid 27 to 38 mm long, 2026-11-24).
+    fn within(&self, sheets: &[Sheet], net: u32) -> bool {
+        let Some((_, max)) = self.board.net_maximum("length", net) else { return true };
+        let tracks: f64 = sheets.iter().map(|s| s.laid().filter(|&k| s.strands[k].net == net).map(|k| s.sketch(self.board, k).windows(2).map(|w| space::dist(w[0], w[1])).sum::<f64>()).sum::<f64>()).sum();
+        let vias = sheets.first().map_or(0, |s| s.space.vias().iter().filter(|v| v.1 == net).count());
+        tracks * DRAWN + vias as f64 * self.board.via_height as f64 / 1e6 <= max * 1e3
     }
 
     /// What a plan costs: its strands' lengths, each on a layer as dear as that layer is, and

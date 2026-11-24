@@ -49,3 +49,14 @@ fn a_net_held_to_a_length_takes_the_gap_first() {
     assert!(board.net_maximum("length", 1).is_some());
     assert_eq!(left_nets(&board), vec![2]);
 }
+
+/// Net A's only way is through the gap, 26 mm from pad to pad. Held to 20 mm it is not laid
+/// at all, and B has the gap: a wire longer than its rule allows is an error as much as none
+/// is, and laid it would take the gap from a net that can use it (parallelogram p2-132-usb6's
+/// flash select, held to 25 mm, was laid 27 to 38 mm long round the nets it had been lifted
+/// for: 2026-11-24).
+#[test]
+fn a_net_is_not_laid_longer_than_its_rule_lets_it_be() {
+    let board = board("(version 1)\n(rule \"A short\" (condition \"A.NetName == 'A'\") (constraint length (max 20mm)))");
+    assert_eq!(left_nets(&board), vec![1]);
+}
