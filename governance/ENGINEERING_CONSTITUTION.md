@@ -155,8 +155,17 @@ A change whose gain cannot be told apart from these is not committed.
   acts only where that situation is found, and is measured on boards where it is absent.
 - **R4. Aim at the designers' picture.** Ours should read as designed: neighbours side by side,
   planes kept whole, short and direct. Compare the picture with the designer's before any count.
-- **R5. No old router code.** The old router is never brought in or built here; nothing is copied
-  from GPL projects into the MIT crates.
+- **R5. The old router's code may be shared; GPL code never.** What the old router does well
+  with copper that is already there (its clean-ups, its checked moves, its search that keeps a
+  change only if fewer connections are left open) may be brought into shared crates on this
+  repository's board model, for both routers to use, and the two coexist (owner, 2026-11-25:
+  "to the extent that we are borrowing code, we should just share it and make a shared library
+  between the old code and the new code and let them coexist"). It comes in a piece at a time,
+  read, tested here and measured on the test set like any other change (section 7), never
+  wholesale. The new router goes on making the copper, and nothing brought in may cost its
+  look (R4). Nothing is copied from GPL projects into the MIT crates: `copperroute`,
+  `freerouting` and `kicad-text` stay behind a process boundary. What was read and why is in
+  `docs/old-router-study.md`.
 
 ---
 
