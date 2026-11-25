@@ -142,10 +142,19 @@ place is as **operators on copper that is already there**, both routers on one b
    rubber band, so a via moved a little takes its tracks with it and they are drawn square
    again after, which the old relaxer cannot do. Vias must first be able to stand off the
    0.43 mm grid of spots.
-3. **The old router as a closer beside ours**, by its binary first (it adopts a routed board
-   as it is), ported into the workspace only if that proves worth it. An experiment on our own
-   4-open p2 board was queued on 2026-11-25; its result is in the lab at
-   `ours/p2-132-usb6/owner-2026-11-24/old-finisher/`.
+3. **The old router as a closer beside ours**: tried on 2026-11-25 by its binary, which adopts
+   a routed board as it is, on our own 4-open p2 board (`--adopt --shove-plough region`, 600 s,
+   no tightening; the lab's `ours/p2-132-usb6/owner-2026-11-24/old-finisher/`). KiCad before:
+   4 unconnected, no error. After: 2 unconnected, no error. It closed CS2_6, CS2_8 and the
+   ground island, left CS2_2, and opened one that was closed (/MCU/LIGHT); its time ran out in
+   the plough at pass 7. It changed 103 of the board's 117 nets (114 vias out and 88 in, 741 mm
+   of track out and 599 mm in: its via and clean-up stages run whatever is asked), where the
+   owner's hand changed 55. Looked at (`looks/old-finisher-diff.png`): CS2_6 goes from the
+   driver up round the top of the board and down its left side, 72 mm with 12 vias, where the
+   owner took it straight across in 26 mm with 3. **So not as it is**: it closes by the long
+   way round, which section 4 of the constitution does not count as a connection made well,
+   and it does not leave the rest alone. Its discipline is what to take (step 2), and its
+   clean-ups one by one (step 1).
 
 What stays out: the GPL crates, behind a process boundary as now; and the relaxer run as it is
 over our copper.
