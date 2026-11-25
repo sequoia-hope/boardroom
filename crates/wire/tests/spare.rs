@@ -42,7 +42,11 @@ fn open(board: &Board, plan: &plan::Plan, drawing: &Drawing) -> usize {
 
 /// A wire from a pad to a via, and a second wire from the same pad that runs through that
 /// via on its way to another pad: the two shut in a ring between the pad and the via. The
-/// longer way from the pad to the via is taken out, and all three stay joined.
+/// longer way from the pad to the via is taken out, and all three stay joined. The wire that
+/// is left runs through the via's copper 0.05 mm from its middle and nothing ends there: a
+/// short piece from the wire to the via's middle joins the two, so that the via moved by
+/// hand takes its track with it (owner, 2026-11-24: "sitting nearby and intersecting but
+/// would not drag with it - needs a joining trace").
 #[test]
 fn a_wire_that_passes_a_via_of_its_net_leaves_no_ring_with_the_wire_to_that_via() {
     let board = board(&[[5.0, 10.0], [15.0, 10.0]]);
@@ -53,19 +57,22 @@ fn a_wire_that_passes_a_via_of_its_net_leaves_no_ring_with_the_wire_to_that_via(
     assert_eq!(open(&board, &plan, &drawing), 0);
     let (less, taken) = wire::spare::spare(&board, &plan, &drawing, &[]);
     assert_eq!(taken, 1);
-    assert_eq!(less.wires.len(), 1);
+    assert_eq!(less.wires.len(), 2);
     assert_eq!(less.wires[0].pts, past.pts);
+    assert_eq!(less.wires[1].pts, vec![[8.0, 9.05], [8.0, 9.0]], "from the wire to the via's middle");
     assert_eq!(less.spare.len(), 1);
     assert_eq!(less.spare[0].pts, to_via.pts);
     assert_eq!(open(&board, &plan, &less), 0);
     // Left alone, the net is as it was.
     assert_eq!(wire::spare::spare(&board, &plan, &drawing, &[1]).1, 0);
-    // And what is left has no ring in it.
-    assert_eq!(wire::spare::spare(&board, &plan, &less, &[]).1, 0);
+    // And what is left has no ring in it, and is joined to its via already.
+    let (again, taken) = wire::spare::spare(&board, &plan, &less, &[]);
+    assert_eq!((taken, again.wires.len()), (0, 2));
 }
 
 /// The same with the wire to the via the wider of the two: the narrower way goes, and the
-/// second wire starts where it comes into the via.
+/// second wire starts where it comes into the via, with a short piece from there to the via's
+/// middle.
 #[test]
 fn of_two_ways_round_the_narrower_is_taken_out() {
     let board = board(&[[5.0, 10.0], [15.0, 10.0]]);
@@ -75,9 +82,11 @@ fn of_two_ways_round_the_narrower_is_taken_out() {
     let drawing = Drawing { wires: vec![to_via.clone(), past], ..Default::default() };
     let (less, taken) = wire::spare::spare(&board, &plan, &drawing, &[]);
     assert_eq!(taken, 1);
-    assert_eq!(less.wires.len(), 2);
+    assert_eq!(less.wires.len(), 3);
     assert_eq!(less.wires[0].pts, to_via.pts);
     assert_eq!(less.wires[1].pts, vec![[8.0, 9.05], [9.0, 10.0], [15.0, 10.0]]);
+    // And it is joined to the via's middle, which it stops 0.05 mm short of.
+    assert_eq!(less.wires[2].pts, vec![[8.0, 9.05], [8.0, 9.0]]);
     assert_eq!(open(&board, &plan, &less), 0);
 }
 
@@ -152,4 +161,28 @@ fn a_via_is_never_left_joining_one_layer_only() {
     let (less, taken) = wire::spare::spare(&board, &plan, &drawing, &[]);
     assert_eq!(taken, 0, "{:?}", less.spare);
     assert_eq!(less.wires.len(), 5);
+}
+
+/// A wire on the front runs past a via of its net, 0.09 mm from its middle, and the via's own
+/// track is on the back: the via and the wire are joined by nothing but lying on each other.
+/// And a second track on the layer of one that ends at the via's middle, stopping in its
+/// copper short of the middle. Each is joined to the middle by a short piece.
+#[test]
+fn every_wire_that_comes_into_a_via_and_does_not_end_at_its_middle_is_joined_to_it() {
+    let board = board(&[[13.66, 11.94], [12.57, 9.0], [10.75, 11.61]]);
+    let plan = plan(&board, &[[12.4795, 11.609656]]);
+    let past = wire(0, 0.1, &[[13.663344, 11.936656], [12.777466, 11.936656], [12.571634, 11.730824], [12.571634, 9.0]]);
+    let own = wire(1, 0.1, &[[12.4795, 11.609656], [10.75, 11.609656]]);
+    let drawing = Drawing { wires: vec![past.clone(), own.clone()], ..Default::default() };
+    let (less, taken) = wire::spare::spare(&board, &plan, &drawing, &[]);
+    assert_eq!(taken, 0);
+    assert_eq!(less.wires.len(), 3, "{:?}", less.wires.iter().map(|w| &w.pts).collect::<Vec<_>>());
+    assert_eq!(less.wires[2].layer, 0);
+    assert_eq!(less.wires[2].pts[1], [12.4795, 11.609656]);
+    // One that ends at the middle and one that stops 0.1 mm short of it, both on the back.
+    let short = wire(1, 0.1, &[[12.4795, 11.713], [13.2, 11.713]]);
+    let drawing = Drawing { wires: vec![own, short], ..Default::default() };
+    let (less, _) = wire::spare::spare(&board, &plan, &drawing, &[]);
+    assert_eq!(less.wires.len(), 3, "{:?}", less.wires.iter().map(|w| &w.pts).collect::<Vec<_>>());
+    assert_eq!(less.wires[2].pts, vec![[12.4795, 11.713], [12.4795, 11.609656]]);
 }

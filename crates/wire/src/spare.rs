@@ -142,6 +142,8 @@ fn only_ways(n: usize, ends: &[[usize; 2]], there: &[bool]) -> Vec<bool> {
 
 /// `drawing` without the copper its nets have no need of, and how many runs of track were
 /// taken out: none of a net in `leave`. The lengths taken out are in the drawing's `spare`.
+/// A via left with track that touches it and does not end at its middle is given a short
+/// piece that does, after the drawing's other wires.
 pub fn spare(board: &Board, plan: &Plan, drawing: &Drawing, leave: &[u32]) -> (Drawing, usize) {
     let (with, new) = onto(board, plan, drawing);
     let mut places = Places(Vec::new());
@@ -367,7 +369,54 @@ pub fn spare(board: &Board, plan: &Plan, drawing: &Drawing, leave: &[u32]) -> (D
     for (s, t) in stretches.iter_mut().zip(&there) {
         s.there = *t || s.ends[0] == s.ends[1];
     }
-    if taken == 0 {
+    // A via that a wire of its net is joined to, with no piece of that wire ending at the
+    // via's middle: the wire comes into the via's copper and stops short, or runs on through
+    // it to one side (what ended at the middle was one of two ways round, and went).
+    // The board takes the two as joined, but a hand that moves the via in KiCad moves it
+    // alone. A piece from where the track is nearest to the via's middle joins them; it lies
+    // in the via's own copper and the track's.
+    let mut plan_vias: Vec<(ItemId, usize)> = of_item.iter().filter(|(id, _)| board.item(**id).is_none() && with.item(**id).is_some_and(|i| matches!(i.kind, Kind::Via))).map(|(&id, &place)| (id, places.of(place))).collect();
+    plan_vias.sort_unstable();
+    let mut joints: Vec<Wire> = Vec::new();
+    for (id, place) in plan_vias {
+        let Some(Shape::Capsule { a: middle, r, .. }) = with.item(id).map(|i| &i.shape) else { continue };
+        // Each end of a stretch that is at the via: of which wire, how far from the via's
+        // middle, and where. (Wire by wire, not layer by layer: one wire that ends at the
+        // middle does not join another of its layer that stops short of it.)
+        let mut at: Vec<(usize, f64, usize, usize, [f64; 2])> = Vec::new();
+        // The far ends of the pieces that do end at the middle, each with its layer: a wire
+        // one of those starts from is joined already (by the piece put in the last time).
+        let mut joined: Vec<(usize, [f64; 2])> = Vec::new();
+        for (e, stretch) in stretches.iter().enumerate().filter(|(_, s)| s.there) {
+            for end in 0..2 {
+                if stretch.ends[end] == place {
+                    let piece = &pieces[stretch.piece];
+                    let t = stretch.t[end];
+                    let here = [piece.a.x as f64 + t * (piece.b.x - piece.a.x) as f64, piece.a.y as f64 + t * (piece.b.y - piece.a.y) as f64];
+                    let away = (here[0] - middle.x as f64).hypot(here[1] - middle.y as f64);
+                    if away < AT_AN_END {
+                        let far = if piece.a.distance(*middle) < piece.b.distance(*middle) { piece.b } else { piece.a };
+                        joined.push((stretch.layer, [far.x as f64, far.y as f64]));
+                    }
+                    at.push((piece.wire, away, e, end, here));
+                }
+            }
+        }
+        at.sort_by(|x, y| x.0.cmp(&y.0).then(x.1.total_cmp(&y.1)).then((x.2, x.3).cmp(&(y.2, y.3))));
+        at.dedup_by_key(|x| x.0);
+        for (_, away, e, end, here) in at {
+            let (layer, reach) = (stretches[e].layer, stretches[e].width * 1e6);
+            if away < AT_AN_END || away > *r as f64 + reach || joined.iter().any(|&(l, far)| l == layer && (far[0] - here[0]).hypot(far[1] - here[1]) < reach) {
+                continue;
+            }
+            let piece = &pieces[stretches[e].piece];
+            let wire = &drawing.wires[piece.wire];
+            let (a, b, t) = (wire.pts[piece.seg], wire.pts[piece.seg + 1], stretches[e].t[end]);
+            let from = if t <= 0.0 { a } else if t >= 1.0 { b } else { [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t] };
+            joints.push(Wire { pts: vec![from, [middle.x as f64 / 1e6, middle.y as f64 / 1e6]], as_planned: false, ..wire.clone() });
+        }
+    }
+    if taken == 0 && joints.is_empty() {
         return (drawing.clone(), 0);
     }
     // The wires again: each as what is left of it, in as many lengths as it is cut into.
@@ -421,5 +470,6 @@ pub fn spare(board: &Board, plan: &Plan, drawing: &Drawing, leave: &[u32]) -> (D
             }
         }
     }
+    out.wires.extend(joints);
     (out, taken)
 }

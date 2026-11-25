@@ -1520,7 +1520,8 @@ fn without_spare(board: &Board, plan: &Plan, drawing: Drawing) -> Drawing {
     let was = amiss(board, plan, &drawing);
     for leave in [&[][..], &poured[..]] {
         let (less, taken) = spare::spare(board, plan, &drawing, leave);
-        if taken == 0 {
+        // (Nothing taken out, and no via joined to its track either.)
+        if taken == 0 && less.wires.len() == drawing.wires.len() {
             continue;
         }
         let now = amiss(board, plan, &less);
