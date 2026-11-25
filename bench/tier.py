@@ -20,7 +20,8 @@ a run is using must never be built over.
 All builds' boards go through one pool, turn about, so load falls on each alike; a board is
 routed several ways at once, so the pool is a third of $RESERVED_CORES (book them with
 `reserve --here`: the lab is not in git). Each board runs under a memory cap and is stopped
-after --cap seconds. With WIRE_FIRST set the router stops at its first plan and drawing: left
+after --cap seconds; a board stopped there, or that failed, has its row say where the router's
+last partial board is and what its trace last said (`partial`, `last`). With WIRE_FIRST set the router stops at its first plan and drawing: left
 plus undrawn there is the steady measure of a planner or drawer change, where whole runs differ
 by a few connections from the laying again alone.
 
@@ -108,6 +109,15 @@ def clean(board):
     return d.get("unconnected") == 0 and not d.get("new_errors")
 
 
+def so_far(out):
+    """What a run that did not end left in its `partial/` (crates/route/src/partial.rs): the last
+    board it wrote and the last line of its trace."""
+    d = out / "partial"
+    boards = sorted(d.glob("*.kicad_pcb"))
+    trace = (d / "trace.log").read_text().splitlines() if (d / "trace.log").exists() else []
+    return {k: v for k, v in (("partial", str(boards[-1]) if boards else None), ("last", trace[-1].strip() if trace else None)) if v}
+
+
 def route(binary, board, out, cap, env, judge, more=()):
     """One board routed by one build, and judged: the row kept in results.json."""
     out.mkdir(parents=True, exist_ok=True)
@@ -117,10 +127,10 @@ def route(binary, board, out, cap, env, judge, more=()):
     r = subprocess.run(cmd, capture_output=True, text=True, env=env)
     (out / "route.log").write_text(r.stderr)
     if r.returncode == 124:
-        return {"stopped": cap}
+        return {"stopped": cap, **so_far(out)}
     report = out / "report.json"
     if r.returncode != 0 or not report.exists():
-        return {"failed": (r.stderr.strip() or f"exit {r.returncode}")[-300:]}
+        return {"failed": (r.stderr.strip() or f"exit {r.returncode}")[-300:], **so_far(out)}
     c = json.loads(report.read_text())
     mm, vias = pcbench.lengths(out / "routed.kicad_pcb")
     row = {"open": c["open"], "faults": sum(c["faults"].values()), "left": c["left"], "undrawn": c["undrawn"], "strands": c["strands"],

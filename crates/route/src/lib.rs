@@ -6,7 +6,9 @@
 //! the pads a refill would leave short of thermal spokes), and writes `routed.kicad_pcb`,
 //! `bare.kicad_pcb` (the board stripped), `wires.json`, `report.json`, one `plan.LAYER.svg` and
 //! one `wire.LAYER.svg` per layer that has pads. The report names each plane layer taken as solid
-//! because nothing on the board says what may cross it.
+//! because nothing on the board says what may cross it. While it is at work it keeps a trace of
+//! its stages and the board as far as it has come in `partial/` ([`partial`]), so that a run
+//! stopped or killed has left what it had; a run that ends leaves the trace as `trace.log`.
 //!
 //! Environment, for looking into a run: `WIRE_WATCH=LAYER:STRAND` also writes `watch.svg`, that
 //! strand's course as the drawing saw it; `WIRE_POURS` tells each connection still open, with
@@ -25,6 +27,8 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
+pub mod partial;
+
 /// Routes the board at `path` and writes what [the module](self) says into `out`; the report.
 /// With `packages` (Boardroom's `packages/`), each pour the board's pinned blocks keep joined
 /// is kept so: no track or via laid may break a section of it that is whole on the bare board,
@@ -34,6 +38,13 @@ use serde_json::{json, Value};
 /// stand in a pad a part is soldered to; with none it is as the board's make-up has it
 /// ([`board::Board::filled_vias`]).
 pub fn route(path: &Path, out: &Path, packages: Option<&Path>, filled_vias: Option<bool>) -> Result<Value, String> {
+    route_saving(path, out, packages, filled_vias, partial::SAVE_EVERY)
+}
+
+/// [`route`], with each way's board as far as it has come written into `out/partial/` at
+/// least every `save_every` seconds while the run goes on ([`partial`]); none at 0, only the
+/// trace.
+pub fn route_saving(path: &Path, out: &Path, packages: Option<&Path>, filled_vias: Option<bool>, save_every: u64) -> Result<Value, String> {
     let (mut original, text) = board::Board::load(path).map_err(|e| e.to_string())?;
     if let Some(filled) = filled_vias {
         original.filled_vias = filled;
@@ -62,7 +73,15 @@ pub fn route(path: &Path, out: &Path, packages: Option<&Path>, filled_vias: Opti
         let (l, s) = w.split_once(':')?;
         Some((l.parse().ok()?, s.parse().ok()?))
     });
-    let (plan, drawing) = wire::route(&board);
+    let saver = partial::Saver::new(out, path, &text, &original, save_every)?;
+    // A run that crashes says so in its trace, where whoever finds it stopped will look.
+    let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| wire::route_watched(&board, &|step| saver.step(step))));
+    let (plan, drawing) = routed.unwrap_or_else(|panic| {
+        let why = panic.downcast_ref::<String>().map(String::as_str).or_else(|| panic.downcast_ref::<&str>().copied()).unwrap_or("no message");
+        saver.say(&format!("the run crashed: {why}"));
+        std::panic::resume_unwind(panic)
+    });
+    saver.say("the ways are done; the one with fewest open is checked and written");
     // The strand watched is drawn again, alone among the same wires, for its picture.
     let watched = watch.and_then(|_| wire::draw_watching(&board, &plan, watch).1);
     let seconds = started.elapsed().as_secs_f64();
@@ -177,6 +196,7 @@ pub fn route(path: &Path, out: &Path, packages: Option<&Path>, filled_vias: Opti
         "seconds": {"plan": seconds, "draw": seconds},
     });
     write("report.json", &serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?)?;
+    saver.done(&format!("done: {} connections open, {} with no way, {} wires not drawn; routed.kicad_pcb and report.json written", lines.len(), plan.left.len(), drawing.undrawn.len()));
     Ok(report)
 }
 

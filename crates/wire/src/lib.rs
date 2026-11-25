@@ -1308,8 +1308,31 @@ fn tied(board: &Board, plan: &Plan, mut drawing: Drawing, before: &[(ItemId, usi
 /// by side, on a thread each, and the two fanned out are dropped where the first comes out
 /// whole.
 pub fn route(board: &Board) -> (Plan, Drawing) {
+    route_watched(board, &|_| ())
+}
+
+/// What the ways of [`route`] are called where a run tells of them: the first, with a row of
+/// vias a little way out of each fine-pitch part ([`plan::Fan::Spread`]), and with a via at
+/// each pin's tip ([`plan::Fan::Tight`]).
+pub const WAYS: [&str; 3] = ["first", "spread", "tips"];
+
+/// One stage of a run come to its end: which way it is of ([`WAYS`]), how long that way has
+/// been at work, what was done, and the plan as it then stands, with its drawing where the
+/// stage drew one. The drawing is that plan's, so the two can be written as a board.
+pub struct Step<'a> {
+    pub way: usize,
+    pub seconds: f64,
+    pub what: &'a str,
+    pub plan: &'a Plan,
+    pub drawing: Option<&'a Drawing>,
+}
+
+/// [`route`], with each stage of each way told to `watch` as it ends, from the thread that
+/// way is on: for a run to be followed while it goes, and for what it has so far to be kept
+/// should it never end. What is told changes nothing of what is routed.
+pub fn route_watched(board: &Board, watch: &(dyn Fn(&Step) + Sync)) -> (Plan, Drawing) {
     if std::env::var("WIRE_FIRST").is_ok() {
-        let (plan, drawing) = route_with(board, None, &AtomicBool::new(false), &|_| ()).unwrap_or_else(|| (plan::start(board), Drawing::default()));
+        let (plan, drawing) = route_with(board, None, &AtomicBool::new(false), &|_| (), watch).unwrap_or_else(|| (plan::start(board), Drawing::default()));
         let drawing = without_spare(board, &plan, drawing);
         return loose::loose(board, &plan, &drawing);
     }
@@ -1321,8 +1344,8 @@ pub fn route(board: &Board) -> (Plan, Drawing) {
     let race = Race::default();
     let (plain, fanned) = std::thread::scope(|scope| {
         let race = &race;
-        let fanned: Vec<_> = [plan::Fan::Spread, plan::Fan::Tight].into_iter().enumerate().map(|(i, fan)| scope.spawn(move || race.run(i + 1, |told| route_with(board, Some(fan), &race.stop[i + 1], told)))).collect();
-        let plain = race.run(0, |told| route_with(board, None, &race.stop[0], told));
+        let fanned: Vec<_> = [plan::Fan::Spread, plan::Fan::Tight].into_iter().enumerate().map(|(i, fan)| scope.spawn(move || race.run(i + 1, |told| route_with(board, Some(fan), &race.stop[i + 1], told, watch)))).collect();
+        let plain = race.run(0, |told| route_with(board, None, &race.stop[0], told, watch));
         let still = plain.as_ref().map(|p| open(board, &p.0, &p.1));
         if still == Some(0) {
             race.stop.iter().for_each(|s| s.store(true, Ordering::Relaxed));
@@ -1442,7 +1465,7 @@ fn without_spare(board: &Board, plan: &Plan, drawing: Drawing) -> Drawing {
 
 /// [`route`] one way: with the fine-pitch parts' ways out settled first, or without. None
 /// where there is no such part.
-fn route_with(board: &Board, fan: Option<plan::Fan>, stop: &AtomicBool, told: &dyn Fn(Option<usize>)) -> Option<(Plan, Drawing)> {
+fn route_with(board: &Board, fan: Option<plan::Fan>, stop: &AtomicBool, told: &dyn Fn(Option<usize>), watch: &(dyn Fn(&Step) + Sync)) -> Option<(Plan, Drawing)> {
     let mut poured: Vec<u32> = board.zone_areas.iter().filter(|z| !z.kept && z.net != 0).map(|z| z.net).collect();
     poured.sort_unstable();
     poured.dedup();
@@ -1450,7 +1473,13 @@ fn route_with(board: &Board, fan: Option<plan::Fan>, stop: &AtomicBool, told: &d
     let mut memo = chain::Memo::default();
     let times = std::env::var("WIRE_TIMES").is_ok();
     let clock = std::time::Instant::now();
+    let way = match fan {
+        None => 0,
+        Some(plan::Fan::Spread) => 1,
+        Some(plan::Fan::Tight) => 2,
+    };
     let said = |what: &str, plan: &Plan, drawing: Option<&Drawing>| {
+        watch(&Step { way, seconds: clock.elapsed().as_secs_f64(), what, plan, drawing });
         if times {
             eprintln!("{:7.2} s  {}{what}: {} strands, {} vias, {} left{}", clock.elapsed().as_secs_f64(), match fan { Some(plan::Fan::Spread) => "ways out first, ", Some(plan::Fan::Tight) => "ways out at the tips, ", None => "" }, plan.sheets.iter().map(|s| s.laid().count()).sum::<usize>(), plan.vias.len(), plan.left.len(), drawing.map_or(String::new(), |d| format!(", {} drawn, {} not", d.wires.len(), d.undrawn.len())));
             if std::env::var("WIRE_LEFT").is_ok() {

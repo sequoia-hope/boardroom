@@ -38,7 +38,10 @@ a board project (`template/CLAUDE.md` is the board-repo version).
   in the board's project; it keeps each pour the board's pinned blocks keep joined whole, from
   `packages/` or `--packages DIR`; `--filled-vias yes|no` says whether the board is ordered with
   its vias filled and capped, so that one may stand in a soldered pad, where its layer count
-  does not: the report counts those vias and notes that the board must be ordered so); `boardroom check <board.kicad_pcb>` gives our checker's faults and open
+  does not: the report counts those vias and notes that the board must be ordered so; while it
+  runs it keeps `partial/` in its output, a `trace.log` of its stages and the board so far under
+  a new number at least every ten minutes or `--save-every SECONDS`, so a run stopped or killed
+  has left what it had, and a run that ends leaves `trace.log`); `boardroom check <board.kicad_pcb>` gives our checker's faults and open
   connections. It is a prototype: judge it with `bench/tier.py clean` (KiCad's DRC beside ours, on
   the boards whose designer's own finished board passes that DRC: the owner's test set since
   2026-11-22, and no design rule is relaxed to get a board through), and after a run of it

@@ -46,3 +46,26 @@ fn a_board_is_routed_and_its_report_names_the_solid_plane() {
     assert_eq!(bare["open"], 1, "{bare}");
     std::fs::remove_dir_all(&d).ok();
 }
+
+#[test]
+fn a_run_leaves_its_trace_and_keeps_what_a_run_that_did_not_end_left() {
+    let d = dir("trace");
+    let pcb = d.join("t.kicad_pcb");
+    std::fs::write(&pcb, BOARD).unwrap();
+    let out = d.join("out");
+    // What a run that was killed left behind.
+    std::fs::create_dir_all(out.join("partial")).unwrap();
+    std::fs::write(out.join("partial/0001-first.kicad_pcb"), "left by a run that did not end").unwrap();
+    route::route(&pcb, &out, None, None).unwrap();
+    // It is kept, apart.
+    assert_eq!(std::fs::read_to_string(out.join("partial.prev/0001-first.kicad_pcb")).unwrap(), "left by a run that did not end");
+    // This run ended: its trace is beside its result and its own partial boards are gone.
+    assert!(!out.join("partial").exists());
+    let trace = std::fs::read_to_string(out.join("trace.log")).unwrap();
+    assert!(trace.lines().next().unwrap().contains("routing "), "{trace}");
+    assert!(trace.contains("first  planned"), "{trace}");
+    assert!(trace.contains("first  drawn"), "{trace}");
+    assert!(trace.contains("written as partial/0001-first.kicad_pcb"), "{trace}");
+    assert!(trace.lines().last().unwrap().contains("done: 0 connections open"), "{trace}");
+    std::fs::remove_dir_all(&d).ok();
+}
