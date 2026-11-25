@@ -903,7 +903,9 @@ fn left_by_pours(board: &Board, plan: &Plan, drawing: &Drawing, poured: &[u32]) 
     let inner: Vec<usize> = (1..with.layers.len().saturating_sub(1)).collect();
     let bare_nets: Vec<u32> = if inner.is_empty() { Vec::new() } else { poured.iter().copied().filter(|&net| wants.iter().any(|w| w.net == net && w.into.is_empty())).collect() };
     let islands = if bare_nets.is_empty() { None } else { Some(board::Pours::with_islands(&with)) };
-    let mut free: HashMap<u32, Vec<usize>> = HashMap::new();
+    // (In the nets' order, not a hash map's: each net's root is given a connection of its own
+    // below, and two as long as each other are laid in the order they are added in.)
+    let mut free: Vec<(u32, Vec<usize>)> = Vec::new();
     for (&net, islands) in bare_nets.iter().zip(std::iter::repeat(&islands)) {
         let Some(islands) = islands else { continue };
         let mut by: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -916,10 +918,11 @@ fn left_by_pours(board: &Board, plan: &Plan, drawing: &Drawing, poured: &[u32]) 
             }
         }
         if let Some((_, list)) = by.into_iter().max_by_key(|(piece, l)| (l.len(), std::cmp::Reverse(*piece))) {
-            free.insert(net, list);
+            free.push((net, list));
         }
     }
-    for (&net, list) in &free {
+    for (net, list) in &free {
+        let net = *net;
         let cluster = |id: ItemId| joined.cluster.get(&id).copied();
         let bare: Vec<usize> = (0..wants.len()).filter(|&i| wants[i].net == net && wants[i].into.is_empty()).collect();
         let Some(root) = bare.first().and_then(|&i| cluster(wants[i].to)) else { continue };
@@ -1306,7 +1309,8 @@ fn tied(board: &Board, plan: &Plan, mut drawing: Drawing, before: &[(ItemId, usi
 /// ([`plan::Fan::Tight`]); the connections then from via to via. The one with fewest
 /// connections open is kept (the first of them where two tie). The three are worked out side
 /// by side, on a thread each, and the two fanned out are dropped where the first comes out
-/// whole.
+/// whole. Which is kept follows from what each comes to and never from which thread was
+/// quicker ([`Race`]): a board routed again comes out the same.
 pub fn route(board: &Board) -> (Plan, Drawing) {
     route_watched(board, &|_| ())
 }
@@ -1338,9 +1342,9 @@ pub fn route_watched(board: &Board, watch: &(dyn Fn(&Step) + Sync)) -> (Plan, Dr
     }
     // The ways side by side, each on a thread of its own. The fanned-out ones are for a board
     // the first leaves open, and are told to stop, at the end of what they are at, once the
-    // first has come out whole; and a way well behind the others where the pours are joined
-    // is told to stop too ([`Race`]). What is kept is as it would be with one after the other
-    // and the same ways dropped.
+    // first has come out whole and is sure to be kept; and a way well behind the others where
+    // the pours are joined is told to stop too ([`Race`]). What is kept is as it would be with
+    // one after the other and the same ways dropped.
     let race = Race::default();
     let (plain, fanned) = std::thread::scope(|scope| {
         let race = &race;
@@ -1348,7 +1352,7 @@ pub fn route_watched(board: &Board, watch: &(dyn Fn(&Step) + Sync)) -> (Plan, Dr
         let plain = race.run(0, |told| route_with(board, None, &race.stop[0], told, watch));
         let still = plain.as_ref().map(|p| open(board, &p.0, &p.1));
         if still == Some(0) {
-            race.stop.iter().for_each(|s| s.store(true, Ordering::Relaxed));
+            race.whole();
         }
         let fanned: Vec<Option<(Plan, Drawing)>> = fanned.into_iter().map(|f| f.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))).collect();
         (plain.zip(still), fanned)
@@ -1384,10 +1388,17 @@ const BEHIND: usize = 3;
 /// told to stop at the end of what it is at, and whatever it comes to is not taken. So which
 /// are dropped follows from the counts alone, not from which thread was quicker, and a way
 /// that is kept is worked out to its end as it would be alone.
+///
+/// The first way come out whole ends the others, which could do no better. Not at once: it
+/// may have been well behind at a round the others have not come to yet, and would have been
+/// dropped there, and stopped short of whole, had they been quicker. It waits for those
+/// rounds to be judged ([`Race::whole`]), and ends the others only if it is still in then.
 #[derive(Default)]
 struct Race {
     stop: [AtomicBool; 3],
     state: std::sync::Mutex<Judged>,
+    /// Woken whenever a way has told something: what [`Race::whole`] waits on.
+    told: std::sync::Condvar,
 }
 
 #[derive(Default)]
@@ -1398,22 +1409,56 @@ struct Judged {
     dropped: [bool; 3],
     /// The last round judged.
     round: usize,
+    /// The first way came out whole and is kept: nothing more is judged.
+    over: bool,
+}
+
+impl Judged {
+    /// Whether the first way, done, is still in for good (true) or dropped (false); None
+    /// while a round is still to be judged that could drop it. A way with [`BEHIND`] open or
+    /// fewer at some round is behind no other from then on, so only the rounds before that
+    /// one count: all of them, for a way that never had so few, which is then sure only once
+    /// the others have told all they will.
+    fn first_kept(&self) -> Option<bool> {
+        if self.dropped[0] {
+            return Some(false);
+        }
+        let fewest = self.open[0].iter().scan(usize::MAX, |least, &open| {
+            *least = open.min(*least);
+            Some(*least)
+        });
+        let judged = match fewest.enumerate().find(|&(_, least)| least <= BEHIND) {
+            Some((round, _)) => self.round + 1 >= round,
+            None => self.open[0].is_empty(),
+        };
+        (judged || (1..3).all(|w| self.done[w] || self.dropped[w])).then_some(true)
+    }
 }
 
 impl Race {
     /// Runs `way`, given what to tell its counts to (None once its pours are done with).
     fn run<T>(&self, way: usize, work: impl FnOnce(&dyn Fn(Option<usize>)) -> T) -> T {
-        let out = work(&|open| self.told(way, open));
-        self.told(way, None);
-        out
+        // Done with, however the work ends: a way that panics is not waited for.
+        struct Done<'a>(&'a Race, usize);
+        impl Drop for Done<'_> {
+            fn drop(&mut self) {
+                self.0.told(self.1, None);
+            }
+        }
+        let _done = Done(self, way);
+        work(&|open| self.told(way, open))
     }
 
     fn told(&self, way: usize, open: Option<usize>) {
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if s.over {
+            return;
+        }
         match open {
             Some(open) if !s.done[way] => s.open[way].push(open),
             _ => s.done[way] = true,
         }
+        self.told.notify_all();
         loop {
             let round = s.round + 1;
             let ways: Vec<usize> = (0..3).filter(|&w| !s.dropped[w] && !s.open[w].is_empty()).collect();
@@ -1437,6 +1482,29 @@ impl Race {
 
     fn dropped(&self) -> [bool; 3] {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).dropped
+    }
+
+    /// The first way has come out whole. Waits until it is known whether it is kept
+    /// ([`Judged::first_kept`]), the other ways going on meanwhile; kept, it ends them, and
+    /// nothing more is judged. Whether it was kept.
+    fn whole(&self) -> bool {
+        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if let Some(kept) = self.settle(&mut s) {
+                return kept;
+            }
+            s = self.told.wait(s).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+
+    /// [`Race::whole`] as far as it can be told now: None while it has to wait.
+    fn settle(&self, s: &mut Judged) -> Option<bool> {
+        let kept = s.first_kept()?;
+        if kept {
+            s.over = true;
+            self.stop.iter().for_each(|stop| stop.store(true, Ordering::Relaxed));
+        }
+        Some(kept)
     }
 }
 
@@ -1845,6 +1913,109 @@ mod race {
         // comes out whole drops one with more than a few open.
         let counts: [&[usize]; 3] = [&[20, 0], &[], &[22, 5]];
         assert_eq!(told(counts, &[1, 0, 2, 0, 2, 0, 2]).0, [false, false, true]);
+    }
+}
+
+#[cfg(test)]
+mod whole {
+    use super::*;
+
+    /// The three ways run to their ends, each telling its next count at its turn in `order`
+    /// and that it is done after its last; a way told to stop tells no more. The first way
+    /// comes out whole. Whether it was kept, and which ways were dropped.
+    fn ran(counts: [&[usize]; 3], order: &[usize]) -> (bool, [bool; 3]) {
+        let race = Race::default();
+        let mut next = [0; 3];
+        let mut kept = None;
+        for &w in order {
+            if next[w] > counts[w].len() {
+                continue;
+            }
+            if race.stop[w].load(Ordering::Relaxed) {
+                next[w] = counts[w].len();
+            }
+            race.told(w, counts[w].get(next[w]).copied());
+            next[w] += 1;
+            // The first way, done, hears of every turn, as it does where it waits.
+            if next[0] > counts[0].len() && kept.is_none() {
+                kept = race.settle(&mut race.state.lock().unwrap());
+            }
+        }
+        (kept.expect("every way has its turns to the end"), race.dropped())
+    }
+
+    /// The first way quickest, turn about, and the first way slowest.
+    const ORDERS: [&[usize]; 3] = [&[0, 0, 0, 0, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2], &[0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2], &[1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 0, 0, 0, 0]];
+
+    #[test]
+    fn the_first_way_whole_but_well_behind_on_the_way_is_dropped_however_quick_it_was() {
+        // At the second round it has 20 open to another's 9: dropped there, where the others
+        // are as quick as it. Quicker than they, it is whole before they come to that round,
+        // and is dropped all the same.
+        let counts: [&[usize]; 3] = [&[30, 20, 0], &[10, 9, 8], &[25, 24, 23]];
+        for order in ORDERS {
+            assert_eq!(ran(counts, order), (false, [true, false, true]), "{order:?}");
+        }
+    }
+
+    #[test]
+    fn the_first_way_whole_and_never_well_behind_is_kept_however_slow_the_others() {
+        let counts: [&[usize]; 3] = [&[30, 12, 0], &[10, 9, 8], &[11, 10, 9]];
+        for order in ORDERS {
+            let (kept, dropped) = ran(counts, order);
+            assert!(kept && !dropped[0], "{order:?}");
+        }
+        // It waits for the round it could be dropped at, and for no more: the others have
+        // told their second counts and not their third.
+        let race = Race::default();
+        for open in counts[0] {
+            race.told(0, Some(*open));
+        }
+        race.told(0, None);
+        for (second, third) in counts[1].iter().zip(counts[2]).take(2) {
+            assert_eq!(race.settle(&mut race.state.lock().unwrap()), None);
+            race.told(1, Some(*second));
+            race.told(2, Some(*third));
+        }
+        assert_eq!(race.settle(&mut race.state.lock().unwrap()), Some(true));
+        assert!(race.stop.iter().all(|s| s.load(Ordering::Relaxed)), "the others are ended");
+        // And what they tell after that drops nothing.
+        race.told(1, None);
+        race.told(2, None);
+        assert_eq!(race.dropped(), [false; 3]);
+    }
+
+    #[test]
+    fn the_first_way_whole_with_few_open_from_its_first_rounds_waits_for_nothing() {
+        // No pours, so nothing told; and a few open at the first round.
+        for counts in [&[][..], &[3, 0], &[40, 2, 0]] {
+            let race = Race::default();
+            for open in counts {
+                race.told(0, Some(*open));
+            }
+            race.told(0, None);
+            assert_eq!(race.settle(&mut race.state.lock().unwrap()), Some(true), "{counts:?}");
+        }
+    }
+
+    #[test]
+    fn the_first_way_whole_that_never_had_few_open_waits_for_the_others_ends() {
+        // Whole by what was done after the pours' rounds, with 6 open at the last of them:
+        // another way that comes to 2 drops it, one that comes to 5 does not.
+        for (last, kept) in [(2, false), (5, true)] {
+            let counts: [&[usize]; 3] = [&[30, 20, 6], &[28, 22, 9, last], &[]];
+            for order in ORDERS {
+                assert_eq!(ran(counts, order).0, kept, "{last} {order:?}");
+            }
+        }
+        // A way that panics is done with, and not waited for.
+        let race = Race::default();
+        race.told(0, Some(30));
+        race.told(0, None);
+        race.told(2, None);
+        assert_eq!(race.settle(&mut race.state.lock().unwrap()), None);
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| race.run(1, |_| panic!("a way's own fault")))).is_err());
+        assert!(race.whole());
     }
 }
 

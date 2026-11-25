@@ -45,7 +45,9 @@ a board project (`template/CLAUDE.md` is the board-repo version).
   connections. It is a prototype: judge it with `bench/tier.py clean` (KiCad's DRC beside ours, on
   the boards whose designer's own finished board passes that DRC: the owner's test set since
   2026-11-22, and no design rule is relaxed to get a board through), and after a run of it
-  rebuild the gallery the owner reviews (`bench/gallery.py`, pages in the lab).
+  rebuild the gallery the owner reviews (`bench/gallery.py`, pages in the lab). A run gives the
+  same board byte for byte every time it is asked the same thing: `bench/again.py SET` routes
+  each board several times and names any that differ.
   Board repos' `scripts/route.sh` still runs the old router (`$ULTRAROUTE`, a built binary); the
   old router's code is never brought in or built here.
 - **Making a board repo:** run `scripts/new-board.sh <dir> [--name <title>] [--github <owner>/<repo> [--private]]`,

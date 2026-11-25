@@ -1058,7 +1058,7 @@ impl Pours {
                 out.push(Starved { pad, zone: part.zone, layer: part.layer, pockets });
             }
         }
-        out.sort_by_key(|s| (s.layer, s.pad));
+        out.sort_by_key(|s| (s.layer, s.pad, s.zone));
         out
     }
 
