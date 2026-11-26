@@ -800,7 +800,14 @@ impl Space {
                     ends.insert(End::Item(id), obstacles.len());
                     add(What::Pad, item.net, Some(id), &item.shape, &mut obstacles);
                 }
-                Kind::Track if item.on(layer) => add(What::Copper, item.net, Some(id), &item.shape, &mut obstacles),
+                // A track that stays is something a strand of its net may end on, as a pad is:
+                // copper a board's group holds (a second via beside one the routing is to make,
+                // with a short track on each layer to join the two) is left by a stripped board
+                // with nothing else on its net near it.
+                Kind::Track if item.on(layer) => {
+                    ends.insert(End::Item(id), obstacles.len());
+                    add(What::Copper, item.net, Some(id), &item.shape, &mut obstacles);
+                }
                 Kind::Pour { .. } if item.on(layer) && !item.refilled() => add(What::Copper, item.net, Some(id), &item.shape, &mut obstacles),
                 Kind::Keepout { forbids, .. } if forbids.tracks && item.on(layer) => add(What::Keepout, 0, Some(id), &item.shape, &mut obstacles),
                 _ => {}

@@ -1093,6 +1093,7 @@ name = "plan"
 version = "0.1.0"
 dependencies = [
  "board",
+ "kicad",
  "serde",
  "serde_json",
  "spade",
