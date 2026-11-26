@@ -682,6 +682,14 @@ const ACROSS_AGAIN: usize = 24;
 /// to be laid again, this many times over.
 const DEEP: usize = 2;
 
+/// How far from the ends of a connection with no way the vias are that are moved outward to
+/// make it one, mm: each in turn.
+const NUDGE: [f64; 3] = [0.8, 1.6, 2.4];
+/// How much farther from that end than it stood a via moved outward must then stand, mm.
+const NUDGE_OUT: f64 = 0.05;
+/// A via that more connections than this end in is left where it is.
+const NUDGED_WITH: usize = 6;
+
 /// A wire in 0/45/90 is at most this many times as long as its strand pulled tight: a line
 /// half-way between two of its eight directions, and a little for its bends.
 const DRAWN: f64 = 1.1;
@@ -704,14 +712,19 @@ impl Job<'_> {
     /// layer that is nearly direct is taken. A long way round is weighed against the way with
     /// vias, each via counted as [`VIA`] of length.
     fn best(&self, sheets: &[Sheet], c: usize) -> Option<(f64, Vec<Sheet>)> {
+        self.best_off(sheets, c, &[])
+    }
+
+    /// [`Job::best`] with no via at any of the spots `off`.
+    fn best_off(&self, sheets: &[Sheet], c: usize, off: &[usize]) -> Option<(f64, Vec<Sheet>)> {
         let want = &self.wants[c];
-        let with_vias = self.terms(true, false);
+        let with_vias = ways::Terms { ban: off, ..self.terms(true, false) };
         if want.stub {
             return lay(self.board, sheets, &with_vias, self.wants, self.joined, c);
         }
         // A way that takes its net past the length a rule holds it to is no way.
         let within = |laid: Option<(f64, Vec<Sheet>)>| laid.filter(|l| self.within(&l.1, want.net));
-        match within(lay(self.board, sheets, &self.terms(false, false), self.wants, self.joined, c)) {
+        match within(lay(self.board, sheets, &ways::Terms { ban: off, ..self.terms(false, false) }, self.wants, self.joined, c)) {
             // With a pour to end in, a via into it is always weighed against the way without.
             Some(on_one) if want.into.is_empty() && on_one.0 <= DIRECT * want.apart + SLACK => Some(on_one),
             on_one => [on_one, within(lay(self.board, sheets, &with_vias, self.wants, self.joined, c))].into_iter().flatten().min_by(|a, b| a.0.total_cmp(&b.0)),
@@ -789,6 +802,71 @@ impl Job<'_> {
                 return Some(laid);
             }
             keep.extend(over);
+        }
+        None
+    }
+
+    /// Lays `c`, which has no way, by moving the vias that stand round its ends outward, one
+    /// at a time and the farthest first, so that each has the ground the one before it left:
+    /// a via's connections are lifted and laid again with no via as near the end as it stood,
+    /// and nothing else is touched. As soon as `c` has a way it is laid, and no more is
+    /// moved. A via with nowhere farther out to go stays where it is. (The owner, of the
+    /// board finished by hand, 2026-11-25: room is made by "identifying an area where things
+    /// can move and then nudging them there one by one", not by taking up all that is near.)
+    fn nudge(&self, sheets: &[Sheet], c: usize) -> Option<Vec<Sheet>> {
+        let want = &self.wants[c];
+        let ends: Vec<space::P> = [want.from, want.to].iter().filter_map(|&pad| self.board.bbox(pad)).map(|b| [(b.min.x + b.max.x) as f64 / 2e6, (b.min.y + b.max.y) as f64 / 2e6]).collect();
+        let from_end = |p: space::P| ends.iter().map(|&e| space::dist(p, e)).fold(f64::MAX, f64::min);
+        for reach in NUDGE {
+            let mut tried = sheets.to_vec();
+            // The vias within reach, each with how far from the end it stands: farthest first.
+            let first = tried.first()?;
+            let holes = first.space.spots.holes.len();
+            let mut movers: Vec<(f64, space::P)> = first.space.vias().into_iter().enumerate().filter(|&(site, _)| site >= holes).map(|(_, (at, _))| (from_end(at), at)).filter(|m| m.0 < reach).collect();
+            movers.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1[0].total_cmp(&b.1[0])).then(a.1[1].total_cmp(&b.1[1])));
+            let mut moved = 0;
+            for (away, at) in movers {
+                // Its number now: the vias before it that went have been numbered again.
+                let first = tried.first()?;
+                let Some(site) = first.space.vias().iter().position(|v| v.0 == at) else { continue };
+                // All that ends in it, the ways out of pins last: a via stays while a strand
+                // still ends in it.
+                let mut its: Vec<usize> = tried.iter().flat_map(|s| s.laid().map(move |k| &s.strands[k])).filter(|st| st.connection != c && [st.from, st.to].contains(&End::Site(site))).map(|st| st.connection).collect();
+                its.sort_by_key(|&o| (self.wants[o].stub, o));
+                its.dedup();
+                if its.is_empty() || its.len() > NUDGED_WITH {
+                    continue;
+                }
+                // No via of theirs as near the end as this one stood.
+                let off: Vec<usize> = first.space.spots.at.iter().enumerate().filter(|&(_, &p)| from_end(p) < away + NUDGE_OUT).map(|(spot, _)| spot).collect();
+                let Some(mut next) = its.iter().try_fold(tried.clone(), |sheets, &o| lift(self.board, &sheets, o)) else { continue };
+                its.sort_by(|&a, &b| (!self.wants[a].stub).cmp(&!self.wants[b].stub).then(self.wants[a].apart.total_cmp(&self.wants[b].apart)).then(a.cmp(&b)));
+                let mut all = true;
+                for &o in &its {
+                    match self.best_off(&next, o, &off) {
+                        Some((_, laid)) => next = laid,
+                        None => {
+                            all = false;
+                            break;
+                        }
+                    }
+                }
+                if !all {
+                    continue;
+                }
+                tried = next;
+                moved += 1;
+                if let Some((_, laid)) = self.best(&tried, c) {
+                    return Some(laid);
+                }
+            }
+            if moved == 0 {
+                continue;
+            }
+            // With them all moved and still no way of its own: across what strands are left.
+            if let Some(laid) = self.through(&tried, c, 0) {
+                return Some(laid);
+            }
         }
         None
     }
@@ -1612,6 +1690,8 @@ fn place(board: &Board, plan: &mut Plan, which: &[usize]) {
     // last thing tried made a connection take any way round, however long.)
     let joined = plan.joined.clone();
     for &c in which {
+        // The vias round its ends are moved for it once, at the width it is first tried at.
+        let mut nudged = false;
         // At its class's width; with no way at that, narrower, for as long as it may be.
         loop {
             let job = Job { board, dear: &dear, wants: &plan.wants, joined: &joined };
@@ -1636,6 +1716,14 @@ fn place(board: &Board, plan: &mut Plan, which: &[usize]) {
                 }
                 _ => None,
             };
+            // With no way even so: the vias round its ends are moved outward one by one.
+            let lifted = lifted.or_else(|| {
+                if best.is_some() || nudged {
+                    return None;
+                }
+                nudged = true;
+                job.nudge(&sheets, c)
+            });
             if let Some(laid) = lifted.or(best) {
                 sheets = laid;
                 break;

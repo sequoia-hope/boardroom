@@ -90,6 +90,51 @@ const FULL_GAP: [Pad; 41] = [
     ("U3", "60", 'B', 4.2, 0.8375, 0.2, 0.875, 0.0, false, "SS"),
 ];
 
+/// The flash lines with four more nets laid at random between the parts round them (the small
+/// boards the planner's moves were measured on, 2026-11-25), cut down to what still shows it.
+#[rustfmt::skip]
+const CROWDED: [Pad; 39] = [
+    ("D93", "1", 'F', 4.525, 1.625, 0.45, 0.65, 0.0, false, "X"),
+    ("D93", "2", 'F', 4.525, 2.575, 0.45, 0.65, 0.0, false, "X"),
+    ("D93", "3", 'F', 5.775, 1.625, 0.45, 0.65, 0.0, false, "X"),
+    ("D93", "4", 'F', 5.775, 2.575, 0.45, 0.65, 0.0, false, "X"),
+    ("D94", "2", 'F', 4.525, 5.175, 0.45, 0.65, 0.0, false, "X"),
+    ("D84", "4", 'F', 2.075, 6.575, 0.45, 0.65, 0.0, false, "X"),
+    ("D95", "1", 'F', 4.525, 6.825, 0.45, 0.65, 0.0, false, "X"),
+    ("R14", "1", 'B', 6.9, 4.11, 0.54, 0.64, 90.0, true, "N2"),
+    ("R14", "2", 'B', 6.9, 3.09, 0.54, 0.64, 90.0, true, "X"),
+    ("C4", "1", 'B', 3.8, 3.57, 0.56, 0.62, 270.0, true, "X"),
+    ("C4", "2", 'B', 3.8, 4.53, 0.56, 0.62, 270.0, true, "GND"),
+    ("R15", "1", 'B', 5.9, 4.11, 0.54, 0.64, 90.0, true, "X"),
+    ("R15", "2", 'B', 5.9, 3.09, 0.54, 0.64, 90.0, true, "N3"),
+    ("C13", "1", 'B', 4.9, 3.12, 0.56, 0.62, 270.0, true, "X"),
+    ("C13", "2", 'B', 4.9, 4.08, 0.56, 0.62, 270.0, true, "GND"),
+    ("C3", "1", 'B', 2.58, 2.4, 0.56, 0.62, 180.0, true, "N0"),
+    ("C3", "2", 'B', 1.62, 2.4, 0.56, 0.62, 180.0, true, "GND"),
+    ("R16", "1", 'B', 4.5407, 2.0963, 0.54, 0.64, 180.0, true, "SS"),
+    ("R16", "2", 'B', 3.5207, 2.0963, 0.54, 0.64, 180.0, true, "X"),
+    ("U6", "3", 'B', 1.87, 4.725, 0.1485, 0.1485, 180.0, false, "N0"),
+    ("U6", "5", 'B', 2.3, 4.4, 0.58, 0.58, 135.0, true, "GND"),
+    ("U4", "1", 'B', 5.255, 11.3, 0.75, 0.5, 90.0, true, "SS"),
+    ("U4", "2", 'B', 3.985, 11.3, 0.75, 0.5, 90.0, true, "SD1"),
+    ("U4", "3", 'B', 2.715, 11.3, 0.75, 0.5, 90.0, true, "SD2"),
+    ("U4", "5", 'B', 1.445, 5.9, 0.75, 0.5, 90.0, true, "SD0"),
+    ("U4", "6", 'B', 2.715, 5.9, 0.75, 0.5, 90.0, true, "SCLK"),
+    ("U4", "7", 'B', 3.985, 5.9, 0.75, 0.5, 90.0, true, "SD3"),
+    ("U4", "8", 'B', 5.255, 5.9, 0.75, 0.5, 90.0, true, "X"),
+    ("C8", "1", 'B', 1.98, 0.4, 0.56, 0.62, 180.0, true, "N1"),
+    ("U3", "1", 'B', 3.5625, 0.2, 0.875, 0.2, 0.0, false, "N3"),
+    ("U3", "52", 'B', 7.4, 0.8375, 0.2, 0.875, 0.0, true, "X"),
+    ("U3", "53", 'B', 7.0, 0.8375, 0.2, 0.875, 0.0, true, "N1"),
+    ("U3", "54", 'B', 6.6, 0.8375, 0.2, 0.875, 0.0, true, "N2"),
+    ("U3", "55", 'B', 6.2, 0.8375, 0.2, 0.875, 0.0, true, "SD3"),
+    ("U3", "56", 'B', 5.8, 0.8375, 0.2, 0.875, 0.0, true, "SCLK"),
+    ("U3", "57", 'B', 5.4, 0.8375, 0.2, 0.875, 0.0, true, "SD0"),
+    ("U3", "58", 'B', 5.0, 0.8375, 0.2, 0.875, 0.0, true, "SD2"),
+    ("U3", "59", 'B', 4.6, 0.8375, 0.2, 0.875, 0.0, true, "SD1"),
+    ("U3", "60", 'B', 4.2, 0.8375, 0.2, 0.875, 0.0, false, "SS"),
+];
+
 /// The pads as a board of four layers, the second a ground plane: tracks and clearances of
 /// 0.1 mm, vias of 0.3 mm with a 0.15 mm hole that keeps 0.2 mm from other copper.
 fn corner(pads: &[Pad]) -> Board {
@@ -176,6 +221,21 @@ fn a_pin_behind_a_gap_that_others_fill_has_them_moved() {
     let board = corner(&FULL_GAP);
     let mut plan = plan::start(&board);
     plan::add(&board, &mut plan, lines(&board));
+    assert!(plan.left.is_empty(), "left: {:?}", left(&board, &plan));
+}
+
+/// Ten nets among vias the plan has put in for those laid before: the flash line SD2, from
+/// the chip's row of pins to the flash chip, has no way even across other strands, because
+/// the vias round the row stand where it would go down, and going across a strand moves no
+/// via. Moving those vias outward one at a time, each one's connections laid again with no
+/// via as near the row as it stood, gives it one, down an inner layer. All eleven connections
+/// are planned.
+#[test]
+fn a_connection_shut_in_by_vias_has_them_moved_outward_one_at_a_time() {
+    let board = corner(&CROWDED);
+    let mut plan = plan::start(&board);
+    plan::add(&board, &mut plan, lines(&board));
+    assert_eq!(plan.wants.len(), 11);
     assert!(plan.left.is_empty(), "left: {:?}", left(&board, &plan));
 }
 
