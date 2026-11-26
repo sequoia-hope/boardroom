@@ -762,6 +762,28 @@ fn quietly<T>(work: impl FnOnce() -> T) -> std::thread::Result<T> {
     out
 }
 
+/// The triangle that `p` is well inside, off each of its sides by [`SPOT_MARGIN`]: one of
+/// `count`, each with its `corners`, found by the triangulation's own walk (`tri_of` gives the
+/// triangle a face of it is). That walk can go round for ever on a triangulation whose sides
+/// were split where they cross, which the library ends by a panic (studio-amp's compute board,
+/// 2026-11-26: each way of the run died of it in turn, seven hours in). The triangle is then
+/// looked for among them all, which finds the same one: no two overlap.
+fn triangle_of(cdt: &ConstrainedDelaunayTriangulation<Point2<f64>>, tri_of: &HashMap<usize, usize>, count: usize, corners: impl Fn(usize) -> [P; 3], p: P) -> Option<usize> {
+    let clear = |t: usize| {
+        let c = corners(t);
+        (0..3).all(|i| {
+            let (a, b, o) = (c[i], c[(i + 1) % 3], c[(i + 2) % 3]);
+            let side = |q: P| (b[0] - a[0]) * (q[1] - a[1]) - (b[1] - a[1]) * (q[0] - a[0]);
+            side(p) * side(o) > 0.0 && side(p).abs() >= SPOT_MARGIN * dist(a, b)
+        })
+    };
+    match quietly(|| cdt.locate(Point2::new(p[0], p[1]))) {
+        Ok(spade::PositionInTriangulation::OnFace(face)) => tri_of.get(&face.index()).copied().filter(|&t| clear(t)),
+        Ok(_) => None,
+        Err(_) => (0..count).find(|&t| clear(t)),
+    }
+}
+
 impl Space {
     /// The room on `layer` of `board`, tracks and vias that are not locked left out (strip the
     /// board first: see [`crate::strip`]), with the plan's `vias` (each a middle and a net) as
@@ -1073,18 +1095,8 @@ impl Space {
             if vias.iter().any(|&(at, _)| dist(at, p) < spots.apart) {
                 continue;
             }
-            let spade::PositionInTriangulation::OnFace(face) = cdt.locate(Point2::new(p[0], p[1])) else { continue };
-            let Some(&t) = tri_of.get(&face.index()) else { continue };
-            if tris[t].inside.is_some() {
-                continue;
-            }
-            let c = tris[t].v.map(|v| verts[v]);
-            let clear = (0..3).all(|i| {
-                let (a, b, o) = (c[i], c[(i + 1) % 3], c[(i + 2) % 3]);
-                let side = |q: P| (b[0] - a[0]) * (q[1] - a[1]) - (b[1] - a[1]) * (q[0] - a[0]);
-                side(p) * side(o) > 0.0 && side(p).abs() >= SPOT_MARGIN * dist(a, b)
-            });
-            if clear {
+            let Some(t) = triangle_of(&cdt, &tri_of, tris.len(), |t| tris[t].v.map(|v| verts[v]), p) else { continue };
+            if tris[t].inside.is_none() {
                 spot_tri[k] = Some(t);
                 tri_spots[t].push(k);
             }
@@ -1284,5 +1296,44 @@ impl Space {
                 (board.clearance(net, o.net).max(own) as f64 / 1e6).max(o.mask).max(o.hole) + o.reach + o.past
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The triangulation's own walk to a place goes round for ever, and the library panics,
+    /// on thirteen outlines of studio-amp's compute board (an inner layer, with one via spot:
+    /// `tests/locate-walk.txt`, cut down from the 786 outlines and 20,697 spots of the map
+    /// the run died in). The spot's triangle is found all the same.
+    #[test]
+    fn a_spot_is_found_in_its_triangle_where_the_triangulations_walk_fails() {
+        let nums = |l: &str| -> Vec<P> { l.split_whitespace().skip(1).map(|w| w.parse().unwrap()).collect::<Vec<f64>>().chunks(2).map(|c| [c[0], c[1]]).collect() };
+        let text = include_str!("../tests/locate-walk.txt");
+        let polys: Vec<Vec<P>> = text.lines().filter(|l| l.starts_with("poly ")).map(nums).collect();
+        let spot = text.lines().find(|l| l.starts_with("spot ")).map(nums).unwrap()[0];
+        // As `Space::new` makes it: a vertex for each place, each outline's sides as constraints.
+        let key = |p: P| ((p[0] * 1e6).round() as i64, (p[1] * 1e6).round() as i64);
+        let mut cdt = ConstrainedDelaunayTriangulation::<Point2<f64>>::new();
+        let mut at = HashMap::new();
+        for poly in &polys {
+            let hs: Vec<_> = poly.iter().map(|&p| *at.entry(key(p)).or_insert_with(|| cdt.insert(Point2::new(p[0], p[1])).unwrap())).collect();
+            for i in 0..hs.len() {
+                let (a, b) = (hs[i], hs[(i + 1) % hs.len()]);
+                if a != b {
+                    cdt.add_constraint_and_split(a, b, |p| p);
+                }
+            }
+        }
+        let corners: Vec<[P; 3]> = cdt.inner_faces().map(|f| f.vertices().map(|v| [v.position().x, v.position().y])).collect();
+        let tri_of: HashMap<usize, usize> = cdt.inner_faces().enumerate().map(|(t, f)| (f.fix().index(), t)).collect();
+        let t = triangle_of(&cdt, &tri_of, corners.len(), |t| corners[t], spot).expect("the spot is well inside a triangle");
+        let c = corners[t];
+        let side = |a: P, b: P, q: P| (b[0] - a[0]) * (q[1] - a[1]) - (b[1] - a[1]) * (q[0] - a[0]);
+        assert!((0..3).all(|i| side(c[i], c[(i + 1) % 3], spot) * side(c[i], c[(i + 1) % 3], c[(i + 2) % 3]) > 0.0), "{c:?}");
+        // Only one holds it, so looking through them all finds what the walk would have.
+        let holding = (0..corners.len()).filter(|&u| (0..3).all(|i| side(corners[u][i], corners[u][(i + 1) % 3], spot) * side(corners[u][i], corners[u][(i + 1) % 3], corners[u][(i + 2) % 3]) > 0.0)).count();
+        assert_eq!(holding, 1);
     }
 }

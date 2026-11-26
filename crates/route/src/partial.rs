@@ -14,7 +14,10 @@
 //!   ordinary board file. The first drawing of each way is written, then one whenever that way
 //!   has fewer not done than at any time before (no sooner than a fifth of the interval after
 //!   its last), and one at least every interval. The numbers run on across the ways in the
-//!   order written; the trace says which is which and how much each has not done. These are
+//!   order written; the trace says which is which and how much each has not done. A way's
+//!   counts before its pours are without the connections of the nets left to them, which are
+//!   planned only once the pours are filled: its line says so, the fewest starts again
+//!   there, and a count before is not to be set beside one after. These are
 //!   stages of work in progress: wires the run would yet take out or lay again are in them.
 //!
 //! A run that ends writes its result beside `partial/` as ever, moves the trace there
@@ -48,6 +51,8 @@ struct State {
     /// For each way: when its last board was written, and the fewest it has had not done.
     last: [Option<f64>; 3],
     fewest: [Option<usize>; 3],
+    /// For each way: whether its last stage was before its pours ([`wire::Step::pours_to_come`]).
+    before_pours: [bool; 3],
     /// Writing has failed and been said to have: no more is tried.
     failed: bool,
 }
@@ -108,6 +113,11 @@ impl<'a> Saver<'a> {
         let number = {
             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             self.line(&mut state, &format!("{way:<6} {}: {laid} strands, {} vias, {} with no way{drawn}", step.what, step.plan.vias.len(), step.plan.left.len()));
+            if step.way < 3 && state.before_pours[step.way] != step.pours_to_come {
+                // What the pours leave apart is counted from here on: the fewest starts again.
+                state.before_pours[step.way] = step.pours_to_come;
+                state.fewest[step.way] = None;
+            }
             let Some(drawing) = step.drawing.filter(|_| self.every > 0.0 && !state.failed && step.way < 3) else { return };
             let not_done = step.plan.left.len() + drawing.undrawn.len();
             let since = state.last[step.way].map(|last| at - last);
@@ -121,10 +131,11 @@ impl<'a> Saver<'a> {
             }
             state.last[step.way] = Some(at);
             state.written += 1;
-            (state.written, not_done)
+            (state.written, not_done, step.pours_to_come)
         };
         let Some(drawing) = step.drawing else { return };
-        let (n, not_done) = number;
+        let (n, not_done, before_pours) = number;
+        let basis = if !before_pours { "" } else { "; before the pours, so what they will leave apart is not among them" };
         let name = format!("{n:04}-{way}.kicad_pcb");
         // Written whole under another name and then given its own: a run killed while it
         // writes leaves no half of a board.
@@ -132,7 +143,7 @@ impl<'a> Saver<'a> {
         let wrote = std::fs::write(&tmp, wire::write(self.text, self.original, step.plan, drawing)).and_then(|_| std::fs::rename(&tmp, &to));
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         match wrote {
-            Ok(()) => self.line(&mut state, &format!("{way:<6} written as partial/{name}: {not_done} not done (no way, or not drawn)")),
+            Ok(()) => self.line(&mut state, &format!("{way:<6} written as partial/{name}: {not_done} not done (no way, or not drawn){basis}")),
             Err(e) => self.fail(&mut state, &format!("{}: {e}", to.display())),
         }
     }
@@ -202,19 +213,47 @@ mod tests {
         for (every, boards) in [(600, 1), (0, 0)] {
             let out = d.join(format!("out-{every}"));
             let saver = super::Saver::new(&out, &pcb, &text, &original, every).unwrap();
-            wire::route_watched(&bare, &|step| saver.step(step));
+            wire::route_watched(&bare, &|step| saver.step(step), &|_, _| ());
             let trace = std::fs::read_to_string(out.join("partial/trace.log")).unwrap();
             assert!(trace.contains("first  drawn: 1 strands, 0 vias, 0 with no way, 1 wires drawn and 0 not"), "{trace}");
             let written: Vec<_> = std::fs::read_dir(out.join("partial")).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).filter(|n| n.ends_with(".kicad_pcb")).collect();
             assert_eq!(written.len(), boards, "{written:?}");
             if boards == 1 {
                 assert_eq!(written, ["0001-first.kicad_pcb"]);
-                assert!(trace.contains("written as partial/0001-first.kicad_pcb: 0 not done"), "{trace}");
+                assert!(trace.contains("written as partial/0001-first.kicad_pcb: 0 not done (no way, or not drawn)  ["), "{trace}");
                 let (so_far, _) = board::Board::load(&out.join("partial/0001-first.kicad_pcb")).unwrap();
                 assert!(so_far.items().any(|(_, i)| matches!(i.kind, board::Kind::Track)), "the wire is in it");
                 assert_eq!(board::connectivity_without_pours(&so_far).airlines.len(), 0);
             }
         }
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A board drawn before its pours are come to is said to be: the nets left to the pours
+    /// are not in the plan yet, and its count is not one to set beside those after.
+    #[test]
+    fn a_board_written_before_the_pours_says_so() {
+        let poured = BOARD.trim_end().strip_suffix(')').unwrap().replace("(net 1 \"A\")", "(net 1 \"A\") (net 2 \"G\")")
+            + r#" (footprint "t:R" (layer "F.Cu") (at 0 0) (property "Reference" "R3") (property "Value" "")
+   (pad "1" smd rect (at 4 4) (size 1 1) (layers "F.Cu") (net 2 "G")))
+ (footprint "t:R" (layer "F.Cu") (at 0 0) (property "Reference" "R4") (property "Value" "")
+   (pad "1" smd rect (at 16 16) (size 1 1) (layers "F.Cu") (net 2 "G")))
+ (zone (net 2) (net_name "G") (layer "B.Cu") (hatch edge 0.5) (connect_pads (clearance 0.2)) (min_thickness 0.25)
+   (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5)) (polygon (pts (xy 1 1) (xy 19 1) (xy 19 19) (xy 1 19)))))
+"#;
+        let d = std::env::temp_dir().join(format!("route-partial-pours-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let pcb = d.join("t.kicad_pcb");
+        std::fs::write(&pcb, poured).unwrap();
+        let (original, text) = board::Board::load(&pcb).unwrap();
+        let mut bare = original.clone();
+        plan::strip(&mut bare);
+        let saver = super::Saver::new(&d.join("out"), &pcb, &text, &original, 600).unwrap();
+        wire::route_watched(&bare, &|step| saver.step(step), &|_, _| ());
+        let trace = std::fs::read_to_string(d.join("out/partial/trace.log")).unwrap();
+        assert!(trace.contains("written as partial/0001-first.kicad_pcb: 0 not done (no way, or not drawn); before the pours"), "{trace}");
+        assert!(trace.contains("first  poured"), "{trace}");
         std::fs::remove_dir_all(&d).ok();
     }
 

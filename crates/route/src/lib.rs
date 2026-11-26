@@ -75,12 +75,20 @@ pub fn route_saving(path: &Path, out: &Path, packages: Option<&Path>, filled_via
     });
     let saver = partial::Saver::new(out, path, &text, &original, save_every)?;
     // A run that crashes says so in its trace, where whoever finds it stopped will look.
-    let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| wire::route_watched(&board, &|step| saver.step(step))));
+    // A way that crashes is left out and the others gone on with: the trace and the report say so.
+    let crashes = std::cell::RefCell::new(Vec::new());
+    let crashed = |way: usize, why: &str| {
+        let note = format!("the {} way crashed and was left out, the result being the best of the others: {why}", wire::WAYS[way]);
+        saver.say(&note);
+        crashes.borrow_mut().push(note);
+    };
+    let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| wire::route_watched(&board, &|step| saver.step(step), &crashed)));
     let (plan, drawing) = routed.unwrap_or_else(|panic| {
         let why = panic.downcast_ref::<String>().map(String::as_str).or_else(|| panic.downcast_ref::<&str>().copied()).unwrap_or("no message");
         saver.say(&format!("the run crashed: {why}"));
         std::panic::resume_unwind(panic)
     });
+    notes.extend(crashes.take());
     saver.say("the ways are done; the one with fewest open is checked and written");
     // The strand watched is drawn again, alone among the same wires, for its picture.
     let watched = watch.and_then(|_| wire::draw_watching(&board, &plan, watch).1);

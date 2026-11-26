@@ -1315,7 +1315,7 @@ fn tied(board: &Board, plan: &Plan, mut drawing: Drawing, before: &[(ItemId, usi
 /// whole. Which is kept follows from what each comes to and never from which thread was
 /// quicker ([`Race`]): a board routed again comes out the same.
 pub fn route(board: &Board) -> (Plan, Drawing) {
-    route_watched(board, &|_| ())
+    route_watched(board, &|_| (), &|way, why| eprintln!("wire: the {} way crashed and is left out: {why}", WAYS[way]))
 }
 
 /// What the ways of [`route`] are called where a run tells of them: the first, with a row of
@@ -1332,12 +1332,20 @@ pub struct Step<'a> {
     pub what: &'a str,
     pub plan: &'a Plan,
     pub drawing: Option<&'a Drawing>,
+    /// The board has nets left to their pours and this way has not come to them yet: the
+    /// plan holds none of their connections, so its counts are without what the pours will
+    /// leave apart, and are not to be set beside the counts after.
+    pub pours_to_come: bool,
 }
 
 /// [`route`], with each stage of each way told to `watch` as it ends, from the thread that
 /// way is on: for a run to be followed while it goes, and for what it has so far to be kept
 /// should it never end. What is told changes nothing of what is routed.
-pub fn route_watched(board: &Board, watch: &(dyn Fn(&Step) + Sync)) -> (Plan, Drawing) {
+///
+/// A way that panics is left out, `crashed` told which and with what, and the others are gone
+/// on with: the fault is that way's, and what the others come to is still a board. Only when
+/// every way has panicked does the first one's panic go on.
+pub fn route_watched(board: &Board, watch: &(dyn Fn(&Step) + Sync), crashed: &dyn Fn(usize, &str)) -> (Plan, Drawing) {
     if std::env::var("WIRE_FIRST").is_ok() {
         let (plan, drawing) = route_with(board, None, &AtomicBool::new(false), &|_| (), watch).unwrap_or_else(|| (plan::start(board), Drawing::default()));
         let drawing = without_spare(board, &plan, drawing);
@@ -1354,13 +1362,14 @@ pub fn route_watched(board: &Board, watch: &(dyn Fn(&Step) + Sync)) -> (Plan, Dr
     let (plain, fanned) = std::thread::scope(|scope| {
         let race = &race;
         let fanned: Vec<_> = [plan::Fan::Spread, plan::Fan::Tight].into_iter().enumerate().map(|(i, fan)| scope.spawn(move || race.run(i + 1, |told| route_with(board, Some(fan), &race.stop[i + 1], told, watch)))).collect();
-        let plain = race.run(0, |told| route_with(board, None, &race.stop[0], told, watch));
-        let still = plain.as_ref().map(|p| open(board, &p.0, &p.1));
+        let plain = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| race.run(0, |told| route_with(board, None, &race.stop[0], told, watch))));
+        let still = plain.as_ref().ok().and_then(|p| p.as_ref()).map(|p| open(board, &p.0, &p.1));
         if still == Some(0) {
             race.whole();
         }
-        let fanned: Vec<Option<(Plan, Drawing)>> = fanned.into_iter().map(|f| f.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))).collect();
-        (plain.zip(still), fanned)
+        let mut ways = outlived(std::iter::once(plain).chain(fanned.into_iter().map(|f| f.join())).collect(), crashed).into_iter();
+        let plain = ways.next().flatten();
+        (plain.zip(still), ways.collect::<Vec<_>>())
     });
     let dropped = race.dropped();
     let mut kept: Option<(usize, Plan, Drawing)> = plain.filter(|_| !dropped[0]).map(|((plan, drawing), still)| (still, plan, drawing));
@@ -1381,6 +1390,22 @@ pub fn route_watched(board: &Board, watch: &(dyn Fn(&Step) + Sync)) -> (Plan, Dr
     // A net that steps up to another layer and down again for nothing, joined where it is.
     let (plan, drawing, _) = hops::hops(board, plan, drawing);
     (plan, drawing)
+}
+
+/// What each way came to, a way that panicked having come to nothing: `crashed` is told which
+/// and with what. All of them panicked: the first one's panic goes on, there being no board.
+fn outlived<T>(ways: Vec<std::thread::Result<Option<T>>>, crashed: &dyn Fn(usize, &str)) -> Vec<Option<T>> {
+    if !ways.is_empty() && ways.iter().all(|w| w.is_err()) {
+        let first = ways.into_iter().find_map(|w| w.err()).expect("all are panics");
+        std::panic::resume_unwind(first);
+    }
+    let came_to = |(way, w): (usize, std::thread::Result<Option<T>>)| {
+        w.unwrap_or_else(|panic| {
+            crashed(way, panic.downcast_ref::<String>().map(String::as_str).or_else(|| panic.downcast_ref::<&str>().copied()).unwrap_or("no message"));
+            None
+        })
+    };
+    ways.into_iter().enumerate().map(came_to).collect()
 }
 
 /// How far behind the way with fewest connections open another may be, where the pours are
@@ -1555,8 +1580,14 @@ fn route_with(board: &Board, fan: Option<plan::Fan>, stop: &AtomicBool, told: &d
         Some(plan::Fan::Spread) => 1,
         Some(plan::Fan::Tight) => 2,
     };
+    // Whether the nets left to their pours are still to be planned: until the pours' first
+    // round, the plan holds none of their connections.
+    let pours_to_come = std::cell::Cell::new(!poured.is_empty());
     let said = |what: &str, plan: &Plan, drawing: Option<&Drawing>| {
-        watch(&Step { way, seconds: clock.elapsed().as_secs_f64(), what, plan, drawing });
+        if what.starts_with("poured") {
+            pours_to_come.set(false);
+        }
+        watch(&Step { way, seconds: clock.elapsed().as_secs_f64(), what, plan, drawing, pours_to_come: pours_to_come.get() });
         if times {
             eprintln!("{:7.2} s  {}{what}: {} strands, {} vias, {} left{}", clock.elapsed().as_secs_f64(), match fan { Some(plan::Fan::Spread) => "ways out first, ", Some(plan::Fan::Tight) => "ways out at the tips, ", None => "" }, plan.sheets.iter().map(|s| s.laid().count()).sum::<usize>(), plan.vias.len(), plan.left.len(), drawing.map_or(String::new(), |d| format!(", {} drawn, {} not", d.wires.len(), d.undrawn.len())));
             if std::env::var("WIRE_LEFT").is_ok() {
@@ -2025,6 +2056,20 @@ mod whole {
         assert_eq!(race.settle(&mut race.state.lock().unwrap()), None);
         assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| race.run(1, |_| panic!("a way's own fault")))).is_err());
         assert!(race.whole());
+    }
+
+    #[test]
+    fn a_way_that_panics_is_left_out_and_the_others_kept() {
+        let fault = || -> std::thread::Result<Option<u8>> { Err(Box::new("a way's own fault")) };
+        let said = std::cell::RefCell::new(Vec::new());
+        let crashed = |way: usize, why: &str| said.borrow_mut().push((way, why.to_string()));
+        assert_eq!(outlived(vec![Ok(Some(1)), fault(), Ok(None)], &crashed), [Some(1), None, None]);
+        assert_eq!(*said.borrow(), [(1, "a way's own fault".to_string())]);
+        // The first way's fault does not cost the others' boards either.
+        assert_eq!(outlived(vec![fault(), fault(), Ok(Some(3))], &crashed), [None, None, Some(3)]);
+        // With no way left there is no board, and the panic is the run's.
+        let all = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| outlived(vec![fault(), fault(), fault()], &crashed)));
+        assert!(all.is_err());
     }
 }
 
