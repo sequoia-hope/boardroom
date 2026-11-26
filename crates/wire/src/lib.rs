@@ -21,11 +21,14 @@
 //!
 //! Last of all, copper a net has no need of is taken out ([`spare`]): a wire is drawn from pad
 //! to pad knowing nothing of the copper its net has already, and where it joins that copper a
-//! second time one of the two ways round is spare.
+//! second time one of the two ways round is spare. Where several wires of a net meet on a
+//! layer through vias of their own and leave all on one other layer, they are joined on that
+//! layer instead and the vias go ([`hops`]).
 
 pub mod chain;
 pub mod convex;
 pub mod draw;
+pub mod hops;
 pub mod loose;
 pub mod spare;
 
@@ -1338,7 +1341,9 @@ pub fn route_watched(board: &Board, watch: &(dyn Fn(&Step) + Sync)) -> (Plan, Dr
     if std::env::var("WIRE_FIRST").is_ok() {
         let (plan, drawing) = route_with(board, None, &AtomicBool::new(false), &|_| (), watch).unwrap_or_else(|| (plan::start(board), Drawing::default()));
         let drawing = without_spare(board, &plan, drawing);
-        return loose::loose(board, &plan, &drawing);
+        let (plan, drawing) = loose::loose(board, &plan, &drawing);
+        let (plan, drawing, _) = hops::hops(board, plan, drawing);
+        return (plan, drawing);
     }
     // The ways side by side, each on a thread of its own. The fanned-out ones are for a board
     // the first leaves open, and are told to stop, at the end of what they are at, once the
@@ -1372,7 +1377,10 @@ pub fn route_watched(board: &Board, watch: &(dyn Fn(&Step) + Sync)) -> (Plan, Dr
     let Some((_, plan, drawing)) = kept else { return (plan::start(board), Drawing::default()) };
     let drawing = without_spare(board, &plan, drawing);
     // Vias and wires left joining nothing where a wire beside them could not be drawn.
-    loose::loose(board, &plan, &drawing)
+    let (plan, drawing) = loose::loose(board, &plan, &drawing);
+    // A net that steps up to another layer and down again for nothing, joined where it is.
+    let (plan, drawing, _) = hops::hops(board, plan, drawing);
+    (plan, drawing)
 }
 
 /// How far behind the way with fewest connections open another may be, where the pours are
