@@ -136,9 +136,15 @@ A change whose gain cannot be told apart from these is not committed.
   nothing changes. The owner's standing answer is no: routed boards are to pass DRC, and design
   rules are not relaxed to get a board through. A board outside the test set is never a reason
   to ask.
-- **C4. Judge on the test set, not on one board.** One board's count swings by a few between
-  runs. The measure is how many boards pass KiCad's DRC outright once routed. Our own boards
-  are always among those checked.
+- **C4. Judge on our own boards over several orders; the test set is the guard.** A change to
+  the router is measured on each of our own boards (easy2350, pendant p1-66, the earring,
+  earring-v2a, rgb-earring, p2-132-usb6), routed in several shaken orders (`PLAN_JITTER` 1 to
+  4), KiCad judging: what is reported is each board's spread before and after. One run of one
+  board proves nothing: its count swings by several from the order alone. The test set
+  (`bench/tier.py clean`) then says that nothing got worse: how many of its boards pass
+  KiCad's DRC outright, and every board that fell. (Owner, 2026-11-26, "yes" to this as
+  proposed: the test set had stood at 188 or 189 of 199 through three days of work while what
+  was left open was on our own dense boards.)
 - **C5. A board that fails DRC as its designer finished it is not tested on.** It proves nothing
   about a router, and its odd cases (pads closer than the rules, mask openings that meet, pads
   the designer left short of spokes) are not worked on.
@@ -155,17 +161,24 @@ A change whose gain cannot be told apart from these is not committed.
   acts only where that situation is found, and is measured on boards where it is absent.
 - **R4. Aim at the designers' picture.** Ours should read as designed: neighbours side by side,
   planes kept whole, short and direct. Compare the picture with the designer's before any count.
-- **R5. The old router's code may be shared; GPL code never.** What the old router does well
-  with copper that is already there (its clean-ups, its checked moves, its search that keeps a
-  change only if fewer connections are left open) may be brought into shared crates on this
-  repository's board model, for both routers to use, and the two coexist (owner, 2026-11-25:
-  "to the extent that we are borrowing code, we should just share it and make a shared library
-  between the old code and the new code and let them coexist"). It comes in a piece at a time,
-  read, tested here and measured on the test set like any other change (section 7), never
-  wholesale. The new router goes on making the copper, and nothing brought in may cost its
-  look (R4). Nothing is copied from GPL projects into the MIT crates: `copperroute`,
-  `freerouting` and `kicad-text` stay behind a process boundary. What was read and why is in
-  `docs/old-router-study.md`.
+- **R5. One router library, two modes; GPL code never.** The old router's code is in this
+  repository whole, on this repository's board model, beside the new router's: the new router
+  is one mode and the old router another (`boardroom route --mode old`), and their code is
+  shared (owner, 2026-11-26: "When I first started the port, I said, no, don't use code from
+  the old one. And I am hereby canceling that requirement. So what I want to build now is one
+  unified library with different modes, where the current new router is one mode that can be
+  run, and the old router is another mode that can be run, and all of the code is shared. And
+  then as we iterate on the new router, we will try some experiments where we pull in
+  different parts of the old router, and then we'll look at what succeeds and passes my sniff
+  test as far as the aesthetics."). The new router goes on making the copper, because its
+  boards look as people's do; the old one's parts are tried inside it for what it does not
+  do yet, closing the connections it leaves open first. Each such trial is measured like any
+  other change (C4, section 7) and its boards are put before the owner, whose
+  eye decides whether the look is kept (R4). The old mode gives the same board as its frozen
+  binary wherever this repository's checker has not since changed its mind; a change to
+  `board` or `kicad` that alters that is looked at. Nothing is copied from GPL projects into
+  the MIT crates: `copperroute`, `freerouting` and `kicad-text` stay behind a process
+  boundary. What the old router is and does: `docs/old-router-study.md`.
 
 ---
 
@@ -268,10 +281,10 @@ Before a commit that changes what the router or the checker does:
 
 - [ ] The cause was seen in a picture, on every layer that matters, beside the designer's board.
 - [ ] A test fails without the fix.
-- [ ] The test set was run; KiCad judged both sides.
+- [ ] Our own boards were routed in several orders, before and after; the test set was run
+      as the guard; KiCad judged both sides.
 - [ ] The boards that got worse were looked at, and are named in the commit message.
 - [ ] The converted places were looked at, and none is converted by a means in section 4.
-- [ ] Our own boards were checked.
 - [ ] Lint and tests are clean.
 
 Before a question to the owner:
