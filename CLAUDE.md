@@ -43,10 +43,12 @@ a board project (`template/CLAUDE.md` is the board-repo version).
   runs it keeps `partial/` in its output, a `trace.log` of its stages and the board so far under
   a new number at least every ten minutes or `--save-every SECONDS`, so a run stopped or killed
   has left what it had, and a run that ends leaves `trace.log`); `boardroom check <board.kicad_pcb>` gives our checker's faults and open
-  connections. It is a prototype: judge it with `bench/tier.py clean` (KiCad's DRC beside ours, on
-  the boards whose designer's own finished board passes that DRC: the owner's test set since
-  2026-11-22, and no design rule is relaxed to get a board through), and after a run of it
-  rebuild the gallery the owner reviews (`bench/gallery.py`, pages in the lab). A run gives the
+  connections. It is a prototype: judge a change to it on our own boards (`bench/tier.py ours`, each routed
+  in several shaken orders, `PLAN_JITTER=1..4`, KiCad's DRC beside ours: owner, 2026-11-26),
+  with `bench/tier.py clean` as the guard that nothing got worse (the boards whose designer's
+  own finished board passes KiCad's DRC: the owner's test set since 2026-11-22, and no design
+  rule is relaxed to get a board through), and after a run rebuild the gallery the owner
+  reviews (`bench/gallery.py`, pages in the lab). A run gives the
   same board byte for byte every time it is asked the same thing: `bench/again.py SET` routes
   each board several times and names any that differ.
   **The old router is here too, as `boardroom route --mode old <board.kicad_pcb> -o OUT.kicad_pcb [its own words]`**
