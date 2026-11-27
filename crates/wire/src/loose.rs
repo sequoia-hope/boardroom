@@ -23,6 +23,14 @@ use crate::{onto, Drawing};
 /// `plan`'s vias and `drawing`'s wires without those that join nothing (see the module): the
 /// plan comes back with fewer vias and is for writing the board, not for planning again.
 pub fn loose(board: &Board, plan: &Plan, drawing: &Drawing) -> (Plan, Drawing) {
+    let (plan, drawing, _) = loose_counting(board, plan, drawing);
+    (plan, drawing)
+}
+
+/// [`loose`], and how many connections are open with what it leaves on the board and the pours
+/// filled round it ([`crate::open`] of it): the pours it has just filled to find that nothing
+/// more is loose are the ones that count asks for, and filling them is most of its cost.
+pub(crate) fn loose_counting(board: &Board, plan: &Plan, drawing: &Drawing) -> (Plan, Drawing, usize) {
     let mut plan = plan.clone();
     let mut drawing = drawing.clone();
     loop {
@@ -56,7 +64,8 @@ pub fn loose(board: &Board, plan: &Plan, drawing: &Drawing) -> (Plan, Drawing) {
             })
             .collect();
         if !lone.contains(&true) && left.iter().zip(&drawing.wires).all(|(l, w)| l.as_ref() == Some(&w.pts)) {
-            return (plan, drawing);
+            let open = board::connectivity_poured(&routed, &pours).airlines.len();
+            return (plan, drawing, open);
         }
         let mut k = 0;
         plan.vias.retain(|_| {

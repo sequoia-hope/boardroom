@@ -25,8 +25,7 @@ use board::{Board, ItemId};
 use plan::space::P;
 use plan::Plan;
 
-use crate::loose::loose;
-use crate::{amiss, onto, Drawing, Wire};
+use crate::{bare_starved, onto, open, starved, Drawing, Wire};
 
 /// A net's island on one layer: its wires, the vias they join, the other layer those join,
 /// and whether it touches copper the router did not lay.
@@ -46,8 +45,10 @@ pub fn hops(board: &Board, plan: Plan, drawing: Drawing) -> (Plan, Drawing, usiz
     let mut gone = 0;
     // Islands tried and left, by their vias' places: they are not tried again.
     let mut left: BTreeSet<Vec<(i64, i64)>> = BTreeSet::new();
-    // What is open and short of spokes now: worked out once there is an island to try.
+    // What is open and short of spokes now, and the pads the bare board leaves short already:
+    // worked out once there is an island to try. Each is a filling of the pours.
     let mut was: Option<(usize, usize)> = None;
+    let mut before: Option<Vec<(ItemId, usize)>> = None;
     'again: loop {
         for island in islands(board, &plan, &drawing) {
             let key: Vec<(i64, i64)> = island.vias.iter().map(|&v| key_of(plan.vias[v].at)).collect();
@@ -59,9 +60,12 @@ pub fn hops(board: &Board, plan: Plan, drawing: Drawing) -> (Plan, Drawing, usiz
             let keeps: Vec<Option<usize>> = if island.fixed { island.vias.iter().map(|&v| Some(v)).collect() } else { vec![None] };
             let length = |d: &Drawing| -> f64 { d.wires.iter().flat_map(|w| w.pts.windows(2)).map(|s| (s[1][0] - s[0][0]).hypot(s[1][1] - s[0][1])).sum() };
             let best = keeps.into_iter().filter_map(|keep| rejoin(board, &plan, &drawing, &island, keep)).min_by(|x, y| x.0.vias.len().cmp(&y.0.vias.len()).then(length(&x.1).total_cmp(&length(&y.1))));
-            if let Some((p, d)) = best {
-                let before = *was.get_or_insert_with(|| amiss(board, &plan, &drawing));
-                let now = amiss(board, &p, &d);
+            if let Some((p, d, open_now)) = best {
+                let bare = before.get_or_insert_with(|| bare_starved(board));
+                let before = *was.get_or_insert_with(|| (open(board, &plan, &drawing), starved(board, &plan, &drawing, bare).len()));
+                // The joining ends with the pours filled round what it leaves, and says what is
+                // open then.
+                let now = (open_now, starved(board, &p, &d, bare).len());
                 if p.vias.len() < plan.vias.len() && now.0 <= before.0 && now.1 <= before.1 {
                     gone += plan.vias.len() - p.vias.len();
                     (plan, drawing, was) = (p, d, Some(now));
@@ -210,8 +214,9 @@ fn sharp(drawing: &Drawing, island: &Island, pts: &[P], corners: &[P]) -> bool {
 
 /// The plan and drawing with `island`'s vias joined on its other layer: with the island taken
 /// out where `keep` is none, or with every via of it but `keep` taken out; the vias and stubs
-/// left joining nothing gone. None where a piece the joining needs cannot be laid.
-fn rejoin(board: &Board, plan: &Plan, drawing: &Drawing, island: &Island, keep: Option<usize>) -> Option<(Plan, Drawing)> {
+/// left joining nothing gone, and how many connections are then open. None where a piece the
+/// joining needs cannot be laid.
+fn rejoin(board: &Board, plan: &Plan, drawing: &Drawing, island: &Island, keep: Option<usize>) -> Option<(Plan, Drawing, usize)> {
     let mut d = drawing.clone();
     let template = island.wires.first().map(|&w| drawing.wires[w].clone())?;
     let mut p = plan.clone();
@@ -326,5 +331,5 @@ fn rejoin(board: &Board, plan: &Plan, drawing: &Drawing, island: &Island, keep: 
         let (from, to) = (group[j], group[i]);
         group.iter_mut().filter(|g| **g == from).for_each(|g| *g = to);
     }
-    Some(loose(board, &p, &d))
+    Some(crate::loose::loose_counting(board, &p, &d))
 }

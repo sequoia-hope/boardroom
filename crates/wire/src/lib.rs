@@ -1056,7 +1056,7 @@ fn settle(board: &Board, plan: &mut Plan, memo: &mut chain::Memo, said: &dyn Fn(
 
 /// The pads `drawing` leaves with too few spokes to their pour, as KiCad counts them once the
 /// pours are filled round it, but for those in `before`, which the bare board has already.
-fn starved(board: &Board, plan: &Plan, drawing: &Drawing, before: &[(ItemId, usize)]) -> Vec<board::Starved> {
+pub(crate) fn starved(board: &Board, plan: &Plan, drawing: &Drawing, before: &[(ItemId, usize)]) -> Vec<board::Starved> {
     let (with, _) = onto(board, plan, drawing);
     board::Pours::likely(&with).starved(&with).into_iter().filter(|s| !before.contains(&(s.pad, s.layer))).collect()
 }
@@ -1065,8 +1065,14 @@ fn starved(board: &Board, plan: &Plan, drawing: &Drawing, before: &[(ItemId, usi
 /// connections are still open, and how many pads are left too few spokes to their pour that
 /// had enough on the bare board (KiCad's `starved_thermal`).
 pub fn amiss(board: &Board, plan: &Plan, drawing: &Drawing) -> (usize, usize) {
-    let before: Vec<(ItemId, usize)> = board::Pours::likely(board).starved(board).iter().map(|s| (s.pad, s.layer)).collect();
+    let before = bare_starved(board);
     (open(board, plan, drawing), starved(board, plan, drawing, &before).len())
+}
+
+/// The pads the bare board leaves with too few spokes already: the same whatever is drawn, so
+/// worked out once by whoever asks [`starved`] of several drawings.
+pub(crate) fn bare_starved(board: &Board) -> Vec<(ItemId, usize)> {
+    board::Pours::likely(board).starved(board).iter().map(|s| (s.pad, s.layer)).collect()
 }
 
 /// The wires that shut in the pour a starved pad's spokes end in, each as its connection and
