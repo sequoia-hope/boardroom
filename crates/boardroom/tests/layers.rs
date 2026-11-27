@@ -23,7 +23,9 @@ fn group(name: &str) -> Option<Group> {
         "intent" | "recognise" | "library" | "interfaces" | "packages" => Understanding,
         "examine" => Judging,
         "compose" | "pinsolve" | "floorplan" | "blockgen" => Composer,
-        "plan" | "wire" | "route" | "reshape" => UltraRoute,
+        // The old router's crates beside the new one's: two modes of one router, on one board
+        // model (owner, 2026-11-26).
+        "plan" | "wire" | "route" | "reshape" | "grid" | "morph" | "topo" | "ultraroute" => UltraRoute,
         "render" | "wasm" | "project" | "server" | "boardroom" | "boardroom-gtk" => Program,
         _ => return None,
     })

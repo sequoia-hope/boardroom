@@ -16,6 +16,7 @@
 //!     boardroom push <project-path>                 push the current branch to its upstream
 //!     boardroom snapshot [--ccomp P] <out> <dir>... a static copy for the web-only build
 //!     boardroom route <board.kicad_pcb> [--out DIR] [--packages DIR] [--filled-vias yes|no] [--save-every SECONDS]  route a board (into DIR, else route/<board>/ in its project), keeping its blocks' pours joined; a via may stand in a soldered pad where the board's vias are filled and capped (six layers or more, unless said); while it runs, a trace and the board so far are kept in DIR/partial/ (a board at least every 600 s, or as said; 0 for the trace alone)
+//!     boardroom route --mode old <board.kicad_pcb> -o OUT.kicad_pcb [...]  the old router on the same board model, with its own words (`boardroom route --mode old --help`)
 //!     boardroom check <board.kicad_pcb> [--json]    the checker's faults and open connections
 //!     boardroom pours <board.kicad_pcb> [--zone NAME] [--cut-by NET[,NET]] [--json]  each pour's pieces after a refill and where each is narrow
 //!     boardroom blocks <board.kicad_pcb> [--pin REF=PACKAGE/LAYOUT] [--accept REF[:NAME]|all] [--decline REF:NAME]  each chip's block against its package
@@ -642,6 +643,23 @@ fn route_dir(board: &std::path::Path) -> PathBuf {
 }
 
 fn route_cmd(args: &[String]) -> Result<(), String> {
+    // The old router, whole and with its own words (`boardroom route --mode old IN.kicad_pcb
+    // -o OUT.kicad_pcb ...`, `--help` for them): the same code on the same board model, a
+    // second way to route beside the new one.
+    let mode = flag(args, "mode");
+    let args: Vec<String> = match args.iter().position(|a| a == "--mode") {
+        Some(i) => args.iter().enumerate().filter(|(k, _)| *k != i && *k != i + 1).map(|(_, a)| a.clone()).collect(),
+        None => args.to_vec(),
+    };
+    let args = &args[..];
+    match mode.as_deref() {
+        None | Some("new") => {}
+        Some("old") => {
+            ultraroute::cli::run(std::iter::once("route".to_string()).chain(args.iter().cloned()).collect());
+            return Ok(());
+        }
+        Some(other) => return Err(format!("--mode is old or new, not {other}")),
+    }
     // The board: the first word that is neither a flag nor the value after `--out`.
     const USAGE: &str = "usage: boardroom route <board.kicad_pcb> [--out DIR] [--packages DIR] [--filled-vias yes|no] [--save-every SECONDS]";
     let board = args.iter().enumerate().find(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--out", "--packages", "--filled-vias", "--save-every"].contains(&args[i - 1].as_str()))).map(|(_, a)| a).ok_or(USAGE)?;

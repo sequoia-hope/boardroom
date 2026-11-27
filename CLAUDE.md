@@ -15,6 +15,7 @@ This repository holds the Cargo workspace (`crates/`: `project`, a board project
 `intent`, `recognise`, `library`, `interfaces` and `examine` (the judge, from Composer's verifier);
 `plan`, the new router's first stage, a prototype: each connection as a strand through the gaps between obstacles, before any copper, two of one net beside each other as one track, a net a custom rule holds to a length laid first and never longer than that, and a connection with no way given one by moving the strands that shut it in, or by moving the vias round its ends outward one at a time, the farthest first, until it has one;
 `wire`, its second: each strand drawn alone as 0/45/90 pieces held by the corners it passes, kept only if the checker passes it (wires drawn earlier that are in its way drawn again round it where they can be), a connection that cannot be drawn laid again narrower and then another way, a connection the plan finds no way for, at first or after others are laid again, given a hole in its pad where the pad is bare (no solder paste on it), or the board is made with its vias filled and capped (six copper layers or more, as JLCPCB makes them unasked, or `--filled-vias yes`), and can hold one (a via inside the pad, its ring past the sides of a pin narrower than itself where vias are filled, its track on another layer) and laid again, a poured net left to its pour (and a connection the pours leave open again laid again; one whose net has an inner plane nothing reaches yet goes down to that plane by a via of its own; two pours of a net still apart are joined by a via where one lies over the other), a pad the wires leave too few thermal spokes given one drawn by hand, or the pour its spokes end in a via to the net's pour on another layer, or those wires laid another way, and a board routed two more ways beside the first, with each fine-pitch part's way out settled first, a row of vias for each row of its pads (spread along the row, or at the pads' tips staggered as a designer places them, a pad whose tip has a pad of the other side opposite it given the nearest place beside), the one leaving least open kept, and a way well behind the others once its pours are joined dropped before its end (`wire::route`, on three threads and one more for each layer);
+`grid`, `morph`, `topo` and `ultraroute`, the old router whole (a grid search, a mover of drawn copper, a triangulated search, and its driver: `boardroom route --mode old`);
 `route`, the router's top level: a board file in, routed copper, pictures and a report out (`boardroom route`), the checker's verdict on a board (`boardroom check`), and each pour's pieces and necks (`boardroom pours`);
 `packages`, `packages/` as the source of boards' blocks: a layout's copper and rule areas round its chip (`areas.json`) placed on a board as zones and `.kicad_dru` rules, compared with the board's copy and accepted or declined (`boardroom blocks`, pins in `<board>.blocks.json`), and a pour it keeps joined checked section by section;
 `scene`, plain drawing data and its mesh; `render`, a board as a scene, with the WebGL renderer in
@@ -48,8 +49,16 @@ a board project (`template/CLAUDE.md` is the board-repo version).
   rebuild the gallery the owner reviews (`bench/gallery.py`, pages in the lab). A run gives the
   same board byte for byte every time it is asked the same thing: `bench/again.py SET` routes
   each board several times and names any that differ.
-  Board repos' `scripts/route.sh` still runs the old router (`$ULTRAROUTE`, a built binary); the
-  old router's code is never brought in or built here.
+  **The old router is here too, as `boardroom route --mode old <board.kicad_pcb> -o OUT.kicad_pcb [its own words]`**
+  (`--help` after it lists them; crates `grid`, `morph`, `topo` and `ultraroute`, its code as it
+  stood at ultraroute 9512c88, on the same `kicad` and `board`): the two are modes of one
+  router and share their code (owner, 2026-11-26), parts of the old one are tried inside the
+  new one, each judged on the test set and by the owner's eye, and the new router's look is
+  kept. It gives the same board byte for byte as its frozen binary
+  (`ultraroute-lab/bin/sqpad-9512c88/ultraroute`): check that after any change to `board` or
+  `kicad` (lab `patches/old-import-2026-11-26/compare.py`). The GPL crates (`copperroute`,
+  `freerouting`, `kicad-text`) are never linked.
+  Board repos' `scripts/route.sh` still runs the old router as a built binary (`$ULTRAROUTE`).
 - **Making a board repo:** run `scripts/new-board.sh <dir> [--name <title>] [--github <owner>/<repo> [--private]]`,
   which copies `template/`, the upstream skill and `scripts/{doctor,view,route}.sh`, and adds
   `vendor/pcbview` and `vendor/ultraroute` submodules at the last pins of the old repositories

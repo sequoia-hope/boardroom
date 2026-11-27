@@ -17,6 +17,8 @@ pub enum Rule {
     HoleClearance,
     HoleToHole,
     Keepout,
+    /// A hard rule of a planner's region (`Board::regions`) broken.
+    Region,
     /// A pour that must stay joined ([`crate::Board::keep_joined`]) broken or narrowed by it.
     KeptJoined,
 }
@@ -238,28 +240,36 @@ pub fn mask_pair_gap(board: &Board, a_id: ItemId, a: &Item, b_id: ItemId, b: &It
 }
 
 pub fn check(board: &Board) -> Vec<Violation> {
-    let limits = &board.limits;
-    let mut found = Vec::new();
-    let mut failed_pairs = HashSet::new();
-    for (id, _) in board.items() {
-        item_checks(board, id, false, false, limits, &mut failed_pairs, &mut found);
-    }
-    found
+    crate::work::in_bucket(crate::work::Bucket::Checks, || {
+        let limits = &board.limits;
+        let mut found = Vec::new();
+        let mut failed_pairs = HashSet::new();
+        for (id, _) in board.items() {
+            item_checks(board, id, false, false, limits, &mut failed_pairs, &mut found);
+        }
+        found
+    })
 }
 
 /// What one item breaks against everything else: how a router tests copper before keeping it.
 /// Pours are left out, as they are refilled around new copper; a block's kept pours are not.
 pub fn check_item(board: &Board, id: ItemId) -> Vec<Violation> {
-    let mut found = Vec::new();
-    item_checks(board, id, true, true, &board.limits, &mut HashSet::new(), &mut found);
-    found
+    crate::work::count(&crate::work::CHECKS);
+    crate::work::in_bucket(crate::work::Bucket::Checks, || {
+        let mut found = Vec::new();
+        item_checks(board, id, true, true, &board.limits, &mut HashSet::new(), &mut found);
+        found
+    })
 }
 
 /// What one item breaks, pours included: for routing that keeps pours as planes.
 pub fn check_item_with_pours(board: &Board, id: ItemId) -> Vec<Violation> {
-    let mut found = Vec::new();
-    item_checks(board, id, true, false, &board.limits, &mut HashSet::new(), &mut found);
-    found
+    crate::work::count(&crate::work::CHECKS);
+    crate::work::in_bucket(crate::work::Bucket::Checks, || {
+        let mut found = Vec::new();
+        item_checks(board, id, true, false, &board.limits, &mut HashSet::new(), &mut found);
+        found
+    })
 }
 
 /// Whether `copper` (item `id`) comes within its clearance of spoke `spoke` (item `sid`) on
@@ -402,6 +412,20 @@ fn item_checks(
     // A custom rule may allow a net no vias (`via_count (max 0)`).
     if item.kind == Kind::Via && board.no_vias(item.net) {
         found.push(Violation { rule: Rule::Keepout, a: id, b: None, layer: None, gap: 0.0, required: 0 });
+    }
+    // A planner's clear-under rule: a track of its nets over another net's antipad in a plane,
+    // or (checking one item) a via whose antipad comes under such a track.
+    if !board.clear_under.is_empty() {
+        for (k, other, layer, gap) in board.clear_under_breaks(id, everyone) {
+            found.push(Violation { rule: Rule::Keepout, a: id, b: Some(other), layer: Some(layer), gap, required: board.clear_under[k].margin });
+        }
+    }
+    // A planner's region whose hard rule the track or via breaks. The router's own checks of new
+    // copper keep to it, as its grids do, so that no pass that moves copper by geometry (pulling
+    // tight, tuning, mending) takes it where routing could not; the whole-board check leaves it
+    // out, as KiCad has no such rule and `--regions` reports it apart.
+    if everyone && !board.regions.is_empty() && matches!(item.kind, Kind::Track | Kind::Via) && crate::regions::broken_region(board, item).is_some() {
+        found.push(Violation { rule: Rule::Region, a: id, b: None, layer: None, gap: 0.0, required: 0 });
     }
     // A track or via of another net bared in an opening drawn in the mask would bridge there, and
     // so would a bare via whose own opening meets it, or comes closer than the mask's narrowest

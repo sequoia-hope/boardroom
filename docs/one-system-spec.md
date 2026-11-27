@@ -137,6 +137,7 @@ boardroom/
 | `shape`, `intent`, `recognise`, `library`, `interfaces`, `compose`, `pinsolve`, `floorplan`, `blockgen` | Composer | `ccomp`'s commands become `boardroom compose …` |
 | `examine` | Composer `verify`; from ultraroute `tools/`: the style features of `tidy.py`, `dfm.py` (acute angles, same-net slots), `designer.py` (hot loops on a routed board), `netcheck.py` (whether a designer routes a net within the rules); new physical measures | the design of the "sound" scoreboard is `ultraroute/docs/spec/verification.md`, which moves here with `from-zero.md` |
 | `plan`, `wire`, `route`, `reshape` | written here | `from-zero.md` |
+| `grid`, `morph`, `topo`, `ultraroute` | ultraroute `core/crates` at 9512c88, unchanged but for what the move needed | the old router: `boardroom route --mode old`; in the router's group, on Foundation only |
 | board-reading fixes in Composer `pcb` | into `kicad` and `board`, with their tests | the exposed-mask `(layers "B.Cu" "B.Mask")` rewrite, paste-only pads, KiCad 10 zone net names (these three are not in ultraroute's `kicad-pcb`), and the stacked-via join. **Status 2026-11-12:** the opened-mask track fix is in `kicad` and the text-rewriting workaround is deleted. The other three stay in `board::pcb` for now, where they are ordinary code over the reader (skipping pads with no copper layer, naming a zone's net from its number, joining stacked vias in `copper_path`), each with its test |
 | what `compile` did | Composer `compile`, split up, each piece with its tests | `merge_dru` and diff-pair skew rules → `kicad`; `ipc2221_width_mm` and "`min_mm` only from a trusted figure" → the router's reading of intent; regions derived from package constraints and the board's geometry (`via_count <= 0`, `unreferenced_length_mm`: layers with no ground fill beside them, rectangles over voids in the ground fill) → `route`, or a function in `examine` or `check` that `route` calls; `check_regions` → `check` or `examine`. History, not a rule: Composer sent voids as small rectangles because the old router's per-cell region raster stalled on 683-vertex polygons; in the new router a void is an obstacle or priced area in the plan's gap graph, and needing polygons simplified would be a router defect |
 | Python kept from Composer `tools/` | under `packages/tools/` and `bench/` | must come: `import_altium` (pcbnew's importer), `library_fetch`, `library_import`, `library_quotes`, package authoring (`circuit_check`, `package_circuit`, `package_nets`, `kicad_pins`, `rp2350_mux`), `extract_layout`, `lift_layout`, `compose_from_netlist`; into `bench/`: `handcheck`, `fp_bench`, `bench_buck`, `compare_buck`, `pcbgolf_score`; kept until Rust covers them: `compose_kicad` (schematics, through the skill's `kicad_write.py`), `verify_routed`. Replaced by `kicad`: `apply_layout`, `apply_placement`, `prepare_route`. Gone: `route_board.sh` |
@@ -145,7 +146,16 @@ boardroom/
 | `view/` | pcbview | Python as it is at first |
 | `bench/` | ultraroute `tools/`: `pcbench.py` with its tiers, timeouts and variants JSON and `variants/` patches, `apply_variant.py`, `rulebench.py`, `refill_zones.py`, `lookset.py` and `lookset.json`, `scoreboard.py`, `pcbench_schematics.py`, `lab.py` | the lab (`ultraroute-lab`) stays a directory beside the repo |
 
-Not coming: ultraroute's `grid`, `ultraroute`, `morph`, `topo`, `lab-films`, `web`, `studio`,
+The old router came in whole on 2026-11-26 (owner: "one unified library with different modes,
+where the current new router is one mode that can be run, and the old router is another mode
+that can be run, and all of the code is shared"): ultraroute's `grid`, `morph`, `topo` and
+`ultraroute` as they stood at its commit 9512c88, on this workspace's `kicad` and `board`
+(`board` took back `regions`, `work`, `probe` and four joint helpers they lean on). It is
+`boardroom route --mode old`, and gives the same board byte for byte as its own frozen binary.
+Parts of it are tried inside the new router from here, each judged on the test set and by the
+owner's eye (constitution R5).
+
+Not coming: ultraroute's `lab-films`, `web`, `studio`,
 `legacy/`, `jobs/`, logs, and `tools/{failview,replays_index,search,shuffle_check,add_block}.py`; Composer's `compile` as a crate and its file format, `pcb` as a separate model, `boards/` (178 MB),
 `library/cache/`; every Python tool the Rust `kicad` writer replaces; `sequoia-hope/board-draw` as
 a separate repo (archived).
@@ -359,8 +369,9 @@ Heavy builds and suites go through `~/.claude/bin/reserve`.
    `from-zero.md` (designers' pours restored, schematics, designer extraction, the two
    scoreboards) is the first work after the foundation and needs `intent` and `recognise`. The
    frozen router the bench compares against is a pinned binary by path
-   (`ultraroute-lab/bin/<name>/ultraroute`, with `kicad-text` beside it); the old router is never
-   built inside Boardroom. Whoever writes the new router should also do this step, since it
+   (`ultraroute-lab/bin/<name>/ultraroute`, with `kicad-text` beside it). (Until 2026-11-26 the
+   old router was never built inside Boardroom; it is now a mode of `boardroom route`, and the
+   pinned binaries stay as the record of what it did before.) Whoever writes the new router should also do this step, since it
    defines what the router is judged by.
 5. **Composer.** `shape`, `compose`, `pinsolve`, `floorplan`, `blockgen`; `boardroom compose …`;
    the Compose mode; `wasm` with the live floorplanner; `packages/` and the Composer skill; Python

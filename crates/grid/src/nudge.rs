@@ -1,0 +1,426 @@
+//! Moving parts aside for the connections nothing else could route.
+//!
+//! For each open connection, the unlocked parts near its airline (and the parts at its ends) are
+//! tried a small step in each direction. The copper around the part flows aside with it (its own
+//! traces dragged along), and only copper pushed into something that cannot move is ripped. A
+//! step is legal when the part's pads keep every rule and its courtyard meets no other on its
+//! side of the board; what was ripped is routed again, and the step is kept only if fewer
+//! connections are left open.
+
+use std::collections::HashSet;
+
+use board::{check_item, connectivity, connectivity_without_pours, point_segment, Airline, Board, ItemId, Kind, Nm, Point, Shape};
+use kicad_pcb::Span;
+
+use crate::blame::{blame, BlameOptions};
+use crate::push::{push, PushOptions};
+use crate::report::{tell, Focus, Log};
+use crate::route::{route_open, FieldSolver, Options};
+
+#[derive(Debug, Clone)]
+pub struct NudgeOptions {
+    pub cell: Nm,
+    pub via_cost: u32,
+    pub deadline: crate::clock::Deadline,
+    /// Step lengths tried, in nanometres, shortest first.
+    pub steps: Vec<Nm>,
+    /// How near an airline a part's courtyard must come to be tried.
+    pub reach: Nm,
+    /// Parts tried per connection, nearest first.
+    pub parts_per_connection: usize,
+    /// Time allowed for rerouting after one step.
+    pub reroute_seconds: f64,
+    /// Footprints that may not move, by index.
+    pub locked: HashSet<usize>,
+    /// After blame's moves, also try small steps in every direction (slow).
+    pub blind: bool,
+    pub pours_block: bool,
+    pub log: Option<Log>,
+}
+
+impl Default for NudgeOptions {
+    fn default() -> NudgeOptions {
+        NudgeOptions {
+            cell: 50_000,
+            via_cost: 80,
+            deadline: Default::default(),
+            steps: vec![250_000, 500_000, 1_000_000],
+            reach: 2_000_000,
+            parts_per_connection: 6,
+            reroute_seconds: 5.0,
+            locked: HashSet::new(),
+            blind: true,
+            pours_block: false,
+            log: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NudgeStats {
+    pub tried: usize,
+    pub illegal: usize,
+    pub kept: usize,
+    /// Of those kept, moves blame worked out rather than found by trying directions.
+    pub guided: usize,
+    /// Footprints moved, by index and how far in all.
+    pub moved: Vec<(usize, Point)>,
+    /// Copper from the board file that moving parts tore off, for removing from the file.
+    pub ripped_spans: Vec<Span>,
+    pub blame_queries: usize,
+    pub blame_useful_ns: u64,
+    pub blame_wasted_ns: u64,
+    pub kept_guided_ns: u64,
+    pub kept_blind_ns: u64,
+    pub illegal_guided: usize,
+    pub illegal_guided_ns: u64,
+    pub illegal_blind: usize,
+    pub illegal_blind_ns: u64,
+    pub no_better_guided: usize,
+    pub no_better_guided_ns: u64,
+    pub no_better_blind: usize,
+    pub no_better_blind_ns: u64,
+}
+
+const DIRECTIONS: [(i64, i64); 8] = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)];
+
+fn open_count(board: &Board, pours_block: bool) -> usize {
+    if pours_block { connectivity(board) } else { connectivity_without_pours(board) }.airlines.len()
+}
+
+/// The footprint an item belongs to, if a pad.
+fn owner(board: &Board, id: ItemId) -> Option<usize> {
+    match board.item(id)?.kind {
+        Kind::Pad { footprint, .. } => Some(footprint),
+        _ => None,
+    }
+}
+
+/// Whether the footprint, where it now stands, breaks no rule: its pads keep their clearances
+/// and its courtyard overlaps no other on the same side.
+fn legal(board: &Board, footprint: usize) -> bool {
+    let pads: Vec<ItemId> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Pad { footprint: f, .. } if f == footprint)).map(|(id, _)| id).collect();
+    if pads.iter().any(|&p| !check_item(board, p).is_empty()) {
+        return false;
+    }
+    let me = &board.footprints[footprint];
+    let Some(yard) = &me.courtyard else { return true };
+    let mine = Shape::Polygon(yard.clone());
+    let bb = mine.bbox();
+    board.footprints.iter().enumerate().all(|(i, other)| {
+        if i == footprint || other.back != me.back {
+            return true;
+        }
+        let Some(theirs) = &other.courtyard else { return true };
+        let theirs = Shape::Polygon(theirs.clone());
+        !theirs.bbox().overlaps(bb) || theirs.gap(&mine) > 0.0
+    })
+}
+
+/// Where the part's pads centre.
+fn centre(board: &Board, footprint: usize) -> Point {
+    let (mut x, mut y, mut n) = (0i128, 0i128, 0i128);
+    for (_, it) in board.items().filter(|(_, it)| matches!(it.kind, Kind::Pad { footprint: f, .. } if f == footprint)) {
+        let b = it.shape.bbox();
+        x += ((b.min.x + b.max.x) / 2) as i128;
+        y += ((b.min.y + b.max.y) / 2) as i128;
+        n += 1;
+    }
+    if n == 0 {
+        return board.footprints[footprint].at;
+    }
+    Point::new((x / n) as i64, (y / n) as i64)
+}
+
+/// How far around a part the copper flows with it: its courtyard's half-diagonal and a margin.
+fn reach_of(board: &Board, footprint: usize) -> f64 {
+    let half = board.footprints[footprint].courtyard.as_ref().map_or(500_000.0, |yard| {
+        let b = Shape::Polygon(yard.clone()).bbox();
+        ((b.max.x - b.min.x) as f64).hypot((b.max.y - b.min.y) as f64) / 2.0
+    });
+    half + 500_000.0
+}
+
+/// Unlocked footprints whose courtyard comes within `reach` of the segment, nearest first, and
+/// the footprints at its two ends.
+fn near_airline(board: &Board, a: Point, b: Point, ends: [Option<usize>; 2], options: &NudgeOptions) -> Vec<usize> {
+    let mut found: Vec<(f64, usize)> = board
+        .footprints
+        .iter()
+        .enumerate()
+        .filter(|(i, f)| !f.locked && !options.locked.contains(i))
+        .filter_map(|(i, f)| {
+            let yard = f.courtyard.as_ref()?;
+            let d = yard.iter().map(|p| point_segment(*p, a, b)).fold(f64::INFINITY, f64::min);
+            (d <= options.reach as f64).then_some((d, i))
+        })
+        .collect();
+    for end in ends.into_iter().flatten() {
+        if !board.footprints[end].locked && !options.locked.contains(&end) {
+            found.push((-1.0, end));
+        }
+    }
+    found.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let mut out: Vec<usize> = Vec::new();
+    for (_, i) in found {
+        if !out.contains(&i) {
+            out.push(i);
+        }
+    }
+    out.truncate(options.parts_per_connection);
+    out
+}
+
+/// Events reported to [`nudge_watch`], including blame reports and steps before revert.
+pub enum NudgeEvent<'a> {
+    Blame { airline: &'a Airline, blamed: &'a [crate::blame::Blame] },
+    Step {
+        airline: &'a Airline,
+        footprint: usize,
+        requested: Point,
+        moved: Point,
+        guided: bool,
+        ripped: usize,
+        open_before: usize,
+        open_after: usize,
+        /// `"kept"`, `"illegal"`, or `"no better"`.
+        outcome: &'static str,
+    },
+}
+
+/// Nudges parts until a round frees nothing more. `soft` holds the copper the router laid.
+/// One step of one part, judged: the part steps and the copper around it flows aside with it,
+/// its own traces dragged along, copper ripped only where it would be pushed into something
+/// that cannot move; then what is open is routed again. Kept when fewer connections are open
+/// after, otherwise undone. Whether it was kept.
+#[allow(clippy::too_many_arguments)]
+fn try_step(
+    board: &mut Board,
+    solver: &mut dyn FieldSolver,
+    options: &NudgeOptions,
+    soft: &mut Vec<ItemId>,
+    stats: &mut NudgeStats,
+    watch: &mut dyn FnMut(&Board, NudgeEvent),
+    airline: &Airline,
+    footprint: usize,
+    by: Point,
+    guided: bool,
+    why: &str,
+) -> bool {
+    let ev = board::work::begin_event();
+    let t0 = board::work::timed_run_ns();
+    stats.tried += 1;
+    let before = open_count(board, options.pours_block);
+    let snapshot = board.clone();
+    let soft_before = soft.clone();
+    let reference = board.footprints[footprint].reference.clone();
+    tell(&options.log, "nudging", || format!("{reference}: trying {:+.2}, {:+.2} mm for {why}", by.x as f64 * 1e-6, -by.y as f64 * 1e-6), Some(Focus::Trial { part: footprint, by }));
+    // The step at the part, fading as 1 / (1 + d²/r²) with the distance d from its centre.
+    let (c, r, v) = (centre(board, footprint), reach_of(board, footprint).max(1.0), (by.x as f64, by.y as f64));
+    let field = |p: Point| {
+        let d = ((p.x - c.x) as f64).hypot((p.y - c.y) as f64);
+        let w = (1.0 + (d / r).powi(2)).powf(-1.0);
+        (v.0 * w, v.1 * w)
+    };
+    let only = Some(HashSet::from([footprint]));
+    let pushed = push(board, &field, &PushOptions { steps: 1, locked: options.locked.clone(), only, pours_block: options.pours_block, deadline: options.deadline.clone(), log: None }, soft, &mut |_| {});
+    let moved = pushed.moved.first().map(|&(_, by)| by);
+    let Some(actual) = moved.filter(|_| legal(board, footprint)) else {
+        stats.illegal += 1;
+        watch(
+            board,
+            NudgeEvent::Step {
+                airline,
+                footprint,
+                requested: by,
+                moved: moved.unwrap_or(Point::new(0, 0)),
+                guided,
+                ripped: pushed.ripped,
+                open_before: before,
+                open_after: before,
+                outcome: "illegal",
+            },
+        );
+        *board = snapshot;
+        *soft = soft_before;
+        let dt = board::work::timed_run_ns().saturating_sub(t0);
+        if guided {
+            stats.illegal_guided += 1;
+            stats.illegal_guided_ns = stats.illegal_guided_ns.saturating_add(dt);
+            ev.finish("nudge_step", "illegal_guided", Some(before));
+        } else {
+            stats.illegal_blind += 1;
+            stats.illegal_blind_ns = stats.illegal_blind_ns.saturating_add(dt);
+            ev.finish("nudge_step", "illegal_blind", Some(before));
+        }
+        return false;
+    };
+    let reroute = Options {
+        seed: 0,
+        cell: options.cell,
+        via_cost: options.via_cost,
+        deadline: options.deadline.seconds(options.reroute_seconds),
+        nets: None,
+        pours_block: options.pours_block,
+        directional: false,
+        log: None,
+        net_via_cost: Default::default(),
+        fine: true,
+        corridor: false,
+    };
+    let again = route_open(board, solver, &reroute, &mut |_| {});
+    let after = open_count(board, options.pours_block);
+    if after >= before {
+        watch(
+            board,
+            NudgeEvent::Step {
+                airline,
+                footprint,
+                requested: by,
+                moved: actual,
+                guided,
+                ripped: pushed.ripped,
+                open_before: before,
+                open_after: after,
+                outcome: "no better",
+            },
+        );
+        *board = snapshot;
+        *soft = soft_before;
+        let dt = board::work::timed_run_ns().saturating_sub(t0);
+        if guided {
+            stats.no_better_guided += 1;
+            stats.no_better_guided_ns = stats.no_better_guided_ns.saturating_add(dt);
+            ev.finish("nudge_step", "no_better_guided", Some(before));
+        } else {
+            stats.no_better_blind += 1;
+            stats.no_better_blind_ns = stats.no_better_blind_ns.saturating_add(dt);
+            ev.finish("nudge_step", "no_better_blind", Some(before));
+        }
+        return false;
+    }
+    soft.retain(|id| board.item(*id).is_some());
+    soft.extend(again.laid);
+    stats.kept += 1;
+    tell(&options.log, "nudging", || format!("{reference}: moved, {after} connections open"), Some(Focus::Part(footprint)));
+    stats.ripped_spans.extend(pushed.removed_spans);
+    match stats.moved.iter_mut().find(|(f, _)| *f == footprint) {
+        Some((_, total)) => *total = Point::new(total.x + actual.x, total.y + actual.y),
+        None => stats.moved.push((footprint, actual)),
+    }
+    watch(
+        board,
+        NudgeEvent::Step {
+            airline,
+            footprint,
+            requested: by,
+            moved: actual,
+            guided,
+            ripped: pushed.ripped,
+            open_before: before,
+            open_after: after,
+            outcome: "kept",
+        },
+    );
+    let dt = board::work::timed_run_ns().saturating_sub(t0);
+    if guided {
+        stats.kept_guided_ns = stats.kept_guided_ns.saturating_add(dt);
+        ev.finish("nudge_step", "kept_guided", Some(after));
+    } else {
+        stats.kept_blind_ns = stats.kept_blind_ns.saturating_add(dt);
+        ev.finish("nudge_step", "kept_blind", Some(after));
+    }
+    true
+}
+
+/// Nudges parts until a round frees nothing more. `soft` holds the copper the router laid.
+/// Each open connection first tries the moves blame works out for the parts in its way, then,
+/// if none helps, small steps of the parts near it in every direction.
+pub fn nudge(board: &mut Board, solver: &mut dyn FieldSolver, options: &NudgeOptions, soft: &mut Vec<ItemId>, watch: &mut dyn FnMut(&Board)) -> NudgeStats {
+    nudge_watch(board, solver, options, soft, &mut |b, ev| {
+        if matches!(ev, NudgeEvent::Step { outcome: "kept", .. }) {
+            watch(b);
+        }
+    })
+}
+
+/// As [`nudge`], reporting every blame query and tried step before any revert.
+pub fn nudge_watch(
+    board: &mut Board,
+    solver: &mut dyn FieldSolver,
+    options: &NudgeOptions,
+    soft: &mut Vec<ItemId>,
+    watch: &mut dyn FnMut(&Board, NudgeEvent),
+) -> NudgeStats {
+    let out_of_time = || options.deadline.expired();
+    let mut stats = NudgeStats::default();
+    loop {
+        let open = if options.pours_block { connectivity(board) } else { connectivity_without_pours(board) }.airlines;
+        if open.is_empty() || out_of_time() {
+            break;
+        }
+        let kept_before = stats.kept;
+        'connections: for airline in open {
+            if board.item(airline.from_item).is_none() || board.item(airline.to_item).is_none() {
+                continue;
+            }
+            let why = board.net_name(airline.net).to_string();
+            // Routed copper is priced, not a wall: it flows aside when a part moves.
+            let ask = BlameOptions { cell: options.cell, via_cost: options.via_cost, pours_block: options.pours_block, ..Default::default() };
+            let fixed: Vec<bool> = board.footprints.iter().enumerate().map(|(i, f)| f.locked || options.locked.contains(&i)).collect();
+            let free = |f: usize| !fixed[f];
+            let bev = board::work::begin_event();
+            let bt0 = board::work::timed_run_ns();
+            let mut blamed = blame(board, airline.from_item, airline.to_item, &ask, &free).blamed;
+            if blamed.is_empty() {
+                // Priced, routed copper is cheap enough that the path crosses it rather than
+                // brush a part; with that copper a wall, the parts in the way show.
+                let walled = BlameOptions { routed_copper: None, ..ask.clone() };
+                blamed = blame(board, airline.from_item, airline.to_item, &walled, &free).blamed;
+            }
+            watch(board, NudgeEvent::Blame { airline: &airline, blamed: &blamed });
+            let bdt = board::work::timed_run_ns().saturating_sub(bt0);
+            bev.finish("nudge_blame", if blamed.is_empty() { "empty" } else { "blamed" }, None);
+            stats.blame_queries += 1;
+            let mut guided_helped = false;
+            for b in blamed {
+                if out_of_time() {
+                    stats.blame_wasted_ns = stats.blame_wasted_ns.saturating_add(bdt);
+                    break 'connections;
+                }
+                let by = Point::new(b.dx.round() as i64, b.dy.round() as i64);
+                if try_step(board, solver, options, soft, &mut stats, watch, &airline, b.footprint, by, true, &why) {
+                    stats.guided += 1;
+                    stats.blame_useful_ns = stats.blame_useful_ns.saturating_add(bdt);
+                    guided_helped = true;
+                    break;
+                }
+            }
+            if guided_helped {
+                continue 'connections;
+            }
+            stats.blame_wasted_ns = stats.blame_wasted_ns.saturating_add(bdt);
+            if !options.blind {
+                continue;
+            }
+            let ends = [owner(board, airline.from_item), owner(board, airline.to_item)];
+            for footprint in near_airline(board, airline.from, airline.to, ends, options) {
+                for &step in &options.steps {
+                    for (dx, dy) in DIRECTIONS {
+                        if out_of_time() {
+                            break 'connections;
+                        }
+                        if try_step(board, solver, options, soft, &mut stats, watch, &airline, footprint, Point::new(dx * step, dy * step), false, &why) {
+                            continue 'connections;
+                        }
+                    }
+                }
+            }
+        }
+        if stats.kept == kept_before {
+            break;
+        }
+    }
+    soft.retain(|id| board.item(*id).is_some());
+    stats
+}

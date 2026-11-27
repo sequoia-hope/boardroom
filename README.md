@@ -304,8 +304,12 @@ the stackup, from `crates/board/src/fab.rs`);
 gives its pieces, the pads each joins, its necks (narrowest copper between two broad parts,
 with what pinches it), and which pins of its net within it the copper inside joins, with the
 weakest link on the widest way between them: whether a block's band still joins the chip's
-supply pins once other nets' vias pass through it. Board repos'
-`scripts/route.sh` still runs the old router (`$ULTRAROUTE`), and board repos made so far keep
+supply pins once other nets' vias pass through it.
+`boardroom route --mode old <board.kicad_pcb> -o OUT.kicad_pcb` is the old router (UltraRoute's
+grid router, brought in whole on 2026-11-26 as crates `grid`, `morph`, `topo` and `ultraroute`):
+the same code on the same board model, a second mode beside the new router, whose parts are
+tried inside the new one. Board repos'
+`scripts/route.sh` still runs the old router as a built binary (`$ULTRAROUTE`), and board repos made so far keep
 their `vendor/pcbview` and `vendor/ultraroute` submodules at their pins.
 
 ## The skill learns

@@ -402,6 +402,10 @@ pub struct Board {
     pub min_widths: HashMap<u32, Nm>,
     /// The copper zones, for what other nets' holes cut out of them.
     pub zone_areas: Vec<ZoneArea>,
+    /// Routing regions a planner set, with rules for which nets may run where.
+    pub regions: Vec<crate::regions::Region>,
+    /// A planner's clear-under rules.
+    pub clear_under: Vec<crate::regions::ClearUnder>,
     /// Pours whose sections must stay joined ([`Board::keep_joined`]): a block's band round its
     /// chip, which other nets' vias may pass through only while it does. Empty unless asked.
     pub kept_joined: Vec<crate::necks::KeptJoined>,
@@ -602,6 +606,8 @@ impl Board {
             opt_widths: HashMap::new(),
             min_widths: HashMap::new(),
             zone_areas: Vec::new(),
+            regions: Vec::new(),
+            clear_under: Vec::new(),
             kept_joined: Vec::new(),
             pour_cost: 0.0,
             signals_at_min: false,
@@ -1131,6 +1137,34 @@ impl Board {
         let (centre, r) = item.hole?;
         let (a, b) = self.hole_ends.get(&id).copied().unwrap_or((centre, centre));
         Some(Shape::Capsule { a, b, r })
+    }
+
+    /// Inner copper layers that are planes in all but name: one net's pours cover at least
+    /// `share` of the board there. The layer index and the net, for each.
+    pub fn plane_layers(&self, share: f64) -> Vec<(usize, u32)> {
+        let area = |p: &[Point]| {
+            (0..p.len()).map(|i| (p[i].x as f64) * (p[(i + 1) % p.len()].y as f64) - (p[(i + 1) % p.len()].x as f64) * (p[i].y as f64)).sum::<f64>().abs() / 2.0
+        };
+        let Some(outer) = self.outline.first() else { return Vec::new() };
+        let board_area = area(outer) - self.outline.iter().skip(1).map(|h| area(h)).sum::<f64>();
+        let mut out = Vec::new();
+        for l in 1..self.layers.len().saturating_sub(1) {
+            let mut by_net: HashMap<u32, f64> = HashMap::new();
+            for (_, it) in self.items() {
+                if let (Kind::Pour { .. }, Shape::Polygon(p)) = (&it.kind, &it.shape) {
+                    if it.net != 0 && it.on(l) && !it.drawn() {
+                        *by_net.entry(it.net).or_default() += area(p);
+                    }
+                }
+            }
+            // Equal areas go to the lower net, not to the hash map's order.
+            if let Some((&net, &a)) = by_net.iter().max_by(|x, y| x.1.total_cmp(y.1).then(y.0.cmp(x.0))) {
+                if board_area > 0.0 && a >= share * board_area {
+                    out.push((l, net));
+                }
+            }
+        }
+        out
     }
 
     pub fn items(&self) -> impl Iterator<Item = (ItemId, &Item)> {

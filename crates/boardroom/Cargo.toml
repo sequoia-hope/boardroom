@@ -9,6 +9,7 @@ license.workspace = true
 project = { path = "../project" }
 server = { path = "../server" }
 route = { path = "../route" }
+ultraroute = { path = "../ultraroute" }
 packages = { path = "../packages" }
 axum = { version = "0.8", features = ["ws"] }
 board-interface = { git = "https://github.com/sequoia-hope/board-interface", tag = "v0.2.2" }

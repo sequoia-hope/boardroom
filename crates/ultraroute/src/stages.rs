@@ -1,0 +1,1859 @@
+//! The router's stages, one per step of a run, in the order `lib.rs`'s [`crate::STAGES`] table
+//! runs them with the budgets it gives them. Each takes the board and the copper the run holds
+//! as its own ([`Ledger`]) from the stage before, prints its line as it always has, and returns
+//! its own figures for the run's stats.
+
+use std::collections::{HashMap, HashSet};
+
+use board::{Board, Item, ItemId, Kind, Nm, Point, Shape};
+use kicad_pcb::{apply, Edit, Span};
+use serde_json::{json, Value};
+
+use crate::stats::{Failure, Finding, RunStats};
+use crate::watch::{Cleaned, Watch};
+use crate::{open_airlines, regions, Args, Budget, RunClock, ViaCosts};
+
+/// The copper the run holds as its own, and what passes from one stage to the next.
+#[derive(Default)]
+pub struct Ledger {
+    /// The router's own copper: free to rip, move and rewrite, and written out at the end.
+    pub laid: Vec<ItemId>,
+    /// Escapes laid before routing, held apart until the grid has had its pass, so the ones no
+    /// route used can be taken out again.
+    pub fanout: Vec<ItemId>,
+    /// The differential pairs' copper, locked through the single-ended stages.
+    pub pairs: Vec<ItemId>,
+    /// Vias stitching the ends of strips a zone keeps as laid, locked through every stage and
+    /// written, unlocked, as they stand.
+    pub stitches: Vec<ItemId>,
+    /// The board file's spans of what was taken out.
+    pub removed: Vec<Span>,
+    /// Where each part stood before the run.
+    pub(crate) original_at: Vec<Point>,
+    /// Nets with a length limit, and those nets, routed first.
+    pub(crate) lengths: Vec<regions::MaxLength>,
+    pub(crate) first: HashSet<u32>,
+    /// Nets with an optimum width wider than their class's, and those widths (`Board::opt_widths`).
+    pub(crate) preferred: Vec<(u32, Nm)>,
+    pub(crate) costs: ViaCosts,
+    /// What `escape_parts` found.
+    pub(crate) escape_parts: Option<Vec<usize>>,
+    /// Where negotiation's routes kept colliding, busiest first.
+    pub(crate) hotspots: Vec<grid::Hotspot>,
+    /// The board as routing found it, when it has pours: filled at the end beside the routed
+    /// board, in the time the run keeps back, so the pours' report takes none of the routing's.
+    pub(crate) unrouted: Option<Board>,
+    /// The connections the running stage gave up on, filed when it is done.
+    pub(crate) given_up: Vec<Failure>,
+    /// What routing one connection at a time after negotiation did.
+    pub(crate) routed: grid::Stats,
+    /// Tightening's figures, told once the via pass has pulled tight again.
+    pub(crate) tightened: Option<grid::CleanStats>,
+    /// Connections open at the end, and the board's text as written.
+    pub(crate) open: usize,
+    pub(crate) output: Option<String>,
+}
+
+/// What a stage works with.
+pub struct StageCtx<'a> {
+    pub args: &'a Args,
+    pub board: &'a mut Board,
+    pub ledger: &'a mut Ledger,
+    pub solver: &'a mut dyn grid::FieldSolver,
+    pub log: &'a Option<grid::Log>,
+    pub watch: &'a mut dyn Watch,
+    pub stats: &'a mut RunStats,
+    pub threads: usize,
+    pub(crate) clock: &'a RunClock,
+    pub(crate) budget: Budget,
+    pub(crate) text: &'a str,
+    pub(crate) effort_ns: (u64, u64, u64),
+}
+
+impl StageCtx<'_> {
+    /// The stage's deadline from its budget, as of now.
+    pub fn deadline(&self) -> grid::Deadline {
+        self.budget.deadline(self.clock, !self.ledger.first.is_empty())
+    }
+
+    /// Seconds since the run's clock started, as the stages' lines print it.
+    pub fn elapsed(&self) -> f64 {
+        grid::clock::since(self.clock.started).as_secs_f64()
+    }
+
+    /// Tells the log, if anyone listens.
+    pub fn say(&self, phase: &'static str, text: String) {
+        if let Some(grid::Log(log)) = self.log {
+            log(grid::Activity { phase, text, focus: None });
+        }
+    }
+
+    fn open(&self) -> Vec<board::Airline> {
+        open_airlines(self.args, self.board)
+    }
+
+    /// Each connection a route left given up, for the stats: [`reconcile_failures`] files them
+    /// when the stage is done.
+    fn failed(&mut self, stage: &'static str, failures: &[(ItemId, ItemId, &'static str)]) {
+        for &(from, to, reason) in failures {
+            let net = self.board.item(from).map_or("", |it| self.board.net_name(it.net)).to_string();
+            let (from, to) = (grid::item_name(self.board, from), grid::item_name(self.board, to));
+            self.ledger.given_up.push(Failure { stage, net, from, to, reason });
+        }
+    }
+}
+
+/// Keeps `failures` to the connections `open` after `stage`: a connection it closed leaves; one
+/// it gave up on (`given_up`) takes that reason and its ends, under the stage that first gave up
+/// on it; one it opened, not open `before` it, enters as `"opened"`; and one open all along that
+/// no stage has given up on enters as `unseen` says (`Stage::leaves_open`), or waits.
+pub(crate) fn reconcile_failures(
+    board: &Board,
+    failures: &mut Vec<Failure>,
+    given_up: Vec<Failure>,
+    stage: &'static str,
+    unseen: Option<&'static str>,
+    before: &HashSet<(ItemId, ItemId)>,
+    open: &[board::Airline],
+) {
+    if open.is_empty() {
+        failures.clear();
+        return;
+    }
+    let prev = std::mem::take(failures);
+    let mut used_prev = vec![false; prev.len()];
+    let mut used_fresh = vec![false; given_up.len()];
+    for air in open {
+        let net = board.net_name(air.net).to_string();
+        let (cur_from, cur_to) = (grid::item_name(board, air.from_item), grid::item_name(board, air.to_item));
+        let old = best_failure_match(&net, &cur_from, &cur_to, &prev, &used_prev, |f| (&f.net, &f.from, &f.to));
+        if let Some((i, _)) = old {
+            used_prev[i] = true;
+        }
+        // Prefer the last attempt on this airline when `route_open` tried a net more than once.
+        let now = best_failure_match_rev(&net, &cur_from, &cur_to, &given_up, &used_fresh, |f| (&f.net, &f.from, &f.to));
+        if let Some((j, _)) = now {
+            used_fresh[j] = true;
+        }
+        let was_open = before.contains(&pair_key(air));
+        match (old, now) {
+            (Some((i, _)), Some((j, _))) => {
+                let f = &given_up[j];
+                // Left open is no reason: the stage that gives one takes it over.
+                let stage = if prev[i].reason == LEFT_OPEN { f.stage } else { prev[i].stage };
+                failures.push(Failure { stage, net, from: f.from.clone(), to: f.to.clone(), reason: f.reason });
+            }
+            (Some((i, flipped)), None) => {
+                let reason = if flipped { flip_end_reason(prev[i].reason) } else { prev[i].reason };
+                failures.push(Failure { stage: prev[i].stage, net, from: cur_from, to: cur_to, reason });
+            }
+            (None, Some((j, _))) => {
+                let f = &given_up[j];
+                failures.push(Failure { stage: f.stage, net, from: f.from.clone(), to: f.to.clone(), reason: f.reason });
+            }
+            (None, None) if !was_open => failures.push(Failure { stage, net, from: cur_from, to: cur_to, reason: "opened" }),
+            (None, None) => {
+                if let Some(reason) = unseen {
+                    failures.push(Failure { stage, net, from: cur_from, to: cur_to, reason });
+                }
+            }
+        }
+    }
+}
+
+/// What a stage that tries every open connection files one it leaves open without saying why.
+pub(crate) const LEFT_OPEN: &str = "left open";
+
+/// An airline's two ends, either way round.
+pub(crate) fn pair_key(a: &board::Airline) -> (ItemId, ItemId) {
+    (a.from_item.min(a.to_item), a.from_item.max(a.to_item))
+}
+
+fn is_generic_end(name: &str) -> bool {
+    matches!(name, "a track" | "a via" | "copper" | "gone")
+}
+
+fn flip_end_reason(reason: &'static str) -> &'static str {
+    match reason {
+        "no terminal at the start" => "no terminal at the end",
+        "no terminal at the end" => "no terminal at the start",
+        other => other,
+    }
+}
+
+fn pair_match_score(a0: &str, a1: &str, b0: &str, b1: &str) -> Option<(i32, bool)> {
+    let end_score = |x: &str, y: &str| {
+        if x != y {
+            0
+        } else if is_generic_end(x) {
+            3
+        } else {
+            20
+        }
+    };
+    let direct = end_score(a0, b0) + end_score(a1, b1);
+    let flipped = end_score(a0, b1) + end_score(a1, b0);
+    let has_generic = is_generic_end(a0) || is_generic_end(a1) || is_generic_end(b0) || is_generic_end(b1);
+    if direct == 0 && flipped == 0 && !has_generic {
+        return None;
+    }
+    if flipped > direct {
+        Some((flipped + 1, true))
+    } else {
+        Some((direct + 1, false))
+    }
+}
+
+fn best_failure_match<'a, T>(
+    net: &str,
+    from: &str,
+    to: &str,
+    items: &'a [T],
+    used: &[bool],
+    fields: impl Fn(&'a T) -> (&'a str, &'a str, &'a str),
+) -> Option<(usize, bool)> {
+    let mut best: Option<(i32, usize, bool)> = None;
+    for (i, item) in items.iter().enumerate() {
+        if used[i] {
+            continue;
+        }
+        let (f_net, f_from, f_to) = fields(item);
+        if f_net != net {
+            continue;
+        }
+        let Some((score, flipped)) = pair_match_score(from, to, f_from, f_to) else { continue };
+        if best.is_none_or(|(b, _, _)| score > b) {
+            best = Some((score, i, flipped));
+        }
+    }
+    best.map(|(_, i, flipped)| (i, flipped))
+}
+
+fn best_failure_match_rev<'a, T>(
+    net: &str,
+    from: &str,
+    to: &str,
+    items: &'a [T],
+    used: &[bool],
+    fields: impl Fn(&'a T) -> (&'a str, &'a str, &'a str),
+) -> Option<(usize, bool)> {
+    let mut best: Option<(i32, usize, bool)> = None;
+    for (i, item) in items.iter().enumerate().rev() {
+        if used[i] {
+            continue;
+        }
+        let (f_net, f_from, f_to) = fields(item);
+        if f_net != net {
+            continue;
+        }
+        let Some((score, flipped)) = pair_match_score(from, to, f_from, f_to) else { continue };
+        if best.is_none_or(|(b, _, _)| score > b) {
+            best = Some((score, i, flipped));
+        }
+    }
+    best.map(|(_, i, flipped)| (i, flipped))
+}
+
+/// The parts whose pads are escaped and ploughed at, found once a run: no stage before the
+/// nudge moves a part.
+fn escape_parts(a: &Args, board: &Board, ledger: &mut Ledger) -> Vec<usize> {
+    ledger
+        .escape_parts
+        .get_or_insert_with(|| if a.escape_room { morph::escape_room(board) } else { morph::fine_pitch(board, 500_000) })
+        .clone()
+}
+
+/// One stage of a run.
+pub trait Stage: Sync {
+    fn name(&self) -> &'static str;
+    /// Whether the run's settings and the board ask for it.
+    fn enabled(&self, _a: &Args, _board: &Board, _ledger: &Ledger) -> bool {
+        true
+    }
+    /// Runs it, returning its own figures for the stats.
+    fn run(&self, ctx: &mut StageCtx) -> Value;
+    /// For a stage that tries every open connection, or ends the run, what a connection open
+    /// after it that no stage has given up on is filed as (`reconcile_failures`).
+    fn leaves_open(&self) -> Option<&'static str> {
+        None
+    }
+}
+
+/// Before routing: the router's own copper adopted, the planner's regions and the via and pour
+/// prices taken, the discs to rebuild ripped.
+pub struct SetUp;
+
+impl Stage for SetUp {
+    fn name(&self) -> &'static str {
+        "set-up"
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let (a, board, ledger) = (ctx.args, &mut *ctx.board, &mut *ctx.ledger);
+        if a.adopt {
+            let mine: Vec<ItemId> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked).map(|(id, _)| id).collect();
+            for id in mine {
+                if let Some(mut it) = board.remove(id) {
+                    ledger.removed.extend(it.span.take());
+                    board.restore(id, it);
+                    ledger.laid.push(id);
+                }
+            }
+        }
+        if let Some(c) = a.via_avoid_cost {
+            board.via_avoid_cost = c;
+        }
+        if let Some(w) = a.pour_cost {
+            board.pour_cost = w;
+        }
+        ledger.lengths = match &a.regions {
+            Some(path) => regions::load(path, board).unwrap_or_else(|e| panic!("{e}")),
+            None => Vec::new(),
+        };
+        if let Some(mm) = a.power_width {
+            let found = crate::widths::prefer(board, (mm * 1e6).round() as Nm);
+            if !found.is_empty() {
+                let names: Vec<String> = found.iter().map(|(n, why)| format!("{n} ({why})")).collect();
+                eprintln!("widths: {} nets preferred at {mm} mm: {}", found.len(), names.join(", "));
+            }
+        }
+        // Signals at their minimum keep their class's width as an optimum, taken after routing.
+        if a.narrow_signals {
+            for n in 1..board.nets.len() as u32 {
+                let class = 2 * grid::Profile::for_net(board, n).half_width;
+                if class > board.min_track_width_of(n) {
+                    board.opt_widths.entry(n).or_insert(class);
+                }
+            }
+            board.signals_at_min = true;
+        }
+        board.pad_clearances_exact = a.pad_clearances;
+        // Wider than their class only: a preference at or under the class's width changes nothing.
+        for n in 1..board.nets.len() as u32 {
+            if let Some(w) = board.opt_track_width_of(n) {
+                board.opt_widths.entry(n).or_insert(w);
+            }
+        }
+        let mut preferred: Vec<(u32, Nm)> = board.opt_widths.iter().map(|(&n, &w)| (n, w)).filter(|&(n, w)| 2 * grid::Profile::for_net(board, n).half_width < w).collect();
+        preferred.sort_unstable();
+        ledger.preferred = preferred;
+        // Nets with a length limit route first, while their shortest ways are still free: a
+        // planner's, a custom rule's `length (max ...)`, and a `via_count (max 0)`'s, whose one
+        // layer fills up first.
+        ledger.first = ledger.lengths.iter().flat_map(|m| m.nets.iter().copied()).collect();
+        ledger.first.extend((1..board.nets.len() as u32).filter(|&n| board.no_vias(n) || board.net_maximum("length", n).is_some()));
+        // So do the nets a clear-under rule keeps off other nets' antipads: laid before most
+        // other nets' vias, their tracks keep those vias away, rather than winding round them.
+        ledger.first.extend(board.clear_under.iter().flat_map(|c| c.nets.iter().copied()));
+        for &[x0, y0, x1, y1] in &a.via_avoid {
+            let p = |x: f64, y: f64| Point::new((x * 1e6).round() as i64, (y * 1e6).round() as i64);
+            board.via_avoid.push(Shape::Polygon(vec![p(x0, y0), p(x1, y0), p(x1, y1), p(x0, y1)]));
+        }
+        for &(x, y, r) in &a.rip_regions {
+            let disc = Shape::Capsule { a: Point::new((x * 1e6).round() as i64, (y * 1e6).round() as i64), b: Point::new((x * 1e6).round() as i64, (y * 1e6).round() as i64), r: (r * 1e6).round() as i64 };
+            let inside: Vec<ItemId> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked && it.shape.gap(&disc) == 0.0).map(|(id, _)| id).collect();
+            // Said, as nothing else shows a disc that missed (given y up, say: KiCad's frame is y down).
+            eprintln!("rip-region ({x}, {y}) mm, radius {r} mm: {} tracks and vias taken out", inside.len());
+            for id in inside {
+                if let Some(it) = board.remove(id) {
+                    ledger.removed.extend(it.span);
+                }
+            }
+            ledger.laid.retain(|id| board.item(*id).is_some());
+        }
+        ledger.costs = crate::via_costs(a, board);
+        if ctx.text.contains("(zone") {
+            ledger.unrouted = Some(board.clone());
+        }
+        let connections = board::connectivity_without_pours(board).airlines.len();
+        ctx.say("start", format!("{connections} connections to make"));
+        json!({"connections": connections, "length_limited_nets": ctx.ledger.first.len()})
+    }
+}
+
+/// Escapes every fine-pitch part's pads before routing.
+pub struct Prefanout;
+
+impl Stage for Prefanout {
+    fn name(&self) -> &'static str {
+        "prefanout"
+    }
+
+    fn enabled(&self, a: &Args, _: &Board, _: &Ledger) -> bool {
+        a.prefanout
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let a = ctx.args;
+        let parts = escape_parts(a, ctx.board, ctx.ledger);
+        let defaults = grid::PrefanoutOptions::default();
+        // Open differential pairs are held back from pre-fanout so `route_pairs` can fan out and
+        // couple their pads together; any pair pad still open afterwards is escaped after.
+        let skip_nets: HashSet<u32> = if a.diff_pairs {
+            grid::diff_pairs(ctx.board)
+                .iter()
+                .filter(|p| grid::shares_layer(ctx.board, p) && grid::pair_has_open_runs(ctx.board, p, a.pours_block))
+                .flat_map(|p| [p.p, p.n])
+                .collect()
+        } else {
+            HashSet::new()
+        };
+        // A net a length rule limits is not escaped by a via it may not have length for: the
+        // routers reach its pads, pricing each via at its height.
+        let skip_nets: HashSet<u32> = skip_nets.into_iter().chain(length_limited(ctx.board)).collect();
+        let options = grid::PrefanoutOptions {
+            global_cell: a.cell.unwrap_or(defaults.global_cell),
+            ring: a.prefanout_ring.unwrap_or(defaults.ring),
+            mode: a.prefanout_mode.unwrap_or(defaults.mode),
+            order: a.prefanout_order.unwrap_or(defaults.order),
+            inward: true,
+            guard_mouths: a.escape_room,
+            parts,
+            skip_nets,
+            pours_block: a.pours_block,
+            deadline: ctx.deadline(),
+            threads: ctx.threads,
+            log: ctx.log.clone(),
+            ..defaults
+        };
+        let watch = &mut *ctx.watch;
+        let f = grid::prefanout(ctx.board, &options, &mut |b| watch.frame(b));
+        ctx.effort_ns = (0, f.escaped_ns, f.failed_ns);
+        ctx.say("prefanout", format!("{} parts, {} inward bridges, {} of {} pads escaped ({} vias)", f.parts, f.bridged_inward, f.escaped, f.candidates, f.vias));
+        eprintln!(
+            "prefanout: {} parts, {} inward, {} of {} escaped ({} failed), {} vias, skipped {} no-net {} pth {} exposed {} escaped, {:.1} s",
+            f.parts,
+            f.bridged_inward,
+            f.escaped,
+            f.candidates,
+            f.failed,
+            f.vias,
+            f.skipped_no_net,
+            f.skipped_pth,
+            f.skipped_exposed,
+            f.skipped_escaped,
+            ctx.elapsed()
+        );
+        if !f.failed_pads.is_empty() {
+            eprintln!("prefanout: no escape for {}", said_list(&f.failed_pads, 12));
+        }
+        ctx.watch.step(ctx.board);
+        ctx.ledger.fanout = f.laid;
+        json!({"parts": f.parts, "inward": f.bridged_inward, "escaped": f.escaped, "candidates": f.candidates, "failed": f.failed, "failed_pads": f.failed_pads, "vias": f.vias})
+    }
+}
+
+/// Plane pads not on their plane get a via down to it beside them, as the router's own copper
+/// a rip-up may take up again.
+pub struct Planes;
+
+impl Stage for Planes {
+    fn name(&self) -> &'static str {
+        "planes"
+    }
+
+    fn enabled(&self, _: &Args, board: &Board, _: &Ledger) -> bool {
+        board.planes != 0
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let reach = ctx.args.plane_via_reach.map(|mm| board::nm(mm * 1e-3));
+        let p = grid::join_planes(ctx.board, ctx.log, &ctx.deadline(), reach);
+        if let Some(mm) = ctx.args.plane_via_reach {
+            ctx.say("planes", format!("{} of {} plane pads have a via of their own within {mm} mm", p.owned, p.own));
+            eprintln!("planes: {} of {} plane pads with a via of their own within {mm} mm, {} laid", p.owned, p.own, p.own_laid.iter().filter(|&&id| ctx.board.item(id).is_some_and(|it| it.kind == board::Kind::Via)).count());
+        }
+        ctx.say("planes", format!("{} of {} pads joined to their planes by a via", p.joined, p.pads));
+        eprintln!("planes: {} of {} pads off their planes joined, {:.1} s", p.joined, p.pads, ctx.elapsed());
+        ctx.watch.step(ctx.board);
+        ctx.ledger.laid.extend(p.laid);
+        ctx.ledger.laid.extend(p.own_laid);
+        json!({"pads": p.pads, "joined": p.joined, "own": p.own, "owned": p.owned})
+    }
+}
+
+/// Strips of copper a zone keeps as laid get a via at each end over their net's copper on
+/// another layer, before anything is routed, so they carry their current end to end.
+pub struct Islands;
+
+impl Stage for Islands {
+    fn name(&self) -> &'static str {
+        "islands"
+    }
+
+    fn enabled(&self, _: &Args, board: &Board, _: &Ledger) -> bool {
+        !board.laid_islands.is_empty()
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let s = grid::stitch_islands(ctx.board, ctx.log);
+        ctx.say("islands", format!("{} of {} ends of laid strips stitched by a via", s.stitched, s.ends));
+        eprintln!("islands: {} of {} strip ends over their net's copper stitched, {} vias, {:.1} s", s.stitched, s.ends, s.laid.len(), ctx.elapsed());
+        ctx.watch.step(ctx.board);
+        ctx.ledger.stitches.extend(s.laid);
+        json!({"ends": s.ends, "stitched": s.stitched})
+    }
+}
+
+/// Differential pairs next, round the escapes, and held apart from the router's own copper so
+/// nothing rips or straightens them apart; the legs to their pads are routed as usual.
+pub struct Pairs;
+
+impl Stage for Pairs {
+    fn name(&self) -> &'static str {
+        "pairs"
+    }
+
+    fn enabled(&self, a: &Args, _: &Board, _: &Ledger) -> bool {
+        a.diff_pairs
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let a = ctx.args;
+        // Coupling end to end may run until a quarter of the time is gone; later runs are laid
+        // the legacy way, as the pairs are a small part of a board, the rest of it still to route.
+        let options = grid::PairOptions { cell: a.cell.unwrap_or(grid::PairOptions::default().cell), pours_block: a.pours_block, deadline: ctx.deadline(), log: ctx.log.clone() };
+        let watch = &mut *ctx.watch;
+        let p = grid::route_pairs_watch(ctx.board, &options, &mut |b, run| watch.pair_run(b, run));
+        ctx.effort_ns = (p.coupled_ns, 0, p.failed_ns);
+        eprintln!(
+            "pairs: {} pairs, {} of {} runs coupled, {:.1} mm of their {:.1}, {} matched uncoupled, {:.1} s",
+            p.pairs,
+            p.coupled,
+            p.runs,
+            p.coupled_mm,
+            p.run_mm,
+            p.matched,
+            ctx.elapsed()
+        );
+        ctx.watch.step(ctx.board);
+        ctx.ledger.pairs.extend(p.laid);
+        let board = &*ctx.board;
+        ctx.ledger.fanout.retain(|&id| board.item(id).is_some_and(|it| !it.locked));
+        json!({"pairs": p.pairs, "runs": p.runs, "coupled": p.coupled, "matched": p.matched, "coupled_mm": p.coupled_mm, "run_mm": p.run_mm})
+    }
+}
+
+/// The pads of pairs left open at fine-pitch parts, escaped now that the pairs are laid.
+pub struct PairEscapes;
+
+impl Stage for PairEscapes {
+    fn name(&self) -> &'static str {
+        "pair-escapes"
+    }
+
+    fn enabled(&self, a: &Args, _: &Board, _: &Ledger) -> bool {
+        a.prefanout
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let a = ctx.args;
+        let fine: HashSet<usize> = escape_parts(a, ctx.board, ctx.ledger).into_iter().collect();
+        let board = &*ctx.board;
+        let pair_nets: HashSet<u32> = grid::diff_pairs(board).iter().flat_map(|pr| [pr.p, pr.n]).collect();
+        let open = ctx.open();
+        let open_fine_pair_nets: HashSet<u32> = open
+            .iter()
+            .filter(|air| pair_nets.contains(&air.net))
+            .filter(|air| {
+                [air.from_item, air.to_item].iter().any(|&id| board.item(id).is_some_and(|it| matches!(it.kind, Kind::Pad { footprint, .. } if fine.contains(&footprint))))
+            })
+            .map(|air| air.net)
+            .filter(|n| !board.vias_cost_length() || board.net_maximum("length", *n).is_none())
+            .collect();
+        if open_fine_pair_nets.is_empty() {
+            return json!({"nets": 0});
+        }
+        let skip_others: HashSet<u32> = (1..board.nets.len() as u32).filter(|n| !open_fine_pair_nets.contains(n)).collect();
+        let defaults = grid::PrefanoutOptions::default();
+        let options = grid::PrefanoutOptions {
+            global_cell: a.cell.unwrap_or(defaults.global_cell),
+            ring: a.prefanout_ring.unwrap_or(defaults.ring),
+            mode: a.prefanout_mode.unwrap_or(defaults.mode),
+            order: a.prefanout_order.unwrap_or(defaults.order),
+            inward: false,
+            guard_mouths: a.escape_room,
+            parts: fine.into_iter().collect(),
+            skip_nets: skip_others,
+            pours_block: a.pours_block,
+            deadline: ctx.deadline(),
+            threads: ctx.threads,
+            log: ctx.log.clone(),
+            ..defaults
+        };
+        let watch = &mut *ctx.watch;
+        let f = grid::prefanout(ctx.board, &options, &mut |b| watch.frame(b));
+        ctx.effort_ns = (0, f.escaped_ns, f.failed_ns);
+        ctx.ledger.fanout.extend(f.laid);
+        json!({"nets": open_fine_pair_nets.len(), "escaped": f.escaped, "vias": f.vias})
+    }
+}
+
+/// Routing and the stages that rescue what it leaves open: the stages within it run only if the
+/// run's time has not gone when it starts.
+pub struct Routing;
+
+impl Stage for Routing {
+    fn name(&self) -> &'static str {
+        "routing"
+    }
+
+    fn run(&self, _: &mut StageCtx) -> Value {
+        Value::Null
+    }
+}
+
+/// Nets with a length limit, routed one at a time before negotiation.
+pub struct First;
+
+impl Stage for First {
+    fn name(&self) -> &'static str {
+        "first"
+    }
+
+    fn enabled(&self, _: &Args, _: &Board, ledger: &Ledger) -> bool {
+        !ledger.first.is_empty()
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let a = ctx.args;
+        let first = ctx.ledger.first.clone();
+        ctx.say("first", format!("routing {} length-limited nets one at a time before negotiation", first.len()));
+        let options = grid::Options {
+            cell: a.cell.unwrap_or(grid::Options::default().cell),
+            via_cost: ctx.ledger.costs.open,
+            net_via_cost: ctx.ledger.costs.open_limited.clone(),
+            directional: true,
+            seed: a.seed,
+            deadline: ctx.deadline(),
+            nets: Some(first.clone()),
+            pours_block: a.pours_block,
+            log: ctx.log.clone(),
+            ..Default::default()
+        };
+        let watch = &mut *ctx.watch;
+        let s = grid::route_open(ctx.board, ctx.solver, &options, &mut |b| watch.frame(b));
+        let (u, w) = ctx.stats.moves.record_single(&s);
+        ctx.effort_ns = (u, 0, w);
+        ctx.ledger.laid.extend(s.laid.iter().copied());
+        eprintln!("first: {} nets, {} routed, {} failed, {} vias, {:.1} s", first.len(), s.routed, s.failed, s.vias, ctx.elapsed());
+        ctx.failed("first", &s.failures);
+        json!({"nets": first.len(), "routed": s.routed, "failed": s.failed, "vias": s.vias})
+    }
+}
+
+/// The nets a custom rule limits in length, where a via costs them its height wherever it
+/// stands ([`Board::vias_cost_length`]); none elsewhere.
+fn length_limited(board: &Board) -> Vec<u32> {
+    if !board.custom.has("length") || !board.vias_cost_length() {
+        return Vec::new();
+    }
+    (1..board.nets.len() as u32).filter(|&n| board.net_maximum("length", n).is_some()).collect()
+}
+
+/// The weight negotiation gives a net a length rule limits (see `NegotiationOptions::net_weight`).
+const LIMITED_WEIGHT: f64 = 0.5;
+
+/// Negotiated congestion: every connection routed at once, round after round, until none share.
+pub struct Negotiation;
+
+impl Stage for Negotiation {
+    fn name(&self) -> &'static str {
+        "negotiation"
+    }
+
+    fn leaves_open(&self) -> Option<&'static str> {
+        Some(LEFT_OPEN)
+    }
+
+    fn enabled(&self, a: &Args, _: &Board, _: &Ledger) -> bool {
+        a.negotiate
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let a = ctx.args;
+        let defaults = grid::NegotiationOptions::default();
+        let options = grid::NegotiationOptions {
+            // With length-limited nets routed first, half of what is left; else half the run.
+            deadline: ctx.deadline(),
+            threads: ctx.threads,
+            cell: a.cell.unwrap_or(defaults.cell),
+            via_cost: ctx.ledger.costs.negotiate,
+            net_via_cost: ctx.ledger.costs.negotiate_limited.clone(),
+            // The nets a length rule limits win the cells they contest, as the shortest way is theirs.
+            net_weight: ctx.ledger.costs.negotiate_limited.keys().map(|&n| (n, LIMITED_WEIGHT)).collect(),
+            pours_block: a.pours_block,
+            seed: a.seed,
+            log: ctx.log.clone(),
+            max_rounds: a.negotiate_rounds.unwrap_or(defaults.max_rounds),
+            patience: a.negotiate_patience.unwrap_or(defaults.patience),
+            present_growth: a.negotiate_growth.unwrap_or(defaults.present_growth),
+            repasses: a.negotiate_repasses.unwrap_or(defaults.repasses),
+            jacobi: a.negotiate_jacobi,
+            reroute_all: a.negotiate_reroute_all,
+            ..Default::default()
+        };
+        // The board, the trial routes and the rounds go to one watcher, never at once.
+        let watch = std::cell::RefCell::new(&mut *ctx.watch);
+        let wants_rounds = watch.borrow().wants_rounds();
+        let mut round = |view: grid::RoundView| watch.borrow_mut().round(view);
+        let n = grid::route_negotiated_rounds(
+            ctx.board,
+            ctx.solver,
+            &options,
+            &mut |b| watch.borrow_mut().frame(b),
+            &mut |r, trials| watch.borrow_mut().trials(r, trials),
+            if wants_rounds { Some(&mut round) } else { None },
+        );
+        let (u, w) = ctx.stats.moves.record_negotiation(&n);
+        ctx.effort_ns = (u, 0, w);
+        eprintln!("negotiated {} of {} connections in {} rounds, {} vias, {:.1} s", n.committed, n.connections, n.rounds, n.vias, ctx.elapsed());
+        ctx.ledger.laid.extend(n.laid);
+        let hot: Vec<Value> = n.hotspots.iter().map(|h| hotspot_json(ctx.board, h)).collect();
+        if !n.hotspots.is_empty() && n.committed < n.connections {
+            eprintln!("negotiation: busiest {}", n.hotspots.iter().map(|h| said_hotspot(ctx.board, h)).collect::<Vec<_>>().join("; "));
+        }
+        ctx.ledger.hotspots = n.hotspots;
+        json!({"connections": n.connections, "committed": n.committed, "rounds": n.rounds, "conflicted": n.conflicted, "unroutable": n.unroutable, "vias": n.vias, "hotspots": hot})
+    }
+}
+
+/// What negotiation left, routed one connection at a time.
+pub struct Finishing;
+
+impl Stage for Finishing {
+    fn name(&self) -> &'static str {
+        "finishing"
+    }
+
+    fn leaves_open(&self) -> Option<&'static str> {
+        Some(LEFT_OPEN)
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let a = ctx.args;
+        ctx.say("finishing", "routing what negotiation left, one connection at a time".to_string());
+        let options = grid::Options {
+            cell: a.cell.unwrap_or(grid::Options::default().cell),
+            via_cost: ctx.ledger.costs.open,
+            net_via_cost: ctx.ledger.costs.open_limited.clone(),
+            seed: a.seed,
+            deadline: ctx.deadline(),
+            pours_block: a.pours_block,
+            log: ctx.log.clone(),
+            ..Default::default()
+        };
+        let watch = &mut *ctx.watch;
+        let s = grid::route_open(ctx.board, ctx.solver, &options, &mut |b| watch.frame(b));
+        let (u, w) = ctx.stats.moves.record_single(&s);
+        ctx.effort_ns = (u, 0, w);
+        ctx.ledger.laid.extend(s.laid.iter().copied());
+        ctx.failed("finishing", &s.failures);
+        narrowed(ctx, &s.narrowed);
+        corridors(ctx, &s.corridors);
+        if s.fine > 0 {
+            eprintln!("finishing: {} connections laid on a finer grid round them", s.fine);
+        }
+        let detail = json!({"routed": s.routed, "failed": s.failed, "no_terminal": s.no_terminal, "no_path": s.no_path, "refused": s.refused, "vias": s.vias, "narrowed": s.narrowed.len(), "fine": s.fine, "corridor": s.corridor});
+        ctx.ledger.routed = s;
+        detail
+    }
+}
+
+/// Each connection a stage laid narrowed to its pins the whole way, said and made a finding.
+fn narrowed(ctx: &mut StageCtx, runs: &[(ItemId, ItemId, Nm)]) {
+    for &(from, to, width) in runs {
+        let net = ctx.board.item(from).map_or(0, |it| it.net);
+        let name = ctx.board.net_name(net).to_string();
+        let line = format!("{name} {} to {} runs {:.2} mm wide the whole way, its pins' width: no way at its own", grid::item_name(ctx.board, from), grid::item_name(ctx.board, to), width as f64 * 1e-6);
+        eprintln!("narrowed: {line}");
+        let refs = [from, to].iter().filter_map(|&id| match ctx.board.item(id).map(|it| &it.kind) {
+            Some(Kind::Pad { footprint, .. }) => Some(ctx.board.footprints[*footprint].reference.clone()),
+            _ => None,
+        }).collect();
+        ctx.stats.findings.push(Finding { severity: "warning", kind: "neck", message: line, refs, nets: vec![name], ends: None });
+    }
+}
+
+/// Each stretch a stage laid narrowed across a tight gap its net's own width cannot pass
+/// (`grid::Options::corridor`), said and made a finding: legal, but thinner than the designer
+/// asked for, so they can see where.
+fn corridors(ctx: &mut StageCtx, stretches: &[(ItemId, ItemId, Nm, Nm)]) {
+    for &(from, to, width, length) in stretches {
+        let net = ctx.board.item(from).map_or(0, |it| it.net);
+        let name = ctx.board.net_name(net).to_string();
+        let own = grid::Profile::for_net(ctx.board, net).half_width * 2;
+        let line = format!(
+            "{name} {} to {} narrows to {:.2} mm for {:.2} mm through a gap its {:.2} mm track cannot pass",
+            grid::item_name(ctx.board, from),
+            grid::item_name(ctx.board, to),
+            width as f64 * 1e-6,
+            length as f64 * 1e-6,
+            own as f64 * 1e-6
+        );
+        eprintln!("narrowed: {line}");
+        let refs = [from, to].iter().filter_map(|&id| match ctx.board.item(id).map(|it| &it.kind) {
+            Some(Kind::Pad { footprint, .. }) => Some(ctx.board.footprints[*footprint].reference.clone()),
+            _ => None,
+        }).collect();
+        ctx.stats.findings.push(Finding { severity: "warning", kind: "neck", message: line, refs, nets: vec![name], ends: None });
+    }
+}
+
+/// The escapes no route used, taken out again.
+pub struct PruneEscapes;
+
+impl Stage for PruneEscapes {
+    fn name(&self) -> &'static str {
+        "prune-escapes"
+    }
+
+    fn enabled(&self, _: &Args, _: &Board, ledger: &Ledger) -> bool {
+        !ledger.fanout.is_empty()
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let (pruned, spans) = grid::prune_closed_escapes(ctx.board, &mut ctx.ledger.fanout, ctx.args.pours_block);
+        ctx.ledger.removed.extend(spans);
+        json!({"pruned": pruned})
+    }
+}
+
+/// Rip-up and reroute: an open connection routed through the router's own copper at a price,
+/// the copper in its way rerouted.
+pub struct RipUp;
+
+impl Stage for RipUp {
+    fn name(&self) -> &'static str {
+        "rip-up"
+    }
+
+    fn leaves_open(&self) -> Option<&'static str> {
+        Some(LEFT_OPEN)
+    }
+
+    fn enabled(&self, a: &Args, _: &Board, _: &Ledger) -> bool {
+        a.rip_up
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let a = ctx.args;
+        let options = grid::RipOptions {
+            cell: a.cell.unwrap_or(grid::RipOptions::default().cell),
+            via_cost: ctx.ledger.costs.rip,
+            deadline: ctx.deadline(),
+            pours_block: a.pours_block,
+            rip_boxed: a.rip_boxed,
+            log: ctx.log.clone(),
+            ..Default::default()
+        };
+        let watch = &mut *ctx.watch;
+        let r = grid::rip_up_watch(ctx.board, ctx.solver, &options, &mut ctx.ledger.laid, &mut |b, attempt| watch.rip(b, &attempt));
+        let (u, w) = ctx.stats.moves.record_rip(&r);
+        ctx.effort_ns = (u, 0, w);
+        eprintln!(
+            "rip-up: {} tries, {} kept, {} ripped; lost {} with no way through, {} to copper it may not rip, {} no better; {:.1} s",
+            r.attempts,
+            r.kept,
+            r.ripped,
+            r.no_path,
+            r.hard_conflict,
+            r.no_better,
+            ctx.elapsed()
+        );
+        narrowed(ctx, &r.narrowed);
+        corridors(ctx, &r.corridors);
+        json!({"tries": r.attempts, "kept": r.kept, "ripped": r.ripped, "no_path": r.no_path, "hard_conflict": r.hard_conflict, "no_better": r.no_better, "narrowed": r.narrowed.len(), "corridor": r.corridor})
+    }
+}
+
+/// The escapes join the router's own copper, for the stages after to move and clean.
+pub struct MergeEscapes;
+
+impl Stage for MergeEscapes {
+    fn name(&self) -> &'static str {
+        "merge-escapes"
+    }
+
+    fn enabled(&self, _: &Args, _: &Board, ledger: &Ledger) -> bool {
+        !ledger.fanout.is_empty()
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let n = ctx.ledger.fanout.len();
+        ctx.ledger.laid.append(&mut ctx.ledger.fanout);
+        json!({"escapes": n})
+    }
+}
+
+/// The plough, for connections still open: then, if pair copper walls one in, the pair copper
+/// near it is let go and the plough tries again.
+pub struct Shove;
+
+impl Stage for Shove {
+    fn name(&self) -> &'static str {
+        "shove"
+    }
+
+    fn leaves_open(&self) -> Option<&'static str> {
+        Some(LEFT_OPEN)
+    }
+
+    fn enabled(&self, a: &Args, _: &Board, _: &Ledger) -> bool {
+        a.shove
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let a = ctx.args;
+        let deadline = ctx.deadline();
+        let started = ctx.clock.started;
+        // The region plough frees any connection; the rip plough only those at these parts.
+        let parts: Option<HashSet<usize>> =
+            (a.shove_plough.unwrap_or(grid::ShoveOptions::default().plough) != grid::Plough::Region).then(|| escape_parts(a, ctx.board, ctx.ledger).into_iter().collect());
+        let (mut passes, mut unlocked) = (
+            shove_pass(a, ctx.board, ctx.solver, &mut ctx.ledger.laid, started, &deadline, ctx.log, ctx.watch, &mut ctx.ledger.removed, &parts, &mut ctx.stats.moves, &mut ctx.effort_ns),
+            0,
+        );
+        if a.diff_pairs && !ctx.ledger.pairs.is_empty() {
+            let open = ctx.open();
+            unlocked = unlock_pairs_near_open(ctx.board, &ctx.ledger.pairs, &open);
+            if unlocked > 0 {
+                passes += shove_pass(a, ctx.board, ctx.solver, &mut ctx.ledger.laid, started, &deadline, ctx.log, ctx.watch, &mut ctx.ledger.removed, &parts, &mut ctx.stats.moves, &mut ctx.effort_ns);
+                relock_pairs(ctx.board, &ctx.ledger.pairs);
+            }
+        }
+        json!({"passes": passes, "pair_pieces_unlocked": unlocked})
+    }
+}
+
+/// Parts moved a step at a time, as blame asks, where that frees a connection.
+pub struct Nudge;
+
+impl Stage for Nudge {
+    fn name(&self) -> &'static str {
+        "nudge"
+    }
+
+    fn enabled(&self, a: &Args, _: &Board, _: &Ledger) -> bool {
+        a.nudge
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let a = ctx.args;
+        let locked = locked_footprints(ctx.board, &ctx.ledger.pairs);
+        let options = grid::NudgeOptions {
+            cell: a.cell.unwrap_or(grid::NudgeOptions::default().cell),
+            deadline: ctx.deadline(),
+            locked,
+            pours_block: a.pours_block,
+            log: ctx.log.clone(),
+            ..Default::default()
+        };
+        let watch = &mut *ctx.watch;
+        let n = grid::nudge_watch(ctx.board, ctx.solver, &options, &mut ctx.ledger.laid, &mut |b, event| watch.nudge(b, &event));
+        let (u, w) = ctx.stats.moves.record_nudge(&n);
+        ctx.effort_ns = (u, 0, w);
+        ctx.ledger.removed.extend(n.ripped_spans.iter().copied());
+        let names: Vec<&str> = n.moved.iter().map(|(f, _)| ctx.board.footprints[*f].reference.as_str()).collect();
+        eprintln!("nudge: {} steps tried, {} illegal, {} kept ({} as blame asked), moved {names:?}, {:.1} s", n.tried, n.illegal, n.kept, n.guided, ctx.elapsed());
+        json!({"tried": n.tried, "illegal": n.illegal, "kept": n.kept, "guided": n.guided, "moved": names})
+    }
+}
+
+/// The routed copper pulled tight; told after the via pass, which may pull it tight again.
+pub struct Tightening;
+
+impl Stage for Tightening {
+    fn name(&self) -> &'static str {
+        "tightening"
+    }
+
+    fn enabled(&self, a: &Args, _: &Board, _: &Ledger) -> bool {
+        a.tighten
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        ctx.say("tightening", "straightening the routed copper".to_string());
+        let deadline = ctx.deadline();
+        let watch = &mut *ctx.watch;
+        let c = tighten(ctx.board, &mut ctx.ledger.laid, &deadline, watch);
+        if !ctx.args.any_angle {
+            grid::octilinear_watch(ctx.board, &mut ctx.ledger.laid, &deadline, &mut |b, net, old, new| watch.tight(b, net, old, new));
+        }
+        ctx.effort_ns = (0, c.kept_ns, c.unchanged_ns);
+        let detail = tight_json(&c);
+        ctx.ledger.tightened = Some(c);
+        detail
+    }
+}
+
+/// Pulls the router's chains tight between their points, then taut round what they wrap: one
+/// set of figures, from the chains as they were to as they are.
+fn tighten(board: &mut Board, laid: &mut Vec<ItemId>, deadline: &grid::Deadline, watch: &mut dyn Watch) -> grid::CleanStats {
+    let tight = grid::pull_tight_watch(board, laid, deadline, &mut |b, net, old, new| watch.tight(b, net, old, new));
+    let taut = grid::pull_taut_watch(board, laid, deadline, &mut |b, net, old, new| watch.tight(b, net, old, new));
+    grid::CleanStats {
+        segments_after: taut.segments_after,
+        length_after: taut.length_after,
+        kept_ns: tight.kept_ns.saturating_add(taut.kept_ns),
+        unchanged_ns: tight.unchanged_ns.saturating_add(taut.unchanged_ns),
+        ..tight
+    }
+}
+
+fn tight_json(c: &grid::CleanStats) -> Value {
+    json!({"chains": c.chains, "segments_before": c.segments_before, "segments_after": c.segments_after, "mm_before": c.length_before, "mm_after": c.length_after})
+}
+
+/// Copper pulled tight can leave room for a route on one layer where it took two: vias such a
+/// route can do without are taken out.
+pub struct Vias;
+
+impl Stage for Vias {
+    fn name(&self) -> &'static str {
+        "vias"
+    }
+
+    fn enabled(&self, _: &Args, _: &Board, ledger: &Ledger) -> bool {
+        !ledger.laid.is_empty() || !ledger.fanout.is_empty()
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let a = ctx.args;
+        ctx.say("vias", "taking out vias a route on one layer can do without".to_string());
+        let deadline = ctx.deadline();
+        let options = grid::ViaOptions { cell: a.cell.unwrap_or(grid::ViaOptions::default().cell), pours_block: a.pours_block, deadline: deadline.clone(), log: ctx.log.clone(), ..Default::default() };
+        let ledger = &mut *ctx.ledger;
+        let watch = &mut *ctx.watch;
+        let v = grid::reduce_vias_all(ctx.board, &options, &mut ledger.laid, &mut ledger.fanout, &mut |b| watch.frame(b));
+        let (mut kept_ns, mut wasted_ns) = (v.kept_ns, v.failed_ns);
+        ledger.removed.extend(v.removed_spans);
+        if v.dropped > 0 {
+            eprintln!("vias: {} of {} dropped, {} of {} tries kept, {:.1} s", v.dropped, v.vias_before, v.kept, v.tried, ctx.elapsed());
+            ctx.watch.step(ctx.board);
+            if let Some(c) = &mut ctx.ledger.tightened {
+                let watch = &mut *ctx.watch;
+                let again = tighten(ctx.board, &mut ctx.ledger.laid, &deadline, watch);
+                kept_ns = kept_ns.saturating_add(again.kept_ns);
+                wasted_ns = wasted_ns.saturating_add(again.unchanged_ns);
+                (c.segments_after, c.length_after) = (again.segments_after, again.length_after);
+                // Tightening's figures are those it tells after this, as its line does.
+                if let Some(t) = ctx.stats.stages.iter_mut().find(|s| s.name == "tightening") {
+                    t.detail = tight_json(c);
+                }
+            }
+        }
+        ctx.effort_ns = (0, kept_ns, wasted_ns);
+        json!({"before": v.vias_before, "after": v.vias_after, "dropped": v.dropped, "tried": v.tried, "kept": v.kept})
+    }
+}
+
+/// Doubled tracks and copper leading nowhere taken out, whatever the time: what it leaves out
+/// would be written as it stands. Tightening's line comes first, as it waited for the via pass.
+pub struct Cleaning;
+
+impl Stage for Cleaning {
+    fn name(&self) -> &'static str {
+        "cleaning"
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        if let Some(c) = ctx.ledger.tightened.take() {
+            ctx.say("tightening", format!("{} segments became {}, {:.0} mm became {:.0} mm", c.segments_before, c.segments_after, c.length_before, c.length_after));
+            eprintln!("pulled tight: {} -> {} segments, {:.0} -> {:.0} mm, {:.1} s", c.segments_before, c.segments_after, c.length_before, c.length_after, ctx.elapsed());
+            ctx.ledger.tightened = Some(c);
+        }
+        let open_before = ctx.open().len();
+        let (board, ledger) = (&mut *ctx.board, &mut *ctx.ledger);
+        // The pairs' copper was locked only against the single-ended stages; it is the router's own
+        // copper again for the cleanup, so a track another of its net ends on is split like any other.
+        for &id in &ledger.pairs {
+            if let Some(mut it) = board.remove(id) {
+                it.locked = false;
+                board.restore(id, it);
+            }
+        }
+        // Pulling tight left the pairs alone: a turn-back in their escapes is taken out here.
+        let turns = grid::straighten_turn_backs(board, &mut ledger.pairs);
+        if turns > 0 {
+            eprintln!("straightened {turns} places where a pair's track ran on and came back");
+        }
+        // The pairs' copper is cleaned with the rest: a run whose legs never came is taken out.
+        ledger.laid.extend(ledger.pairs.iter().copied().filter(|id| board.item(*id).is_some()));
+        // Staircases pulling tight never reached, the pairs' or where time ran out, smoothed.
+        let steps = grid::smooth_staircases(board, &mut ledger.laid);
+        if steps > 0 {
+            eprintln!("smoothed {steps} steps of staircases");
+        }
+        let watch = &mut *ctx.watch;
+        let (doubled, spans) = grid::drop_duplicates_watch(board, &mut ledger.laid, &mut |b, it| watch.cleaned(b, it, Cleaned::Duplicate));
+        ledger.removed.extend(spans);
+        let (pruned, spans) = grid::prune_dangling_watch(board, &mut ledger.laid, &mut |b, it| watch.cleaned(b, it, Cleaned::Dangling));
+        ledger.removed.extend(spans);
+        if doubled + pruned > 0 {
+            ctx.say("cleaning", format!("{doubled} doubled tracks and {pruned} pieces of copper leading nowhere taken out"));
+            eprintln!("dropped {doubled} doubled, pruned {pruned} dangling, open {open_before} -> {}, {:.1} s", ctx.open().len(), ctx.elapsed());
+        }
+        json!({"doubled": doubled, "pruned": pruned})
+    }
+}
+
+/// What is still open once the copper is settled, routed one connection at a time again: the
+/// via pass, tightening and the clean-up move copper after the routing stages have given up, and
+/// may leave room where there was none.
+pub struct Refinish;
+
+impl Stage for Refinish {
+    fn name(&self) -> &'static str {
+        "refinishing"
+    }
+
+    fn leaves_open(&self) -> Option<&'static str> {
+        Some(LEFT_OPEN)
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let before = ctx.open().len();
+        if before == 0 {
+            return json!({"routed": 0});
+        }
+        let a = ctx.args;
+        let options = grid::Options {
+            cell: a.cell.unwrap_or(grid::Options::default().cell),
+            via_cost: ctx.ledger.costs.open,
+            net_via_cost: ctx.ledger.costs.open_limited.clone(),
+            seed: a.seed,
+            deadline: ctx.deadline(),
+            pours_block: a.pours_block,
+            log: ctx.log.clone(),
+            ..Default::default()
+        };
+        let watch = &mut *ctx.watch;
+        let s = grid::route_open(ctx.board, ctx.solver, &options, &mut |b| watch.frame(b));
+        let (u, w) = ctx.stats.moves.record_single(&s);
+        ctx.effort_ns = (u, 0, w);
+        ctx.ledger.laid.extend(s.laid.iter().copied());
+        ctx.failed("refinishing", &s.failures);
+        narrowed(ctx, &s.narrowed);
+        corridors(ctx, &s.corridors);
+        if s.routed > 0 {
+            eprintln!("refinished {} more ({} on a finer grid), open {before} -> {}, {:.1} s", s.routed, s.fine, ctx.open().len(), ctx.elapsed());
+        }
+        json!({"routed": s.routed, "failed": s.failed, "fine": s.fine, "corridor": s.corridor})
+    }
+}
+
+/// What is still open at the very end, narrowed across the tight gaps its own width cannot pass
+/// (`grid::Options::corridor`): the last resort, after every stage that keeps the designer's
+/// widths, so a board they finish never sees a corridor. With rip-up, through the router's own
+/// copper (`grid::RipOptions::corridor`); without, around it.
+pub struct Corridors;
+
+impl Stage for Corridors {
+    fn name(&self) -> &'static str {
+        "corridors"
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let before = ctx.open().len();
+        if before == 0 {
+            return json!({"corridor": 0});
+        }
+        let a = ctx.args;
+        let (corridor, narrow, stretches) = if a.rip_up {
+            let options = grid::RipOptions {
+                cell: a.cell.unwrap_or(grid::RipOptions::default().cell),
+                via_cost: ctx.ledger.costs.rip,
+                deadline: ctx.deadline(),
+                pours_block: a.pours_block,
+                log: ctx.log.clone(),
+                corridor: true,
+                ..Default::default()
+            };
+            let watch = &mut *ctx.watch;
+            let r = grid::rip_up_watch(ctx.board, ctx.solver, &options, &mut ctx.ledger.laid, &mut |b, attempt| watch.rip(b, &attempt));
+            let (u, w) = ctx.stats.moves.record_rip(&r);
+            ctx.effort_ns = (u, 0, w);
+            (r.corridor, r.narrowed, r.corridors)
+        } else {
+            let options = grid::Options {
+                cell: a.cell.unwrap_or(grid::Options::default().cell),
+                via_cost: ctx.ledger.costs.open,
+                net_via_cost: ctx.ledger.costs.open_limited.clone(),
+                seed: a.seed,
+                deadline: ctx.deadline(),
+                pours_block: a.pours_block,
+                log: ctx.log.clone(),
+                corridor: true,
+                ..Default::default()
+            };
+            let watch = &mut *ctx.watch;
+            let s = grid::route_open(ctx.board, ctx.solver, &options, &mut |b| watch.frame(b));
+            let (u, w) = ctx.stats.moves.record_single(&s);
+            ctx.effort_ns = (u, 0, w);
+            ctx.ledger.laid.extend(s.laid.iter().copied());
+            (s.corridor, s.narrowed, s.corridors)
+        };
+        narrowed(ctx, &narrow);
+        corridors(ctx, &stretches);
+        let after = ctx.open().len();
+        if after < before {
+            eprintln!("corridors: {corridor} connections narrowed across tight gaps, open {before} -> {after}, {:.1} s", ctx.elapsed());
+        }
+        json!({"corridor": corridor, "stretches": stretches.len(), "open_before": before, "open_after": after})
+    }
+}
+
+/// Once the copper is settled, the router's tracks put on 45-degree multiples, as a designer draws
+/// them (`grid::octilinear_watch`): pulled tight and taut, and smoothed, about three quarters of
+/// their length lay at other angles. A pair's tracks are left as they are, which bending one leg
+/// alone would uncouple. Last but for the length matching, so nothing routed after is missed and
+/// nothing routed before is denied the room an angled track leaves; a bounded number of tries a
+/// track, whatever the time, so a board is written as tidy run to run.
+pub struct Squaring;
+
+impl Stage for Squaring {
+    fn name(&self) -> &'static str {
+        "squaring"
+    }
+
+    fn enabled(&self, a: &Args, _: &Board, ledger: &Ledger) -> bool {
+        a.tighten && !a.any_angle && !ledger.laid.is_empty()
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let (board, ledger) = (&mut *ctx.board, &mut *ctx.ledger);
+        let pairs: HashSet<ItemId> = ledger.pairs.iter().copied().collect();
+        let mut soft: Vec<ItemId> = ledger.laid.iter().copied().filter(|id| !pairs.contains(id)).collect();
+        let watch = &mut *ctx.watch;
+        let bent = grid::octilinear_watch(board, &mut soft, &Default::default(), &mut |b, net, old, new| watch.tight(b, net, old, new));
+        if bent > 0 {
+            ledger.laid.retain(|id| pairs.contains(id));
+            ledger.laid.extend(soft);
+            ctx.say("squaring", format!("{bent} tracks put on 45-degree multiples"));
+            eprintln!("squared {bent} tracks onto 45 degrees, {:.1} s", ctx.elapsed());
+        }
+        json!({"bent": bent})
+    }
+}
+
+/// Last, once the copper is settled: the shorter net of each pair a custom `skew` rule limits is
+/// given bumps until the pair is within it. A pair with no such rule is left as routed.
+pub struct LengthMatching;
+
+impl Stage for LengthMatching {
+    fn name(&self) -> &'static str {
+        "length matching"
+    }
+
+    fn enabled(&self, a: &Args, _: &Board, _: &Ledger) -> bool {
+        a.diff_pairs
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let pairs = grid::diff_pairs(ctx.board);
+        let deadline = ctx.deadline();
+        let watch = &mut *ctx.watch;
+        let t = grid::match_lengths_watch(ctx.board, &pairs, &mut ctx.ledger.laid, &deadline, &mut |b, bump| watch.bump(b, bump));
+        for grid::PairSkew { pair, before, after, limit } in &t.skews {
+            match limit {
+                Some((rule, max)) => {
+                    ctx.say("pairs", format!("{pair}: {before:.2} mm apart in length, {after:.2} mm after tuning to rule \"{rule}\"'s {max:.2} mm skew"));
+                    eprintln!("tune: {pair} skew {before:.2} -> {after:.2} mm (rule \"{rule}\" max {max:.2} mm)");
+                }
+                None => {
+                    ctx.say("pairs", format!("{pair}: {before:.2} mm apart in length, not tuned: no rule limits its skew"));
+                    eprintln!("tune: {pair} skew {before:.2} mm, not tuned: no skew rule");
+                }
+            }
+        }
+        ctx.watch.step(ctx.board);
+        let skews: Vec<Value> = t.skews.iter().map(|s| json!({"pair": s.pair, "before_mm": s.before, "after_mm": s.after, "rule": s.limit.as_ref().map(|l| &l.0), "max_mm": s.limit.as_ref().map(|l| l.1)})).collect();
+        json!({"pairs": t.pairs, "untuned": t.untuned(), "bumps": t.bumps, "skews": skews})
+    }
+}
+
+/// The tracks of nets with an optimum width (`Board::opt_widths`: a custom rule's `opt`, a
+/// planner's, `--power-width`) widened to it where the routing left room, moving nothing: the
+/// routing never gives up a connection for it.
+pub struct Widening;
+
+impl Stage for Widening {
+    fn name(&self) -> &'static str {
+        "widening"
+    }
+
+    fn enabled(&self, _: &Args, _: &Board, ledger: &Ledger) -> bool {
+        !ledger.preferred.is_empty()
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let widened = crate::widths::widen(ctx.board, &ctx.ledger.preferred, ctx.args.pours_block);
+        eprintln!("widening: {widened} tracks of nets preferred wider widened, {:.1} s", ctx.elapsed());
+        ctx.watch.step(ctx.board);
+        json!({"widened": widened})
+    }
+}
+
+/// The first `most` of `names`, and how many more: every one is in the report.
+fn said_list(names: &[String], most: usize) -> String {
+    let shown = names.iter().take(most).cloned().collect::<Vec<_>>().join(", ");
+    if names.len() > most {
+        format!("{shown}, and {} more (all in --report)", names.len() - most)
+    } else {
+        shown
+    }
+}
+
+/// A hotspot in millimetres, KiCad's frame, for the report.
+fn hotspot_json(board: &Board, h: &grid::Hotspot) -> Value {
+    let mm = |v: Nm| (v as f64 * 1e-3).round() / 1e3;
+    json!({"min_mm": [mm(h.min.x), mm(h.min.y)], "max_mm": [mm(h.max.x), mm(h.max.y)], "layers": h.layers.iter().map(|&l| board.layers[l].clone()).collect::<Vec<_>>(), "cells": h.cells, "collisions": h.collisions})
+}
+
+/// A hotspot said: its box's centre and size in millimetres, and its layers.
+fn said_hotspot(board: &Board, h: &grid::Hotspot) -> String {
+    let (cx, cy) = ((h.min.x + h.max.x) as f64 * 5e-7, (h.min.y + h.max.y) as f64 * 5e-7);
+    let (w, ht) = ((h.max.x - h.min.x) as f64 * 1e-6, (h.max.y - h.min.y) as f64 * 1e-6);
+    let layers: Vec<&str> = h.layers.iter().map(|&l| board.layers[l].as_str()).collect();
+    format!("({cx:.1}, {cy:.1}) mm, {w:.1} x {ht:.1} mm on {}", layers.join(","))
+}
+
+/// Each pour of the board in `text` filled as KiCad would refill it round `board`'s copper:
+/// (zone, layer), its net, its area in square millimetres and its pieces.
+#[allow(clippy::type_complexity)]
+fn pours(board: &Board, text: &str, stop: &dyn Fn() -> bool) -> Option<Vec<((usize, usize), u32, f64, usize)>> {
+    if kicad_pcb::parse_board(text).is_err() {
+        return Some(Vec::new());
+    }
+    Some(board::fill_zones_until(board, stop)?.iter().map(|f| ((f.zone, f.layer), f.net, f.area() / 1e12, f.pieces)).collect())
+}
+
+/// What the run leaves open, said: the summary line, and with `--blame` what stands in the way
+/// of each open connection. Each is a finding.
+pub struct Outcome;
+
+impl Stage for Outcome {
+    fn name(&self) -> &'static str {
+        "result"
+    }
+
+    fn leaves_open(&self) -> Option<&'static str> {
+        Some("never tried")
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let open = ctx.open();
+        let s = &ctx.ledger.routed;
+        eprintln!("routed {} more, {} failed, {} open, {:.1} s", s.routed, s.failed, open.len(), ctx.elapsed());
+        let mut detail = json!({"open": open.len(), "routed": s.routed, "failed": s.failed});
+        // What the routing took of each pour: a plane cut in pieces or half gone is copper the
+        // board's current and its signals' return paths no longer have. Said, not prevented.
+        let started = grid::clock::Instant::now();
+        let mut kept = Vec::new();
+        // Both filled before the run's hard end, in the time its reserve leaves: a large board's
+        // pours take a second or more each.
+        let clock = ctx.clock;
+        let end = clock.timeout.map(|t| grid::Deadline::until(clock.started + std::time::Duration::from_secs_f64(t), clock.run.cancel.clone()));
+        let stop = || end.as_ref().is_some_and(|e| e.expired());
+        let filled = ctx.ledger.unrouted.take().map(|unrouted| (pours(&unrouted, ctx.text, &stop), pours(ctx.board, ctx.text, &stop)));
+        let (before, after) = match filled {
+            Some((Some(before), Some(after))) => (before, after),
+            Some(_) => {
+                eprintln!("pours: not measured, the run's time ran out first");
+                (Vec::new(), Vec::new())
+            }
+            None => (Vec::new(), Vec::new()),
+        };
+        let before: HashMap<(usize, usize), (f64, usize)> = before.into_iter().map(|(k, _, area, pieces)| (k, (area, pieces))).collect();
+        for ((zone, layer), net, area, pieces) in after {
+            let Some(&(was, were)) = before.get(&(zone, layer)) else { continue };
+            kept.push(json!({"zone": zone, "layer": ctx.board.layers[layer], "net": ctx.board.net_name(net), "before_mm2": was, "after_mm2": area, "pieces_before": were, "pieces_after": pieces}));
+        }
+        let (was, now): (f64, f64) = kept.iter().fold((0.0, 0.0), |(w, n), p| (w + p["before_mm2"].as_f64().unwrap(), n + p["after_mm2"].as_f64().unwrap()));
+        if was > 0.0 {
+            let mut hurt: Vec<&Value> = kept
+                .iter()
+                // Of 10 mm² or more, and under nine tenths of its copper, or in more pieces and no
+                // more copper: not a pour that only grew an island round a new track of its own net.
+                .filter(|p| {
+                    let (was, now) = (p["before_mm2"].as_f64().unwrap(), p["after_mm2"].as_f64().unwrap());
+                    was >= 10.0 && (now < 0.9 * was || (p["pieces_after"].as_u64() > p["pieces_before"].as_u64() && now <= was))
+                })
+                .collect();
+            let lost = |p: &Value| p["before_mm2"].as_f64().unwrap() - p["after_mm2"].as_f64().unwrap();
+            hurt.sort_by(|a, b| lost(b).total_cmp(&lost(a)));
+            let hurt: Vec<String> = hurt
+                .into_iter()
+                .map(|p| format!("{} {} {:.0} -> {:.0} mm², {} -> {} pieces", p["layer"].as_str().unwrap(), p["net"].as_str().unwrap(), p["before_mm2"].as_f64().unwrap(), p["after_mm2"].as_f64().unwrap(), p["pieces_before"], p["pieces_after"]))
+                .collect();
+            eprintln!("pours: {:.0}% of {:.0} mm² kept{}, {:.1} s", 100.0 * now / was, was, if hurt.is_empty() { String::new() } else { format!("; cut: {}", hurt.join("; ")) }, started.elapsed().as_secs_f64());
+            ctx.say("pours", format!("{:.0}% of the pours' {:.0} mm² kept", 100.0 * now / was, was));
+            detail["pours"] = json!(kept);
+        }
+        let preferred = &ctx.ledger.preferred;
+        if !preferred.is_empty() {
+            // Of each net's unlocked track, the length at its preferred width.
+            let want: HashMap<u32, Nm> = preferred.iter().copied().collect();
+            let (mut at, mut all) = (HashMap::<u32, f64>::new(), HashMap::<u32, f64>::new());
+            for (_, it) in ctx.board.items().filter(|(_, it)| it.kind == Kind::Track && !it.locked) {
+                if let (Some(&w), Shape::Capsule { a, b, r }) = (want.get(&it.net), &it.shape) {
+                    let len = a.distance(*b);
+                    *all.entry(it.net).or_default() += len;
+                    if 2 * r >= w {
+                        *at.entry(it.net).or_default() += len;
+                    }
+                }
+            }
+            let total: f64 = all.values().sum();
+            let wide: f64 = at.values().sum();
+            let short: Vec<&str> = preferred.iter().filter(|(n, _)| at.get(n).copied().unwrap_or(0.0) < all.get(n).copied().unwrap_or(0.0)).map(|&(n, _)| ctx.board.net_name(n)).collect();
+            let share = if total > 0.0 { wide / total } else { 1.0 };
+            eprintln!("widths: {:.0}% of the track of {} nets with an optimum width at it ({:.1} of {:.1} mm); {} with some narrower{}", 100.0 * share, preferred.len(), wide / 1e6, total / 1e6, short.len(), if short.is_empty() { String::new() } else { format!(": {}", short.join(", ")) });
+            detail["widths"] = json!({"preferred": preferred.len(), "share": share, "at_mm": wide / 1e6, "of_mm": total / 1e6, "narrower": short});
+        }
+        let blamed = if ctx.args.blame { crate::print_blame(ctx.board, ctx.args.pours_block) } else { Vec::new() };
+        let found = open_findings(ctx.board, &open, &blamed);
+        // Which connections, not only how many (--blame says what stands in their way).
+        if !ctx.args.blame && !found.is_empty() {
+            let named: Vec<String> = found.iter().map(|f| f.message.trim_start_matches("open ").to_string()).collect();
+            eprintln!("open: {}", said_list(&named, 10));
+        }
+        ctx.stats.findings.extend(found);
+        // Open connections whose straight line crosses a place negotiation found crowded: room
+        // there, not time, is likely what they lack.
+        if !open.is_empty() && !ctx.ledger.hotspots.is_empty() {
+            let crosses = |air: &board::Airline, h: &grid::Hotspot| {
+                (0..=32).any(|k| {
+                    let t = k as f64 / 32.0;
+                    let (x, y) = (air.from.x as f64 + t * (air.to.x - air.from.x) as f64, air.from.y as f64 + t * (air.to.y - air.from.y) as f64);
+                    x >= (h.min.x - 500_000) as f64 && x <= (h.max.x + 500_000) as f64 && y >= (h.min.y - 500_000) as f64 && y <= (h.max.y + 500_000) as f64
+                })
+            };
+            let through: Vec<usize> = ctx.ledger.hotspots.iter().map(|h| open.iter().filter(|air| crosses(air, h)).count()).collect();
+            let any = open.iter().filter(|air| ctx.ledger.hotspots.iter().any(|h| crosses(air, h))).count();
+            if any > 0 {
+                let busiest: Vec<String> = ctx.ledger.hotspots.iter().zip(&through).filter(|(_, &n)| n > 0).map(|(h, n)| format!("{n} at {}", said_hotspot(ctx.board, h))).collect();
+                eprintln!("crowding: {any} of {} open connections cross where negotiation's routes kept colliding ({}); room there, not time, is likely what they lack", open.len(), busiest.join("; "));
+                detail["crowded_open"] = json!(any);
+            }
+        }
+        ctx.ledger.open = open.len();
+        detail
+    }
+}
+
+/// A finding per open connection: its net, its two ends and their parts, and what blame said
+/// stands in its way, when asked.
+pub(crate) fn open_findings(board: &Board, open: &[board::Airline], blamed: &[String]) -> Vec<Finding> {
+    let mut out = Vec::new();
+    for (k, air) in open.iter().enumerate() {
+        let ends = [grid::item_name(board, air.from_item), grid::item_name(board, air.to_item)];
+        let mut refs: Vec<String> = Vec::new();
+        for id in [air.from_item, air.to_item] {
+            if let Some(Kind::Pad { footprint, .. }) = board.item(id).map(|it| &it.kind) {
+                let r = &board.footprints[*footprint].reference;
+                if !refs.contains(r) {
+                    refs.push(r.clone());
+                }
+            }
+        }
+        let net = board.net_name(air.net).to_string();
+        let mut message = format!("open {net}: {} to {}", ends[0], ends[1]);
+        if let Some(what) = blamed.get(k) {
+            message = format!("{message}: {what}");
+        }
+        out.push(Finding { severity: "error", kind: "open", message, refs, nets: vec![net], ends: Some(ends) });
+    }
+    out
+}
+
+/// A finding per warning from loading the board: of kind `rule` for what its project and custom
+/// rules leave out or the router does not apply, `board` for the board's own file and outline,
+/// so a designer sees a dropped rule wherever the report goes, not only on stderr.
+pub(crate) fn load_findings(board: &Board) -> Vec<Finding> {
+    let rules = board.rules.warnings.iter().map(|w| ("rule", w));
+    let own = board.warnings.iter().map(|w| ("board", w));
+    rules.chain(own).map(|(kind, w)| Finding { severity: "warning", kind, message: w.clone(), refs: Vec::new(), nets: Vec::new(), ends: None }).collect()
+}
+
+/// The board written: the router's copper as tracks and vias, what it took out removed, moved
+/// parts at their new places, stale pour fills dropped; with the regions' and the necks' reports.
+pub struct Write;
+
+impl Stage for Write {
+    fn name(&self) -> &'static str {
+        "write"
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let (a, board, ledger) = (ctx.args, &mut *ctx.board, &mut *ctx.ledger);
+        let mut laid = std::mem::take(&mut ledger.laid);
+        laid.append(&mut ledger.fanout);
+        if a.prefanout {
+            // Escapes may have joined `laid` twice over, or been ripped since.
+            let mut seen_laid = HashSet::new();
+            laid.retain(|id| board.item(*id).is_some() && seen_laid.insert(*id));
+        }
+        let unmended: HashSet<ItemId> = laid.iter().copied().collect();
+        // Ends joined only where round copper overlaps, narrower than the track: a piece onto
+        // the other track's centre line, which the split below makes an end-to-end joint.
+        let mended = grid::mend_joints(board, &mut laid);
+        if mended > 0 {
+            eprintln!("mended {mended} joints where round ends only overlapped");
+        }
+        // Ends that only graze a pad's edge: a piece on into the pad.
+        let into = grid::mend_pad_joints(board, &mut laid);
+        if into > 0 {
+            eprintln!("mended {into} pad joints where a track's end only reached the pad's edge");
+        }
+        // Two vias of a net whose lands only touch: the one not needed goes, else they are joined.
+        let (vias, spans) = grid::mend_via_grazes(board, &mut laid);
+        ledger.removed.extend(spans);
+        if vias > 0 {
+            eprintln!("mended {vias} pairs of vias whose lands only touched");
+        }
+        // A via whose land only clips a pad of its net: it goes if not needed, else a piece on
+        // into the pad.
+        let (clipped, spans) = grid::mend_via_pad_grazes(board, &mut laid);
+        ledger.removed.extend(spans);
+        if clipped > 0 {
+            eprintln!("mended {clipped} vias whose lands only clipped a pad of their net");
+        }
+        // Copper of a net that only grazes other copper of it: a piece across, at full width.
+        let bridged = grid::mend_grazes(board, &mut laid);
+        if bridged > 0 {
+            eprintln!("bridged {bridged} places where a track only grazed its net's copper");
+        }
+        // The mends' pieces lie wholly in their net's copper, which the prune below would take as
+        // redundant and undo (nanoTracer: 44 pad joints mended, 44 pieces pruned, 10 necks).
+        let pieces: HashSet<ItemId> = laid.iter().copied().filter(|id| !unmended.contains(id)).collect();
+        let (split, spans) = grid::split_at_joins(board, &mut laid);
+        ledger.removed.extend(spans);
+        if split > 0 {
+            eprintln!("split {split} tracks where others end on them");
+        }
+        // The mends lay their pieces after cleaning: one may double a track (easy2350's +3V3,
+        // one piece written four times) or lie along a wider one, a 0.09 mm neck under a 0.2 mm
+        // track; and a track that ran past a join leaves that overhang a piece of its own, leading
+        // nowhere, which KiCad reports as dangling.
+        let (doubled, spans) = grid::drop_duplicates(board, &mut laid);
+        ledger.removed.extend(spans);
+        let (mut rest, kept): (Vec<ItemId>, Vec<ItemId>) = laid.iter().partition(|id| !pieces.contains(id));
+        let (pruned, spans) = grid::prune_dangling(board, &mut rest);
+        ledger.removed.extend(spans);
+        rest.extend(kept.into_iter().filter(|&id| board.item(id).is_some()));
+        laid = rest;
+        if doubled + pruned > 0 {
+            eprintln!("dropped {doubled} doubled and pruned {pruned} dangling after the mends");
+        }
+        // The strips' stitches stood through every stage, locked; they are written with the rest
+        // as the router's own copper, unlocked, so the next run lays them afresh.
+        for &id in &ledger.stitches {
+            if let Some(mut it) = board.remove(id) {
+                it.locked = false;
+                board.restore(id, it);
+                laid.push(id);
+            }
+        }
+        for (line, nets) in regions::report(board, &ledger.lengths, &laid) {
+            eprintln!("regions: {line}");
+            let kind = if line.starts_with("length:") { "length" } else { "region" };
+            ctx.stats.findings.push(Finding { severity: "warning", kind, message: line.clone(), refs: Vec::new(), nets, ends: None });
+            ctx.say("regions", line);
+        }
+        for (line, net) in ctx.board.rule_limits() {
+            eprintln!("rules: {line}");
+            ctx.stats.findings.push(Finding { severity: "warning", kind: "length", message: line.clone(), refs: Vec::new(), nets: vec![net], ends: None });
+            ctx.say("rules", line);
+        }
+        let board = &mut *ctx.board;
+        for neck in grid::necks::necks(board, &laid) {
+            eprintln!("neck: {}", neck.line);
+            ctx.stats.findings.push(Finding { severity: "warning", kind: "neck", message: neck.line.clone(), refs: neck.part.into_iter().collect(), nets: vec![neck.net], ends: None });
+            ctx.say("necks", neck.line);
+        }
+        // What could not be mended: under the net's width rule it breaks the rules, which the
+        // board's check may not see, as KiCad counts overlapping round ends joined.
+        let board = &*ctx.board;
+        for joint in grid::narrow_joints(board, &laid) {
+            let net = board.net_name(joint.net).to_string();
+            let rule = board.min_joint_of(joint.net) as f64;
+            let (severity, what) = if joint.width < rule { ("error", "under the net's width rule") } else { ("warning", "within the net's width rule") };
+            let line = format!(
+                "narrow joint: {net} on {} at ({:.3}, {:.3}) mm, {:.3} mm wide where its tracks are {:.3} mm ({what}, {:.3} mm): round ends only overlap",
+                board.layers[joint.layer],
+                joint.at.x as f64 * 1e-6,
+                joint.at.y as f64 * 1e-6,
+                joint.width * 1e-6,
+                joint.full * 1e-6,
+                rule * 1e-6
+            );
+            eprintln!("{line}");
+            ctx.stats.findings.push(Finding { severity, kind: "joint", message: line, refs: Vec::new(), nets: vec![net], ends: None });
+        }
+        for joint in grid::pad_joints(board, &laid) {
+            let net = board.net_name(joint.net).to_string();
+            let rule = board.min_joint_of(joint.net) as f64;
+            let pad = grid::report::item_name(board, joint.pad);
+            let (severity, what) = if joint.width < rule { ("error", "under the net's width rule") } else { ("warning", "within the net's width rule") };
+            let line = format!(
+                "narrow pad joint: {net} on {} at ({:.3}, {:.3}) mm, {:.3} mm wide where its track is {:.3} mm ({what}, {:.3} mm): the track ends outside {pad}",
+                board.layers[joint.layer],
+                joint.at.x as f64 * 1e-6,
+                joint.at.y as f64 * 1e-6,
+                joint.width * 1e-6,
+                joint.full * 1e-6,
+                rule * 1e-6
+            );
+            eprintln!("{line}");
+            ctx.stats.findings.push(Finding { severity, kind: "joint", message: line, refs: vec![pad], nets: vec![net], ends: None });
+        }
+        // A plane pad whose own via a signal took gets one again where it still fits; one with
+        // none within the reach asked is reported.
+        if let Some(mm) = a.plane_via_reach {
+            let again = grid::planes::own_planes_vias(ctx.board, ctx.log, &grid::Deadline::default(), board::nm(mm * 1e-3));
+            let vias = again.own_laid.iter().filter(|&&id| ctx.board.item(id).is_some_and(|it| it.kind == board::Kind::Via)).count();
+            if vias > 0 {
+                eprintln!("planes: {vias} plane pads' own vias laid again after routing");
+            }
+            laid.extend(again.own_laid);
+            for pv in grid::planes::pad_vias(ctx.board, board::nm(mm * 1e-3)).into_iter().filter(|pv| pv.via.is_none()) {
+                let board = &*ctx.board;
+                let (pad, net) = (grid::report::item_name(board, pv.pad), board.net_name(board.item(pv.pad).map_or(0, |it| it.net)).to_string());
+                let nearest = if pv.nearest.is_finite() { format!("its nearest {:.2} mm away", pv.nearest * 1e-6) } else { "none of its copper's near".to_string() };
+                let line = format!("plane pad without its own via: {pad} ({net}) has no via of its own within {mm} mm, {nearest}");
+                eprintln!("{line}");
+                ctx.stats.findings.push(Finding { severity: "warning", kind: "plane-via", message: line, refs: vec![pad], nets: vec![net], ends: None });
+            }
+        }
+        let (board, ledger) = (&mut *ctx.board, &mut *ctx.ledger);
+        let replace = crate::moved_parts(board, &ledger.original_at, ctx.text);
+        let arcs = a.arcs.map_or_else(Vec::new, |radius| grid::round_corners(board, &mut laid, radius));
+        if !arcs.is_empty() {
+            eprintln!("rounded {} corners", arcs.len());
+        }
+        grid::keep_orphans(board, &ledger.removed, &mut laid);
+        // An arc stands on the board as its chords and is written whole.
+        let chords: HashSet<ItemId> = arcs.iter().flat_map(|arc| arc.chords.iter().copied()).collect();
+        let straight: Vec<ItemId> = laid.iter().copied().filter(|id| !chords.contains(id)).collect();
+        let (tracks, vias) = grid::edits(board, &straight);
+        let arcs = grid::arc_edits(board, &arcs);
+        let stale = crate::stale_fills(board, &laid, ctx.text, !replace.is_empty());
+        if !stale.is_empty() {
+            eprintln!("dropped {} pour fills new copper cuts; KiCad refills them", stale.len());
+        }
+        let detail = json!({"tracks": tracks.len(), "arcs": arcs.len(), "vias": vias.len(), "split": split, "stale_fills": stale.len(), "moved_parts": replace.len()});
+        let mut removed = std::mem::take(&mut ledger.removed);
+        removed.extend(stale);
+        ledger.output = Some(apply(ctx.text, &Edit { remove: removed, replace, tracks, arcs, vias, zones: Vec::new(), uuid_seed: ctx.args.uuid_seed }));
+        ledger.laid = laid;
+        detail
+    }
+}
+
+/// The widest region the region plough rips round a trapped connection's path.
+const REGION_WIDEST: Nm = 4_000_000;
+
+/// The plough for connections trapped at fine-pitch parts, up to `--shove-passes` times, each in
+/// another order, stopping at `deadline`; the board file's spans of copper it moved or ripped go
+/// to `removed`. How many passes it made.
+#[allow(clippy::too_many_arguments)]
+fn shove_pass(
+    a: &Args,
+    board: &mut Board,
+    solver: &mut dyn grid::FieldSolver,
+    laid: &mut Vec<ItemId>,
+    started: grid::clock::Instant,
+    deadline: &grid::Deadline,
+    log: &Option<grid::Log>,
+    watch: &mut dyn Watch,
+    removed: &mut Vec<Span>,
+    parts: &Option<HashSet<usize>>,
+    moves: &mut crate::stats::MoveStats,
+    effort_ns: &mut (u64, u64, u64),
+) -> usize {
+    let defaults = grid::ShoveOptions::default();
+    let plough = a.shove_plough.unwrap_or(defaults.plough);
+    let region = plough == grid::Plough::Region;
+    // On a board with planes, the region plough counts signal connections first: signal
+    // connections open, then all, are what a pass must leave fewer of.
+    let plane_nets: HashSet<u32> = if region && !a.pours_block && board.planes != 0 {
+        board.items().filter(|(_, it)| board.is_plane(it) && it.net != 0).map(|(_, it)| it.net).collect()
+    } else {
+        HashSet::new()
+    };
+    let open_now = |b: &Board| {
+        let open = open_airlines(a, b);
+        (open.iter().filter(|x| !plane_nets.contains(&x.net)).count(), open.len())
+    };
+    let mut stalled = 0;
+    let mut passes = 0;
+    let reach = a.shove_reach.map_or(defaults.reach, |mm| (mm * 1e6).round() as Nm);
+    let mut reaches: HashMap<ItemId, Nm> = HashMap::new();
+    let mut net_reaches: HashMap<u32, Nm> = HashMap::new();
+    // The reaches a net has been widened to since the last pass that freed anything.
+    let mut widened: HashSet<(u32, Nm)> = HashSet::new();
+    for pass in 0..a.shove_passes.max(1) {
+        let before = open_now(board);
+        if before.1 == 0 {
+            break;
+        }
+        passes += 1;
+        let s = grid::shove_escape(
+            board,
+            solver,
+            &grid::ShoveOptions {
+                cell: a.cell.unwrap_or(defaults.cell),
+                parts: parts.clone(),
+                plough,
+                reach,
+                reaches: reaches.clone(),
+                net_reaches: net_reaches.clone(),
+                repair_seconds: a.shove_repair.unwrap_or(defaults.repair_seconds),
+                accept_ties: a.shove_ties,
+                guard_ties: a.guard_ties,
+                negotiate_repasses: a.negotiate_repasses.map_or(defaults.negotiate_repasses, |r| r.min(1)),
+                cascade: a.shove_cascade.unwrap_or(defaults.cascade),
+                seed: a.seed.wrapping_mul(1000).wrapping_add(pass as u64 + 1),
+                deadline: deadline.clone(),
+                pours_block: a.pours_block,
+                log: log.clone(),
+                ..defaults
+            },
+            laid,
+            &mut |b: &Board, event| watch.shove(b, &event),
+        );
+        let (u, k, w) = moves.record_shove(&s);
+        effort_ns.0 = effort_ns.0.saturating_add(u);
+        effort_ns.1 = effort_ns.1.saturating_add(k);
+        effort_ns.2 = effort_ns.2.saturating_add(w);
+        removed.extend(s.removed_spans.iter().copied());
+        let routed = s.tries.iter().filter(|t| t.routed).count();
+        let kept = s.tries.iter().filter(|t| t.kept).count();
+        let after = open_now(board);
+        eprintln!("shove pass {}: {} trapped tried, {routed} routed out, {kept} kept, {} -> {} open, {:.1} s", pass + 1, s.tries.len(), before.1, after.1, grid::clock::since(started).as_secs_f64());
+        // Passes go on, each in another order, until `--shove-patience` of them in a row free
+        // nothing more, or nothing is left open.
+        // The region plough tries a connection it could not free twice as far round its path
+        // next time, up to the widest region, then from the narrowest again; a pass that widened
+        // a net to a reach it had not had is no stall. A tie kept in a pass that freed nothing
+        // only swapped two nets in a corridor, and widens too; a connection walled in by what
+        // cannot move does not. The net widens with the pad: a tie lays the net's copper again
+        // under new ids, and a trapped end that is a track would come back next pass under a new
+        // id at the narrowest reach. A pass that frees anything starts every reach afresh.
+        let mut grew = false;
+        if region && after < before {
+            reaches.clear();
+            net_reaches.clear();
+            widened.clear();
+        } else if region {
+            for t in &s.tries {
+                if t.kept && t.open_after < t.open_before {
+                    reaches.remove(&t.pad);
+                    net_reaches.remove(&t.net);
+                } else if t.rounds.iter().any(|r| !r.path.is_empty()) {
+                    let next = if t.reach < REGION_WIDEST { (t.reach * 2).min(REGION_WIDEST) } else { reach };
+                    reaches.insert(t.pad, next);
+                    net_reaches.insert(t.net, next);
+                    grew |= widened.insert((t.net, next));
+                }
+            }
+        }
+        if after.1 == 0 {
+            break;
+        }
+        stalled = if after < before || grew { 0 } else { stalled + 1 };
+        if stalled >= a.shove_patience.max(1) || deadline.expired() {
+            break;
+        }
+    }
+    passes
+}
+
+/// The pairs' copper is locked through the single-ended stages, and nothing may rip it. A
+/// connection the shove leaves open may be walled in by it: the pair copper within a millimetre
+/// of the straight line of an open connection is unlocked, for the shove to try again, a board
+/// that routes coming before coupling. How many pieces were unlocked.
+fn unlock_pairs_near_open(board: &mut Board, pair_laid: &[ItemId], open: &[board::Airline]) -> usize {
+    let corridors: Vec<Shape> = open.iter().map(|c| Shape::Capsule { a: c.from, b: c.to, r: 1_000_000 }).collect();
+    let mut freed = 0;
+    for &id in pair_laid {
+        if !board.item(id).is_some_and(|it| it.locked && corridors.iter().any(|c| it.shape.gap(c) == 0.0)) {
+            continue;
+        }
+        if let Some(mut it) = board.remove(id) {
+            it.locked = false;
+            board.restore(id, it);
+            freed += 1;
+        }
+    }
+    if freed > 0 {
+        eprintln!("pairs: {freed} pieces of pair copper unlocked round {} open connections", open.len());
+    }
+    freed
+}
+
+/// Locks again what is left of the pairs' copper after the shove that was let at it, so the
+/// stages after (tightening, dropping vias) leave the pairs as they are.
+fn relock_pairs(board: &mut Board, pair_laid: &[ItemId]) {
+    // An id the shove freed may have been given to new copper; only the pairs' nets are locked.
+    let nets: HashSet<u32> = grid::diff_pairs(board).iter().flat_map(|p| [p.p, p.n]).collect();
+    for &id in pair_laid {
+        if board.item(id).is_some_and(|it| nets.contains(&it.net) && matches!(it.kind, Kind::Track | Kind::Via)) {
+            if let Some(mut it) = board.remove(id) {
+                it.locked = true;
+                board.restore(id, it);
+            }
+        }
+    }
+}
+
+/// Footprints that may not be nudged or pushed: the board's own locked parts, plus any part
+/// joined to locked differential-pair copper so moving a part never tears its pair legs loose.
+fn locked_footprints(board: &Board, pair_laid: &[ItemId]) -> HashSet<usize> {
+    let mut out: HashSet<usize> = board.footprints.iter().enumerate().filter(|(_, f)| f.locked).map(|(i, _)| i).collect();
+    if pair_laid.is_empty() {
+        return out;
+    }
+    let pair_set: HashSet<ItemId> = pair_laid.iter().copied().filter(|&id| board.item(id).is_some()).collect();
+    for (id, it) in board.items() {
+        let Kind::Pad { footprint, .. } = it.kind else { continue };
+        if out.contains(&footprint) || it.net == 0 {
+            continue;
+        }
+        let bb = board.bbox(id).unwrap_or_else(|| it.shape.bbox());
+        let touches_pair = (0..board.layers.len()).filter(|&l| it.on(l)).any(|l| board.near(l, bb).into_iter().any(|o| pair_set.contains(&o) && board::joined(board, id, o)));
+        if touches_pair {
+            out.insert(footprint);
+        }
+    }
+    out
+}
+
+/// A track's or via's identity and shape, to tell what a stage laid and ripped.
+pub(crate) fn copper_keys(board: &Board) -> HashSet<(ItemId, u64, [Nm; 5])> {
+    board
+        .items()
+        .filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via))
+        .map(|(id, it): (ItemId, &Item)| {
+            let shape = match &it.shape {
+                Shape::Capsule { a, b, r } => [a.x, a.y, b.x, b.y, *r],
+                Shape::Polygon(p) => [p.len() as Nm, p.first().map_or(0, |q| q.x), p.first().map_or(0, |q| q.y), 0, 0],
+            };
+            (id, it.layers, shape)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::said_list;
+
+    #[test]
+    fn a_long_list_is_said_in_part_with_how_many_more() {
+        let names: Vec<String> = (1..=14).map(|k| format!("U1-{k}")).collect();
+        assert_eq!(said_list(&names[..2], 12), "U1-1, U1-2");
+        assert_eq!(said_list(&names, 12), "U1-1, U1-2, U1-3, U1-4, U1-5, U1-6, U1-7, U1-8, U1-9, U1-10, U1-11, U1-12, and 2 more (all in --report)");
+    }
+}

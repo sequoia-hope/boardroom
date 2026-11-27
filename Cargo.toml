@@ -12,3 +12,19 @@ license = "MIT"
 
 [profile.release]
 opt-level = 3
+
+# The old router's tests route whole boards, and its checks are the board model's: unoptimised
+# they take forty minutes between them (two of them eleven and thirteen), so these are built
+# optimised under `cargo test` too. Debug assertions stay on.
+[profile.dev.package.board]
+opt-level = 3
+[profile.dev.package.kicad]
+opt-level = 3
+[profile.dev.package.grid]
+opt-level = 3
+[profile.dev.package.morph]
+opt-level = 3
+[profile.dev.package.topo]
+opt-level = 3
+[profile.dev.package.ultraroute]
+opt-level = 3
