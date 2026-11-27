@@ -11,6 +11,7 @@ kicad = { path = "../kicad" }
 packages = { path = "../packages" }
 plan = { path = "../plan" }
 wire = { path = "../wire" }
+ultraroute = { path = "../ultraroute" }
 serde_json = "1"
 
 [lib]

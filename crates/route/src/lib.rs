@@ -27,6 +27,7 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
+pub mod close;
 pub mod partial;
 
 /// Routes the board at `path` and writes what [the module](self) says into `out`; the report.

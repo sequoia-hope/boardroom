@@ -308,7 +308,9 @@ supply pins once other nets' vias pass through it.
 `boardroom route --mode old <board.kicad_pcb> -o OUT.kicad_pcb` is the old router (UltraRoute's
 grid router, brought in whole on 2026-11-26 as crates `grid`, `morph`, `topo` and `ultraroute`):
 the same code on the same board model, a second mode beside the new router, whose parts are
-tried inside the new one. Board repos'
+tried inside the new one. `boardroom route <board.kicad_pcb> --close old` is the first of
+those: the new router, then the old one on what is left open, `closed.kicad_pcb` beside
+`routed.kicad_pcb`. Board repos'
 `scripts/route.sh` still runs the old router as a built binary (`$ULTRAROUTE`), and board repos made so far keep
 their `vendor/pcbview` and `vendor/ultraroute` submodules at their pins.
 

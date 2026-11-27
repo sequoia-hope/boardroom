@@ -51,6 +51,15 @@ a board project (`template/CLAUDE.md` is the board-repo version).
   reviews (`bench/gallery.py`, pages in the lab). A run gives the
   same board byte for byte every time it is asked the same thing: `bench/again.py SET` routes
   each board several times and names any that differ.
+  **`boardroom route <board.kicad_pcb> --close old [--close-seconds S]`** routes with the new
+  router and then hands what is left open to the old one, in the same process (`route::close`):
+  the new router's copper kept and not the old router's to rewrite, what the pours join left to
+  the pours, inner planes kept free of signals. `closed.kicad_pcb` is written beside
+  `routed.kicad_pcb` where it has fewer open, no more copper faults and no more pads short of
+  spokes; the report's `closed` says how many nets' copper the old router changed. Its copper
+  is kept as it lays it (any angle, its own widths): the board is to be looked at, and the
+  next step is the new router drawing the old one's ways. It works to a time limit, so a
+  closing that runs into it is not repeatable byte for byte.
   **The old router is here too, as `boardroom route --mode old <board.kicad_pcb> -o OUT.kicad_pcb [its own words]`**
   (`--help` after it lists them; crates `grid`, `morph`, `topo` and `ultraroute`, its code as it
   stood at ultraroute 9512c88, on the same `kicad` and `board`): the two are modes of one
