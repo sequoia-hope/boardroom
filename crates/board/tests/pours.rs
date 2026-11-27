@@ -184,3 +184,21 @@ fn copper_of_a_net_let_cut_a_kept_pour_is_no_fault() {
     assert!(!check_item(&b, wall).iter().any(|v| v.rule == Rule::KeptJoined));
     assert_eq!(sections(&b, zone, &[2], 100_000).len(), 2);
 }
+
+/// A net taken as joined whole by its pours has no connection left to make, for a router
+/// finishing a board whose power nets lie on pours; the pours worked out are not asked.
+#[test]
+fn a_net_taken_as_joined_by_its_pours_has_nothing_to_make() {
+    let mut b = board("yes", 0.2, &[pad("U1", 5.0, 5.0, A), pad("U2", 15.0, 15.0, A), pad("U3", 4.0, 10.0, B), pad("U4", 16.0, 10.0, B)].concat());
+    assert_eq!(connectivity_without_pours(&b).airlines.iter().map(|l| l.net).collect::<Vec<_>>(), [1, 2]);
+    b.joined_nets.insert(1);
+    assert_eq!(connectivity_without_pours(&b).airlines.iter().map(|l| l.net).collect::<Vec<_>>(), [2]);
+    assert_eq!(connectivity(&b).airlines.iter().map(|l| l.net).collect::<Vec<_>>(), [2]);
+    assert_eq!(net_connectivity(&b, 1, false).airlines.len(), 0);
+    // The pours worked out say what is so: net B's pads are still apart, and were net A's
+    // pour cut in two, it would be said.
+    assert_eq!(connectivity_poured(&b, &Pours::likely(&b)).airlines.iter().map(|l| l.net).collect::<Vec<_>>(), [2]);
+    b.joined_nets.insert(2);
+    assert_eq!(connectivity_poured(&b, &Pours::likely(&b)).airlines.iter().map(|l| l.net).collect::<Vec<_>>(), [2]);
+}
+

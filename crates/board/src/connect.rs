@@ -250,6 +250,8 @@ fn joined_copper_inner(board: &Board, with_pours: bool, only: Option<u32>, pours
     let ids: Vec<ItemId> = board
         .items()
         .filter(|(_, it)| it.is_copper() && it.net != 0 && only.is_none_or(|n| it.net == n) && cluster_member(board, it, with_pours))
+        // A net its pours are taken to join whole has nothing left to make.
+        .filter(|(_, it)| pours.is_some() || !board.joined_nets.contains(&it.net))
         .map(|(id, _)| id)
         .collect();
     let max = ids.iter().copied().max().map_or(0, |m| m + 1);

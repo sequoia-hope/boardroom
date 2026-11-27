@@ -41,7 +41,7 @@ pub use stats::{Finding, RunStats, StageStats};
 pub use watch::{Cleaned, Flow, StageEvent, Unwatched, Watch};
 
 pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--plane-via-reach MM] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--negotiate-jacobi] [--negotiate-reroute-all] [--diff-pairs] [--prefanout] [--escape-room|--no-escape-room] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--negotiate] [--rip-up] [--rip-boxed|--no-rip-boxed] [--nudge] [--tighten] [--any-angle] [--arcs MM] [--via-cost MM[,OPEN_MM]] [--gpu] \
-[--timeout SECONDS] [--cpu-clock] [--cell MM] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--guard-ties|--no-guard-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--power-width MM|--no-power-width] [--narrow-signals] [--pad-clearances] [--pour-cost W] [--seed N] [--retries N|--no-retries] [--attempt K] [--uuid-seed N] [--adopt] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
+[--timeout SECONDS] [--cpu-clock] [--cell MM] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--guard-ties|--no-guard-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--power-width MM|--no-power-width] [--narrow-signals] [--pad-clearances] [--pour-cost W] [--seed N] [--retries N|--no-retries] [--attempt K] [--uuid-seed N] [--adopt] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--pours-join] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
 [--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame] [--stats|--report FILE] [--timing|--no-timing] [-h|--help]
 --place, --rip-region and --via-avoid take millimetres in KiCad's frame, y pointing down, as KiCad shows them.
 Copper and mask text is stroked by the kicad-text program ($ULTRAROUTE_TEXT_HELPER, else next to this one, else on PATH; none: boxes);
@@ -133,6 +133,9 @@ pub struct Args {
     pub lock: Vec<String>,
     pub gpu: bool,
     pub pours_block: bool,
+    /// `--pours-join`: the nets whose pours join them whole as the board stands are left to
+    /// those pours (`Board::joined_nets`).
+    pub pours_join: bool,
     pub timeout: Option<f64>,
     /// `--timeout` counts the process's CPU seconds, not the wall's (`grid::clock::use_cpu_time`).
     pub cpu_clock: bool,
@@ -294,6 +297,7 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
         lock: Vec::new(),
         gpu: false,
         pours_block: false,
+        pours_join: false,
         timeout: None,
         cpu_clock: false,
         place: Vec::new(),
@@ -421,6 +425,7 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
             }
             "--gpu" => a.gpu = true,
             "--pours-block" => a.pours_block = true,
+            "--pours-join" => a.pours_join = true,
             "--no-route" => a.no_route = true,
             "--threads" => a.threads = Some(value()?.parse().map_err(|e| format!("--threads: {e}"))?),
             "--max-memory" => a.max_memory = Some(value()?.parse().map_err(|e| format!("--max-memory: {e}"))?),
