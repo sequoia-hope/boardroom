@@ -235,6 +235,34 @@ pub fn connectivity_poured(board: &Board, pours: &crate::fill::Pours) -> Connect
     joined_copper_inner(board, false, None, Some(pours))
 }
 
+impl Board {
+    /// Sets [`Board::pour_joins`] from the pours as a refill would leave them round the copper
+    /// there is now: every item a piece of pour joins, paired with the first that piece was
+    /// found to join. Returns how many connections the pours leave to make.
+    pub fn join_by_pours(&mut self) -> usize {
+        let pours = crate::fill::Pours::likely(self);
+        let mut first: Vec<Option<ItemId>> = vec![None; pours.pieces()];
+        let mut pairs = Vec::new();
+        for (id, item) in self.items() {
+            if !item.is_copper() || item.net == 0 || matches!(item.kind, Kind::Pour { .. }) {
+                continue;
+            }
+            for layer in (0..self.layers.len()).filter(|l| item.on(*l)) {
+                for piece in pours.joined(self, id, layer) {
+                    match first[piece] {
+                        Some(other) if other != id => pairs.push((other, id)),
+                        Some(_) => {}
+                        None => first[piece] = Some(id),
+                    }
+                }
+            }
+        }
+        let left = connectivity_poured(self, &pours).airlines.len();
+        self.pour_joins = pairs;
+        left
+    }
+}
+
 /// One net's part of [`connectivity`] (`with_pours`) or [`connectivity_without_pours`], found
 /// without looking at the other nets' copper.
 pub fn net_connectivity(board: &Board, net: u32, with_pours: bool) -> Connectivity {
@@ -250,8 +278,6 @@ fn joined_copper_inner(board: &Board, with_pours: bool, only: Option<u32>, pours
     let ids: Vec<ItemId> = board
         .items()
         .filter(|(_, it)| it.is_copper() && it.net != 0 && only.is_none_or(|n| it.net == n) && cluster_member(board, it, with_pours))
-        // A net its pours are taken to join whole has nothing left to make.
-        .filter(|(_, it)| pours.is_some() || !board.joined_nets.contains(&it.net))
         .map(|(id, _)| id)
         .collect();
     let max = ids.iter().copied().max().map_or(0, |m| m + 1);
@@ -268,6 +294,18 @@ fn joined_copper_inner(board: &Board, with_pours: bool, only: Option<u32>, pours
                 if o.net == item.net && o.is_copper() && o.on(layer) && cluster_member(board, o, with_pours) && sets.find(id) != sets.find(other) && joined(board, id, other) {
                     sets.join(id, other);
                 }
+            }
+        }
+    }
+    if pours.is_none() && !board.pour_joins.is_empty() {
+        // What the pours were found to join when the board was asked to go by them.
+        let mut here = vec![false; max];
+        for &id in &ids {
+            here[id] = true;
+        }
+        for &(a, b) in &board.pour_joins {
+            if a < max && b < max && here[a] && here[b] {
+                sets.join(a, b);
             }
         }
     }

@@ -406,13 +406,14 @@ pub struct Board {
     pub regions: Vec<crate::regions::Region>,
     /// A planner's clear-under rules.
     pub clear_under: Vec<crate::regions::ClearUnder>,
-    /// Nets taken as joined whole by their pours, as a refill would leave them round the
-    /// copper there was when this was set: [`crate::connectivity`] and
-    /// [`crate::connectivity_without_pours`] give no connection of theirs to make, so a router
-    /// that lays a board's open connections leaves them to their pours.
-    /// [`crate::connectivity_poured`], which works the pours out, takes no notice of it. Empty
-    /// unless asked (the old router's `--pours-join`).
-    pub joined_nets: std::collections::HashSet<u32>,
+    /// Pairs of copper items a pour joins, as a refill would leave the pours round the copper
+    /// there was when this was set ([`Board::join_by_pours`]): [`crate::connectivity`] and
+    /// [`crate::connectivity_without_pours`] take each pair still on the board as joined, so
+    /// a router that lays a board's open connections leaves to the pours what they join, and
+    /// the pours stay ground a track may cross. [`crate::connectivity_poured`], which works
+    /// the pours out, takes no notice of it. Empty unless asked (the old router's
+    /// `--pours-join`).
+    pub pour_joins: Vec<(ItemId, ItemId)>,
     /// Pours whose sections must stay joined ([`Board::keep_joined`]): a block's band round its
     /// chip, which other nets' vias may pass through only while it does. Empty unless asked.
     pub kept_joined: Vec<crate::necks::KeptJoined>,
@@ -615,7 +616,7 @@ impl Board {
             zone_areas: Vec::new(),
             regions: Vec::new(),
             clear_under: Vec::new(),
-            joined_nets: std::collections::HashSet::new(),
+            pour_joins: Vec::new(),
             kept_joined: Vec::new(),
             pour_cost: 0.0,
             signals_at_min: false,

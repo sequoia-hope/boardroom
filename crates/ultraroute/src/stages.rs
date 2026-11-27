@@ -300,15 +300,12 @@ impl Stage for SetUp {
                 }
             }
         }
-        // The nets their pours join whole, as a refill round the copper there is would leave
-        // them, are left to those pours: none of their connections is one to make.
+        // What the pours join, as a refill round the copper there is would leave them, is left
+        // to them: none of it is a connection to make.
         if a.pours_join {
-            let poured: HashSet<u32> = board.zone_areas.iter().map(|z| z.net).filter(|&n| n != 0).collect();
-            let apart: HashSet<u32> = board::connectivity_poured(board, &board::Pours::likely(board)).airlines.iter().map(|l| l.net).collect();
-            let mut whole: Vec<u32> = poured.difference(&apart).copied().collect();
-            whole.sort_unstable();
-            eprintln!("pours: {} of {} poured nets joined whole by their pours and left to them: {}", whole.len(), poured.len(), whole.iter().map(|&n| board.net_name(n).to_string()).collect::<Vec<_>>().join(", "));
-            board.joined_nets = whole.into_iter().collect();
+            let without = board::connectivity_without_pours(board).airlines.len();
+            let left = board.join_by_pours();
+            eprintln!("pours: of {without} connections with no pour counted, the pours join {} and leave {left} to make", without.saturating_sub(left));
         }
         if let Some(c) = a.via_avoid_cost {
             board.via_avoid_cost = c;

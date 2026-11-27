@@ -133,8 +133,8 @@ pub struct Args {
     pub lock: Vec<String>,
     pub gpu: bool,
     pub pours_block: bool,
-    /// `--pours-join`: the nets whose pours join them whole as the board stands are left to
-    /// those pours (`Board::joined_nets`).
+    /// `--pours-join`: what the pours join as the board stands is left to them
+    /// (`Board::join_by_pours`).
     pub pours_join: bool,
     pub timeout: Option<f64>,
     /// `--timeout` counts the process's CPU seconds, not the wall's (`grid::clock::use_cpu_time`).

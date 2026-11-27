@@ -185,20 +185,22 @@ fn copper_of_a_net_let_cut_a_kept_pour_is_no_fault() {
     assert_eq!(sections(&b, zone, &[2], 100_000).len(), 2);
 }
 
-/// A net taken as joined whole by its pours has no connection left to make, for a router
-/// finishing a board whose power nets lie on pours; the pours worked out are not asked.
+/// What the pours join is left to them, for a router finishing a board whose power nets lie
+/// on pours: a connection a pour makes is none to make, one it leaves apart still is, and
+/// the pours worked out are not asked.
 #[test]
-fn a_net_taken_as_joined_by_its_pours_has_nothing_to_make() {
-    let mut b = board("yes", 0.2, &[pad("U1", 5.0, 5.0, A), pad("U2", 15.0, 15.0, A), pad("U3", 4.0, 10.0, B), pad("U4", 16.0, 10.0, B)].concat());
-    assert_eq!(connectivity_without_pours(&b).airlines.iter().map(|l| l.net).collect::<Vec<_>>(), [1, 2]);
-    b.joined_nets.insert(1);
-    assert_eq!(connectivity_without_pours(&b).airlines.iter().map(|l| l.net).collect::<Vec<_>>(), [2]);
-    assert_eq!(connectivity(&b).airlines.iter().map(|l| l.net).collect::<Vec<_>>(), [2]);
-    assert_eq!(net_connectivity(&b, 1, false).airlines.len(), 0);
-    // The pours worked out say what is so: net B's pads are still apart, and were net A's
-    // pour cut in two, it would be said.
-    assert_eq!(connectivity_poured(&b, &Pours::likely(&b)).airlines.iter().map(|l| l.net).collect::<Vec<_>>(), [2]);
-    b.joined_nets.insert(2);
-    assert_eq!(connectivity_poured(&b, &Pours::likely(&b)).airlines.iter().map(|l| l.net).collect::<Vec<_>>(), [2]);
+fn what_the_pours_join_is_not_a_connection_to_make() {
+    // Net A's pour joins U1 and U2; a ring of net B cuts U5 off from it. Net B has no pour.
+    let mut b = board("yes", 0.2, &[pad("U1", 5.0, 5.0, A), pad("U2", 15.0, 5.0, A), pad("U5", 15.0, 15.0, A), pad("U3", 4.0, 10.0, B), pad("U4", 10.0, 10.0, B)].concat());
+    for (from, to) in [((13.0, 13.0), (17.0, 13.0)), ((17.0, 13.0), (17.0, 17.0)), ((17.0, 17.0), (13.0, 17.0)), ((13.0, 17.0), (13.0, 13.0))] {
+        track(&mut b, from, to);
+    }
+    let nets = |c: Connectivity| c.airlines.iter().map(|l| l.net).collect::<Vec<_>>();
+    assert_eq!(nets(connectivity_without_pours(&b)), [1, 1, 2, 2]);
+    let left = b.join_by_pours();
+    // U1 to U2 is the pour's; U5 is still apart, and so are net B's pads and its ring.
+    assert_eq!(nets(connectivity_without_pours(&b)), [1, 2, 2]);
+    assert_eq!(nets(connectivity(&b)), [1, 2, 2]);
+    assert_eq!(left, 3);
+    assert_eq!(nets(connectivity_poured(&b, &Pours::likely(&b))), [1, 2, 2]);
 }
-
