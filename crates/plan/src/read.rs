@@ -331,11 +331,51 @@ fn cross(p: P, q: P, a: P, b: P) -> Option<f64> {
     ((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&s)).then_some(s)
 }
 
+/// Each piece of a pad that is drawn as several shapes that touch (a custom pad: its body and
+/// the pieces of its outline, each an item of its own) with the piece that stands for the
+/// whole pad, its largest, as they are on `layer`. A pad of one shape is not in it.
+fn whole_pads(board: &Board, layer: usize) -> HashMap<ItemId, ItemId> {
+    let mut by: HashMap<(usize, &str, u32), Vec<ItemId>> = HashMap::new();
+    for (id, item) in board.items().filter(|(_, i)| i.on(layer)) {
+        if let Kind::Pad { footprint, number, .. } = &item.kind {
+            by.entry((*footprint, number.as_str(), item.net)).or_default().push(id);
+        }
+    }
+    let mut out = HashMap::new();
+    for mut ids in by.into_values().filter(|ids| ids.len() > 1) {
+        ids.sort_unstable();
+        let items: Vec<&board::Item> = ids.iter().filter_map(|&id| board.item(id)).collect();
+        // Which touch, and so on from each to the next.
+        let mut group: Vec<usize> = (0..items.len()).collect();
+        for i in 0..items.len() {
+            for j in 0..i {
+                if group[i] != group[j] && items[i].shape.gap(&items[j].shape) <= 0.0 {
+                    let (from, to) = (group[i], group[j]);
+                    group.iter_mut().filter(|g| **g == from).for_each(|g| *g = to);
+                }
+            }
+        }
+        let area = |i: usize| {
+            let b = items[i].shape.bbox();
+            (b.max.x - b.min.x) as f64 * (b.max.y - b.min.y) as f64
+        };
+        for g in 0..items.len() {
+            let of: Vec<usize> = (0..items.len()).filter(|&i| group[i] == g).collect();
+            if of.len() < 2 {
+                continue;
+            }
+            let Some(&first) = of.iter().max_by(|&&x, &&y| area(x).total_cmp(&area(y)).then(y.cmp(&x))) else { continue };
+            out.extend(of.iter().map(|&i| (ids[i], ids[first])));
+        }
+    }
+    out
+}
+
 /// A line that starts on `end`, as [`carry`] reads one: from the via's middle, or from where
 /// it last crosses a side of the pad (a drawn track leaves its pad by whichever side it
 /// likes, and may end short of the pad's middle or past it). The anchor, and the line from
 /// there on.
-fn anchored(board: &Board, space: &Space, rim: &HashMap<usize, Vec<usize>>, end: End, mut pts: Vec<P>) -> Option<(End, Anchor, Vec<P>)> {
+fn anchored(board: &Board, space: &Space, rim: &HashMap<usize, Vec<usize>>, whole: &HashMap<ItemId, ItemId>, end: End, mut pts: Vec<P>) -> Option<(End, Anchor, Vec<P>)> {
     let o = *space.ends.get(&end)?;
     let track = |o: usize| space.obstacles[o].item.and_then(|id| board.item(id)).is_some_and(|i| matches!(i.kind, Kind::Track));
     // Where it is taken to end: the middle of a pad or via; on a track that stays, the place
@@ -375,6 +415,10 @@ fn anchored(board: &Board, space: &Space, rim: &HashMap<usize, Vec<usize>>, end:
     // them leaves from the last of them it is on).
     let net = space.obstacles[o].net;
     let mut from = vec![o];
+    // A pad of several shapes is left by a side of any of them.
+    if let Some(pad) = space.obstacles[o].item.and_then(|id| whole.get(&id)) {
+        from.extend((0..space.obstacles.len()).filter(|&x| x != o && space.obstacles[x].item.is_some_and(|id| whole.get(&id) == Some(pad))));
+    }
     let shape = |x: usize| space.obstacles[x].item.and_then(|id| board.item(id)).map(|i| &i.shape);
     let line = |x: usize| match shape(x) {
         Some(Shape::Capsule { a, b, .. }) => Some((*a, *b)),
@@ -449,6 +493,8 @@ fn round_vias(pts: &mut [P], vias: &[P]) {
 pub fn read(board: &mut Board, pieces: &[Piece], drills: &[Drill]) -> Result<Read, Vec<Unread>> {
     let unread: std::cell::RefCell<Vec<Unread>> = Default::default();
     let not = |items: &[ItemId], net: u32, why: &str| unread.borrow_mut().push(Unread { items: items.to_vec(), net, why: why.to_string() });
+    let whole: Vec<HashMap<ItemId, ItemId>> = (0..board.layers.len()).map(|layer| whole_pads(board, layer)).collect();
+    let one = |layer: usize, id: ItemId| whole[layer].get(&id).copied().unwrap_or(id);
     let (mut all, holes, vias, nets) = {
         let board: &Board = board;
         let pads = |net: u32, layer: Option<usize>| board.items().filter(move |(_, i)| matches!(i.kind, Kind::Pad { .. } | Kind::Via) && i.net == net && layer.is_none_or(|l| i.on(l)));
@@ -485,12 +531,12 @@ pub fn read(board: &mut Board, pieces: &[Piece], drills: &[Drill]) -> Result<Rea
                 let ends = |p: P| {
                     pads(net, Some(layer))
                         .find(|(_, i)| i.shape.contains(nm(p)))
-                        .map(|(id, _)| End::Item(id))
+                        .map(|(id, _)| End::Item(one(layer, id)))
                         .or_else(|| {
                             // (A hole in a pad is that pad on the pad's own layer, where
                             // its ring reaches past the pad too.)
                             let k = vias.iter().position(|&(at, n)| n == net && dist(at, p) <= reach)?;
-                            Some(holes.get(k).filter(|h| board.item(h.0).is_some_and(|i| i.on(layer))).map_or(End::Site(k), |h| End::Item(h.0)))
+                            Some(holes.get(k).filter(|h| board.item(h.0).is_some_and(|i| i.on(layer))).map_or(End::Site(k), |h| End::Item(one(layer, h.0))))
                         })
                         .or_else(|| stays().find(|(_, i)| i.shape.contains(nm(p))).map(|(id, _)| End::Item(id)))
                 };
@@ -502,6 +548,7 @@ pub fn read(board: &mut Board, pieces: &[Piece], drills: &[Drill]) -> Result<Rea
                     })
                     .collect();
                 let at: Vec<P> = pads(net, Some(layer))
+                    .filter(|&(id, _)| one(layer, id) == id)
                     .map(|(_, i)| i.shape.bbox())
                     .map(|b| [(b.min.x + b.max.x) as f64 / 2e6, (b.min.y + b.max.y) as f64 / 2e6])
                     .chain(vias.iter().filter(|v| v.1 == net).map(|v| v.0))
@@ -571,6 +618,16 @@ pub fn read(board: &mut Board, pieces: &[Piece], drills: &[Drill]) -> Result<Rea
         }
     }
     let board: &Board = board;
+    // A line that leaves a pad of several shapes by one of its lesser pieces is drawn from the
+    // middle of the pad all the same.
+    // (Where it is a piece of that pad on every layer it is on: a drilled piece of a pad that is
+    // whole on one side only is a pad by itself on the others, and its middle is its own.)
+    for (&piece, &pad) in whole.iter().flatten().filter(|(piece, pad)| piece != pad) {
+        let everywhere = board.item(piece).is_some_and(|i| (0..board.layers.len()).filter(|&l| i.on(l)).all(|l| whole[l].get(&piece) == Some(&pad)));
+        if let Some(b) = board.item(pad).map(|i| i.shape.bbox()).filter(|_| everywhere) {
+            middles.insert(piece, [(b.min.x + b.max.x) as f64 / 2e6, (b.min.y + b.max.y) as f64 / 2e6]);
+        }
+    }
     let pads = |net: u32, layer: Option<usize>| board.items().filter(move |(_, i)| matches!(i.kind, Kind::Pad { .. } | Kind::Via) && i.net == net && layer.is_none_or(|l| i.on(l)));
     let mut plan = crate::start(board);
     let Some(spots) = plan.sheets.first().map(|s| s.space.spots.clone()) else { return Ok(Read { plan, from: Vec::new() }) };
@@ -587,7 +644,7 @@ pub fn read(board: &mut Board, pieces: &[Piece], drills: &[Drill]) -> Result<Rea
     let mut wants: Vec<Want> = Vec::new();
     let mut from_tracks: Vec<Vec<ItemId>> = Vec::new();
     let mut sheets: Vec<Sheet> = Vec::new();
-    for layer in 0..board.layers.len() {
+    for (layer, pads_here) in whole.iter().enumerate() {
         let space = Space::new(board, layer, vias, &spots);
         let sides = carry::sides(&space);
         // The sides of each thing a strand may end on: an edge with it on one side and free
@@ -609,18 +666,22 @@ pub fn read(board: &mut Board, pieces: &[Piece], drills: &[Drill]) -> Result<Rea
                 not(&path.of, path.net, "it has no pad");
                 continue;
             };
-            let Some((from, start, pts)) = anchored(board, &space, &rim, path.from, path.pts.clone()) else {
+            let Some((from, start, pts)) = anchored(board, &space, &rim, pads_here, path.from, path.pts.clone()) else {
                 not(&path.of, path.net, &format!("a track of it does not leave what it starts on, at {:.2}, {:.2} on {}", path.pts[0][0], path.pts[0][1], board.layers[layer]));
                 continue;
             };
             let back: Vec<P> = pts.into_iter().rev().collect();
-            let Some((to, end, back)) = anchored(board, &space, &rim, path.to, back) else {
+            let Some((to, end, back)) = anchored(board, &space, &rim, pads_here, path.to, back) else {
                 let p = path.pts[path.pts.len() - 1];
                 not(&path.of, path.net, &format!("a track of it does not reach what it ends on, at {:.2}, {:.2} on {}", p[0], p[1], board.layers[layer]));
                 continue;
             };
             // (Along tracks that stay, back onto what it left: it joins nothing more.)
-            if from == to {
+            let same = |a: End, b: End| match (a, b) {
+                (End::Item(a), End::Item(b)) => one(layer, a) == one(layer, b),
+                _ => a == b,
+            };
+            if same(from, to) {
                 continue;
             }
             let mut pts: Vec<P> = back.into_iter().rev().collect();

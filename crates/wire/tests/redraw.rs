@@ -7,8 +7,13 @@ use wire::redraw::redraw;
 /// with nets 1 "A" and 2 "B", and `copper`, the tracks and vias on it as the file has them.
 /// Tracks 0.1 mm wide and vias 0.3 mm across by the net class, 0.1 mm clearance.
 fn board(pads: &[(f64, f64, u32)], copper: &str) -> Board {
+    board_with(pads, "", copper)
+}
+
+/// [`board`], with `more` pads in its footprint, as the file has them.
+fn board_with(pads: &[(f64, f64, u32)], more: &str, copper: &str) -> Board {
     let name = |net: u32| if net == 1 { "A" } else { "B" };
-    let pads: String = pads.iter().map(|p| format!("(pad \"1\" smd rect (at {} {}) (size 0.6 0.6) (layers \"F.Cu\") (net {} \"{}\"))", p.0, p.1, p.2, name(p.2))).collect();
+    let pads: String = pads.iter().map(|p| format!("(pad \"1\" smd rect (at {} {}) (size 0.6 0.6) (layers \"F.Cu\") (net {} \"{}\"))", p.0, p.1, p.2, name(p.2))).collect::<String>() + more;
     let text = format!(
         "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
          (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
@@ -162,4 +167,22 @@ fn a_track_laid_along_copper_that_stays_is_drawn_from_where_it_leaves_it() {
     assert_eq!(again.drawing.wires.len(), 1);
     let wire = &again.drawing.wires[0];
     assert!(wire.pts.iter().all(|p| p[0] > 7.9), "{:?}", wire.pts);
+}
+
+/// A pad drawn as several shapes (a custom pad: its body, and a strip along one side of it,
+/// each an item of the board) is one pad to end on. The other router's track ends on the
+/// strip, outside the body, and a short piece of its mending runs on into the body: drawn
+/// again, the track ends on the pad and nothing is left as laid.
+#[test]
+fn a_pad_of_several_shapes_is_one_pad_to_end_on() {
+    // The body is 3.7 to 4.3 mm across; the strip lies over its right side, 4.25 to 4.45.
+    let strip = "(pad \"1\" smd rect (at 4.35 10) (size 0.2 0.6) (layers \"F.Cu\") (net 1 \"A\"))";
+    let laid = [track([4.4, 10.1], [9.7, 8.3], "F.Cu", 1), track([9.7, 8.3], [16.0, 10.0], "F.Cu", 1), track([4.4, 10.1], [4.1, 10.0], "F.Cu", 1), track([4.4, 10.1], [4.1, 10.2], "F.Cu", 1)].concat();
+    let board = board_with(&[(4.0, 10.0, 1), (16.0, 10.0, 1)], strip, &laid);
+    assert_eq!(open(&board), 0);
+    let again = redraw(&board, &copper(&board));
+    assert!(again.as_laid.is_empty(), "{:?}", again.as_laid);
+    assert_eq!((again.lifted.len(), again.drawing.wires.len()), (4, 1));
+    assert!(square(&again.drawing), "{:?}", again.drawing.wires);
+    assert_eq!(open(&wire::onto(&again.base, &again.plan, &again.drawing).0), 0);
 }
