@@ -57,9 +57,18 @@ a board project (`template/CLAUDE.md` is the board-repo version).
   the pours, inner planes kept free of signals. `closed.kicad_pcb` is written beside
   `routed.kicad_pcb` where it has fewer open, no more copper faults and no more pads short of
   spokes; the report's `closed` says how many nets' copper the old router changed. Its copper
-  is kept as it lays it (any angle, its own widths): the board is to be looked at, and the
-  next step is the new router drawing the old one's ways. It works to a time limit, so a
-  closing that runs into it is not repeatable byte for byte.
+  is kept there as it lays it (any angle, its own widths). The new router then draws that
+  copper again (`route::close::redraw`, `wire::redraw`, `plan::read`; owner, 2026-11-26): each
+  track and via the old router added is taken off, read back as a strand of a plan of the
+  board without it (tracks that meet in a T as strands side by side; a new track that ends on
+  a track that stays ends there), and drawn in 0/45/90 at our widths with our vias, every wire
+  put to the checker; what cannot be read or drawn is left as the old router laid it and the
+  rest drawn round it. That is `redrawn.kicad_pcb`, written where it has no more open and no
+  more faults than `closed.kicad_pcb`; the report's `closed.redrawn` says how many of the old
+  router's tracks and vias were drawn again and why each of the rest was not.
+  `boardroom redraw <before.kicad_pcb> <after.kicad_pcb> --out <out.kicad_pcb>` does the same
+  for any two boards of one design. The closing works to a time limit, so one that runs into
+  it is not repeatable byte for byte.
   **The old router is here too, as `boardroom route --mode old <board.kicad_pcb> -o OUT.kicad_pcb [its own words]`**
   (`--help` after it lists them; crates `grid`, `morph`, `topo` and `ultraroute`, its code as it
   stood at ultraroute 9512c88, on the same `kicad` and `board`): the two are modes of one

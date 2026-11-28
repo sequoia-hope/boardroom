@@ -19,6 +19,7 @@
 
 pub mod carry;
 pub mod draw;
+pub mod read;
 pub mod space;
 pub mod strands;
 pub mod ways;

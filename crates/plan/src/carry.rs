@@ -32,7 +32,20 @@ pub struct Trace {
 }
 
 /// Each edge by the places of its two corners, to a nanometre, the lesser first.
-type Sides = HashMap<((i64, i64), (i64, i64)), usize>;
+pub(crate) type Sides = HashMap<((i64, i64), (i64, i64)), usize>;
+
+/// [`Sides`] of a triangulation.
+pub(crate) fn sides(space: &Space) -> Sides {
+    space
+        .edges
+        .iter()
+        .enumerate()
+        .map(|(e, edge)| {
+            let [a, b] = edge.v.map(|v| key(space.verts[v]));
+            ((a.min(b), a.max(b)), e)
+        })
+        .collect()
+}
 
 fn key(p: P) -> (i64, i64) {
     ((p[0] * 1e6).round() as i64, (p[1] * 1e6).round() as i64)
@@ -56,7 +69,18 @@ const NEAR: f64 = 1e-7;
 
 /// The gaps of `space` a line crosses, from where it starts to where it ends, each with how
 /// far along the gap (from its first corner) it crosses.
-fn read(space: &Space, sides: &Sides, trace: &Trace) -> Option<Vec<(usize, f64)>> {
+pub(crate) fn read(space: &Space, sides: &Sides, trace: &Trace) -> Option<Vec<(usize, f64)>> {
+    read_or(space, sides, trace).ok()
+}
+
+/// [`read`], and where the line cannot be followed because it runs into something that is not
+/// one of its ends, that obstacle.
+pub(crate) fn read_or(space: &Space, sides: &Sides, trace: &Trace) -> Result<Vec<(usize, f64)>, Option<usize>> {
+    let mut into = None;
+    followed(space, sides, trace, &mut into).ok_or(into)
+}
+
+fn followed(space: &Space, sides: &Sides, trace: &Trace, into: &mut Option<usize>) -> Option<Vec<(usize, f64)>> {
     let pts = &trace.pts;
     let side = |a: P, b: P| {
         let (a, b) = (key(a), key(b));
@@ -124,6 +148,7 @@ fn read(space: &Space, sides: &Sides, trace: &Trace) -> Option<Vec<(usize, f64)>
                     arrived = true;
                     break 'walk;
                 }
+                *into = space.tris[t].inside;
                 return None;
             }
             came = Some(e);
@@ -189,29 +214,12 @@ pub fn sheet(board: &Board, layer: usize, vias: &[(P, u32)], spots: &Arc<Spots>,
 /// the connections of the strands in those gaps; nothing where it cannot for another reason.
 pub fn sheet_or_full(board: &Board, layer: usize, vias: &[(P, u32)], spots: &Arc<Spots>, traces: &[Trace]) -> Result<Sheet, Vec<usize>> {
     let space = Space::new(board, layer, vias, spots);
-    let sides: Sides = space
-        .edges
-        .iter()
-        .enumerate()
-        .map(|(e, edge)| {
-            let [a, b] = edge.v.map(|v| key(space.verts[v]));
-            ((a.min(b), a.max(b)), e)
-        })
-        .collect();
-    let mut sheet = Sheet::new(space);
-    let mut places: Vec<Vec<(f64, usize, usize)>> = vec![Vec::new(); sheet.space.edges.len()];
+    let sides = sides(&space);
+    let mut lines = Vec::new();
     for trace in traces {
-        let read = read(&sheet.space, &sides, trace).ok_or(Vec::new())?;
-        let id = sheet.strands.len();
-        for (k, &(e, u)) in read.iter().enumerate() {
-            places[e].push((u, id, k));
-        }
-        sheet.strands.push(Strand { crossings: read.iter().map(|x| x.0).collect(), ..trace.strand.clone() });
+        lines.push((trace.strand.clone(), read(&space, &sides, trace).ok_or(Vec::new())?));
     }
-    for (e, mut there) in places.into_iter().enumerate() {
-        there.sort_by(|a, b| a.0.total_cmp(&b.0));
-        sheet.on[e] = there.into_iter().map(|(_, s, k)| (s, k)).collect();
-    }
+    let sheet = filled(space, lines);
     if !sheet.sound(board) {
         if (0..sheet.space.tris.len()).any(|t| sheet.space.free(t) && !sheet.paired(t)) {
             return Err(Vec::new());
@@ -225,4 +233,24 @@ pub fn sheet_or_full(board: &Board, layer: usize, vias: &[(P, u32)], spots: &Arc
     // layers are side by side.
     sheet.places(board);
     Ok(sheet)
+}
+
+/// A sheet of `space` with the strands of `lines` in it, each with the gaps its line was read
+/// to cross and how far along each: in every gap the strands lie in the order of where they
+/// cross it. Whether that is sound is for whoever asks to see ([`Sheet::sound`]).
+pub(crate) fn filled(space: Space, lines: Vec<(Strand, Vec<(usize, f64)>)>) -> Sheet {
+    let mut sheet = Sheet::new(space);
+    let mut places: Vec<Vec<(f64, usize, usize)>> = vec![Vec::new(); sheet.space.edges.len()];
+    for (strand, read) in lines {
+        let id = sheet.strands.len();
+        for (k, &(e, u)) in read.iter().enumerate() {
+            places[e].push((u, id, k));
+        }
+        sheet.strands.push(Strand { crossings: read.iter().map(|x| x.0).collect(), ..strand });
+    }
+    for (e, mut there) in places.into_iter().enumerate() {
+        there.sort_by(|a, b| a.0.total_cmp(&b.0));
+        sheet.on[e] = there.into_iter().map(|(_, s, k)| (s, k)).collect();
+    }
+    sheet
 }

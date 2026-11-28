@@ -136,7 +136,8 @@ pub struct Spots {
     /// The pads a hole has been tried for ([`crate::hole`]), whether or not one could stand.
     pub wanted: Vec<ItemId>,
     /// The pads whose own middle is no place for a track to end, each with the place its
-    /// tracks end at instead ([`middles`]): a pad half past the board's edge.
+    /// tracks end at instead ([`middles`]): a pad half past the board's edge. And the tracks
+    /// that stay which copper read back ends on, each with where on it ([`crate::read`]).
     pub middles: std::collections::HashMap<ItemId, P>,
     /// The openings drawn in the mask that no track is planned across ([`openings`]), each
     /// with the copper layers it is over.
@@ -812,7 +813,7 @@ impl Space {
                         .fold(0.0, f64::max),
                     _ => 0.0,
                 };
-                let middle = item.filter(|_| what == What::Pad).and_then(|id| spots.middles.get(&id).copied()).unwrap_or_else(|| centre(&poly));
+                let middle = item.and_then(|id| spots.middles.get(&id).copied()).unwrap_or_else(|| centre(&poly));
                 obstacles.push(Obstacle { what, net, item, centre: middle, poly, reach, mask, hole, past });
             }
         };

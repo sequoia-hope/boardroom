@@ -30,6 +30,7 @@ pub mod convex;
 pub mod draw;
 pub mod hops;
 pub mod loose;
+pub mod redraw;
 pub mod spare;
 
 use std::collections::HashMap;
@@ -1869,8 +1870,13 @@ pub fn onto(board: &Board, plan: &Plan, drawing: &Drawing) -> (Board, Vec<ItemId
 
 /// The board file's text with its unlocked tracks and vias taken out and the drawing put in.
 pub fn write(text: &str, original: &Board, plan: &Plan, drawing: &Drawing) -> String {
+    write_over(text, original, plan, drawing, &|_| true)
+}
+
+/// [`write`], with only the unlocked tracks and vias `gone` says taken out.
+pub fn write_over(text: &str, original: &Board, plan: &Plan, drawing: &Drawing, gone: &dyn Fn(ItemId) -> bool) -> String {
     let mut edit = kicad::write::Edit { uuid_seed: Some(1), ..Default::default() };
-    edit.remove = original.items().filter(|(_, i)| matches!(i.kind, Kind::Track | Kind::Via) && !i.locked).filter_map(|(_, i)| i.span).collect();
+    edit.remove = original.items().filter(|(id, i)| matches!(i.kind, Kind::Track | Kind::Via) && !i.locked && gone(*id)).filter_map(|(_, i)| i.span).collect();
     let m = |p: P| [p[0] / 1e3, p[1] / 1e3];
     for w in &drawing.wires {
         for seg in w.pts.windows(2) {
