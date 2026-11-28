@@ -370,30 +370,25 @@ fn anchored(board: &Board, space: &Space, rim: &HashMap<usize, Vec<usize>>, end:
     } else {
         pts[0] = centre;
     }
-    // What it may leave from: the thing it ends on; or, where that is a track that stays, any
-    // track of the net that stays (they lie end to end, and a track laid along them leaves
-    // from the last it is on).
+    // What it may leave from: the thing it ends on, and any track of the net that stays and
+    // touches it, or touches one that does (they lie end to end from it, and a track laid along
+    // them leaves from the last of them it is on).
     let net = space.obstacles[o].net;
     let mut from = vec![o];
-    if track(o) {
-        let line = |x: usize| match space.obstacles[x].item.and_then(|id| board.item(id)).map(|i| &i.shape) {
-            Some(Shape::Capsule { a, b, .. }) => Some((*a, *b)),
-            _ => None,
-        };
-        let shape = |x: usize| space.obstacles[x].item.and_then(|id| board.item(id)).map(|i| &i.shape);
-        let others: Vec<usize> = (0..space.obstacles.len()).filter(|&x| x != o && space.obstacles[x].net == net && track(x)).collect();
-        let mut k = 0;
-        while k < from.len() {
-            let here = from[k];
-            k += 1;
-            for &x in &others {
-                if from.contains(&x) {
-                    continue;
-                }
-                let touch = |p: usize, q: usize| line(p).is_some_and(|(a, b)| shape(q).is_some_and(|s| s.contains(a) || s.contains(b)));
-                if touch(here, x) || touch(x, here) {
-                    from.push(x);
-                }
+    let shape = |x: usize| space.obstacles[x].item.and_then(|id| board.item(id)).map(|i| &i.shape);
+    let line = |x: usize| match shape(x) {
+        Some(Shape::Capsule { a, b, .. }) => Some((*a, *b)),
+        _ => None,
+    };
+    let touch = |p: usize, q: usize| line(p).is_some_and(|(a, b)| shape(q).is_some_and(|s| s.contains(a) || s.contains(b)));
+    let others: Vec<usize> = (0..space.obstacles.len()).filter(|&x| x != o && space.obstacles[x].net == net && net != 0 && track(x)).collect();
+    let mut k = 0;
+    while k < from.len() {
+        let here = from[k];
+        k += 1;
+        for &x in &others {
+            if !from.contains(&x) && (touch(here, x) || touch(x, here)) {
+                from.push(x);
             }
         }
     }

@@ -144,3 +144,22 @@ fn a_via_that_does_not_stand_at_our_size_stays_and_its_tracks_are_drawn_to_it() 
     // rules' least).
     assert!(board::check(&after).len() <= board::check(&board).len(), "{:?}", board::check(&after));
 }
+
+/// A new track that runs from its pad along a track of its net that stays, and on from that
+/// track's end, is drawn again from where it leaves the track that stays.
+#[test]
+fn a_track_laid_along_copper_that_stays_is_drawn_from_where_it_leaves_it() {
+    let laid = [track([4.0, 10.0], [8.0, 10.0], "F.Cu", 1), "(segment (start 4 10) (end 8 10) (width 0.12) (layer \"F.Cu\") (net 1))".to_string(), track([8.0, 10.0], [16.0, 11.3], "F.Cu", 1)].concat();
+    let board = board(&[(4.0, 10.0, 1), (16.0, 11.3, 1)], &laid);
+    assert_eq!(open(&board), 0);
+    let new = copper(&board)[1..].to_vec();
+    let again = redraw(&board, &new);
+    assert!(again.as_laid.is_empty(), "{:?}", again.as_laid);
+    assert_eq!(again.lifted.len(), 2);
+    assert!(square(&again.drawing), "{:?}", again.drawing.wires);
+    assert_eq!(open(&wire::onto(&again.base, &again.plan, &again.drawing).0), 0);
+    // Its one wire starts on the track that stays, not back at the pad.
+    assert_eq!(again.drawing.wires.len(), 1);
+    let wire = &again.drawing.wires[0];
+    assert!(wire.pts.iter().all(|p| p[0] > 7.9), "{:?}", wire.pts);
+}
