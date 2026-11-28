@@ -10,6 +10,7 @@
 //! `planned/closer-2026-11-26`). `closed.kicad_pcb` keeps that copper as it was laid.
 //! `--close grid` runs only its grid search ([`With::Grid`]): nothing on the board is moved, so
 //! a few nets change and the board keeps the new router's look, and fewer connections close.
+//! A net the grid search changed with no fewer connections open for it is put back as it was.
 //!
 //! The new router then draws it again ([`redraw`]; owner, 2026-11-26: "have the new router
 //! redraw what the old one closes"): the way each of the old router's tracks takes is kept,
@@ -67,6 +68,36 @@ fn copper(board: &board::Board) -> BTreeMap<u32, BTreeSet<(u64, [i64; 5])>> {
         }
     }
     out
+}
+
+/// The connections open on `board` net by net, as [`open`] counts them.
+fn open_by_net(board: &board::Board) -> BTreeMap<u32, usize> {
+    let mut out = BTreeMap::new();
+    for line in board::connectivity_poured(board, &board::Pours::of(board)).airlines {
+        *out.entry(line.net).or_insert(0) += 1;
+    }
+    out
+}
+
+/// The text of `after` with the unlocked tracks and vias of each of `nets` as `before` has
+/// them: what `after` has of those nets taken out, what `before` had put in. None where a
+/// track of `before` to put back is no straight piece.
+fn put_back(text: &str, before: &board::Board, after: &board::Board, nets: &BTreeSet<u32>) -> Option<String> {
+    let ours = |i: &board::Item| matches!(i.kind, board::Kind::Track | board::Kind::Via) && !i.locked && nets.contains(&i.net);
+    let mut edit = kicad::write::Edit { uuid_seed: Some(2), ..Default::default() };
+    edit.remove = after.items().filter(|(_, i)| ours(i)).filter_map(|(_, i)| i.span).collect();
+    let m = |p: board::Point| [p.x as f64 / 1e9, p.y as f64 / 1e9];
+    for (_, item) in before.items().filter(|(_, i)| ours(i)) {
+        let board::Shape::Capsule { a, b, r } = &item.shape else { return None };
+        let on: Vec<&String> = before.layers.iter().enumerate().filter(|(l, _)| item.layers >> l & 1 == 1).map(|(_, name)| name).collect();
+        let (first, last) = (on.first()?, on.last()?);
+        let net = after.file_net(item.net);
+        match (&item.kind, item.hole) {
+            (board::Kind::Via, Some((at, drill))) => edit.vias.push(kicad::write::NewVia { at: m(at), size: 2.0 * *r as f64 / 1e9, drill: 2.0 * drill as f64 / 1e9, layers: [(*first).clone(), (*last).clone()], net, locked: false }),
+            _ => edit.tracks.push(kicad::write::NewTrack { start: m(*a), end: m(*b), width: 2.0 * *r as f64 / 1e9, layer: (*first).clone(), net, locked: false }),
+        }
+    }
+    Some(kicad::write::apply(text, &edit))
 }
 
 /// How much of the old router closes what the new one leaves open.
@@ -130,10 +161,34 @@ pub fn close(path: &Path, out: &Path, with: With, seconds: f64, threads: usize, 
         let took = started.elapsed().as_secs_f64();
         let file = out.join("closed.kicad_pcb");
         std::fs::write(&file, &closed.text).map_err(|e| format!("{}: {e}", file.display()))?;
-        let (after, _) = board::Board::load(&file).map_err(|e| e.to_string())?;
-        let (open_after, faults_after) = (open(&after), faults(&after));
-        let (was, now) = (copper(&before), copper(&after));
-        let changed: Vec<String> = was.keys().chain(now.keys()).collect::<BTreeSet<_>>().into_iter().filter(|n| was.get(n) != now.get(n)).map(|&n| before.net_name(n).to_string()).collect();
+        let (mut after, after_text) = board::Board::load(&file).map_err(|e| e.to_string())?;
+        let (mut open_after, mut faults_after) = (open(&after), faults(&after));
+        let was = copper(&before);
+        let differ = |now: &BTreeMap<u32, BTreeSet<(u64, [i64; 5])>>| was.keys().chain(now.keys()).collect::<BTreeSet<_>>().into_iter().filter(|n| was.get(n) != now.get(n)).copied().collect::<BTreeSet<u32>>();
+        let mut changed = differ(&copper(&after));
+        // The grid search moves nothing, so what it laid on a net is that net's affair alone:
+        // a net it changed that has no fewer connections open for it is put back as it was
+        // (its supply tracks to pads the pours join already: easy2350's +3V3, 53 pieces for
+        // nothing closed). Kept only where the board is then no worse than before putting back.
+        let mut back: Vec<String> = Vec::new();
+        if with == With::Grid {
+            let (had, has) = (open_by_net(&before), open_by_net(&after));
+            let idle: BTreeSet<u32> = changed.iter().copied().filter(|n| has.get(n).copied().unwrap_or(0) >= had.get(n).copied().unwrap_or(0)).collect();
+            if let Some(text) = put_back(&after_text, &before, &after, &idle).filter(|_| !idle.is_empty()) {
+                // Tried in the closed board's own place, where its rules lie beside it.
+                std::fs::write(&file, &text).map_err(|e| format!("{}: {e}", file.display()))?;
+                let (plain, _) = board::Board::load(&file).map_err(|e| e.to_string())?;
+                let (open_plain, faults_plain) = (open(&plain), faults(&plain));
+                if open_plain <= open_after && faults_plain.0 <= faults_after.0 && faults_plain.1 <= faults_after.1 {
+                    back = idle.iter().map(|&n| before.net_name(n).to_string()).collect();
+                    (after, open_after, faults_after) = (plain, open_plain, faults_plain);
+                    changed = differ(&copper(&after));
+                } else {
+                    std::fs::write(&file, &after_text).map_err(|e| format!("{}: {e}", file.display()))?;
+                }
+            }
+        }
+        let changed: Vec<String> = changed.iter().map(|&n| before.net_name(n).to_string()).collect();
         let kept = open_after < open_before && faults_after.0 <= faults_before.0 && faults_after.1 <= faults_before.1;
         if !kept {
             std::fs::remove_file(&file).ok();
@@ -146,7 +201,7 @@ pub fn close(path: &Path, out: &Path, with: With, seconds: f64, threads: usize, 
             "open_before": open_before, "open_after": open_after,
             "faults_before": faults_before.0, "faults_after": faults_after.0,
             "starved_before": faults_before.1, "starved_after": faults_after.1,
-            "nets": was.len().max(now.len()), "nets_changed": changed.len(), "changed": changed,
+            "nets": was.len().max(copper(&after).len()), "nets_changed": changed.len(), "changed": changed, "put_back": back,
             "planes_kept": planes, "seconds": (took * 10.0).round() / 10.0,
             "out_of_time": took >= seconds * 0.95,
             "board": if kept { Some("closed.kicad_pcb") } else { None },
@@ -260,6 +315,36 @@ mod tests {
         let said = super::close(&d.join("t.kicad_pcb"), &d, super::With::Old, 60.0, 1, None).unwrap();
         assert_eq!(said["ran"].as_bool(), Some(false), "{said}");
         assert!(!d.join("closed.kicad_pcb").exists());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// A net put back is as the first board had it, track and via, and a net not named keeps
+    /// what the second board has.
+    #[test]
+    fn a_net_put_back_has_the_copper_it_had_and_the_others_keep_theirs() {
+        let d = std::env::temp_dir().join(format!("route-put-back-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let two = BOARD.replace("(net 1 \"A\")\n", "(net 1 \"A\") (net 2 \"B\")\n");
+        let with = |copper: &str| two.trim_end().strip_suffix(')').unwrap().to_string() + copper + ")\n";
+        let had = r#" (segment (start 4 10) (end 9 10) (width 0.25) (layer "F.Cu") (net 1))
+ (via (at 9 10) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1))
+ (segment (start 9 10) (end 16 10) (width 0.25) (layer "B.Cu") (net 1))"#;
+        let has = r#" (segment (start 4 10) (end 6 12) (width 0.2) (layer "F.Cu") (net 1))
+ (segment (start 6 12) (end 16 10) (width 0.2) (layer "F.Cu") (net 1))
+ (segment (start 2 2) (end 5 2) (width 0.25) (layer "F.Cu") (net 2))"#;
+        std::fs::write(d.join("before.kicad_pcb"), with(had)).unwrap();
+        std::fs::write(d.join("after.kicad_pcb"), with(has)).unwrap();
+        let (before, _) = board::Board::load(&d.join("before.kicad_pcb")).unwrap();
+        let (after, text) = board::Board::load(&d.join("after.kicad_pcb")).unwrap();
+        let text = super::put_back(&text, &before, &after, &[1].into_iter().collect()).unwrap();
+        std::fs::write(d.join("back.kicad_pcb"), text).unwrap();
+        let (back, _) = board::Board::load(&d.join("back.kicad_pcb")).unwrap();
+        let (was, now, is) = (super::copper(&before), super::copper(&after), super::copper(&back));
+        assert_eq!(is.get(&1), was.get(&1), "net A is as it was");
+        assert_eq!(is[&1].len(), 3);
+        assert_eq!(is.get(&2), now.get(&2), "net B keeps its new track");
+        assert_eq!(is[&2].len(), 1);
         std::fs::remove_dir_all(&d).ok();
     }
 

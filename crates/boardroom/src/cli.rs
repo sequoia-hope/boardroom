@@ -18,6 +18,7 @@
 //!     boardroom route <board.kicad_pcb> [--out DIR] [--packages DIR] [--filled-vias yes|no] [--save-every SECONDS]  route a board (into DIR, else route/<board>/ in its project), keeping its blocks' pours joined; a via may stand in a soldered pad where the board's vias are filled and capped (six layers or more, unless said); while it runs, a trace and the board so far are kept in DIR/partial/ (a board at least every 600 s, or as said; 0 for the trace alone)
 //!     boardroom route <board.kicad_pcb> --close old [--close-seconds S]  the same, and then the old router on what is left open (300 s unless said), the new router's copper kept: `closed.kicad_pcb` beside `routed.kicad_pcb` where it leaves fewer open, with how many nets it changed; and then the old router's copper drawn again by the new one, as far as it can be: `redrawn.kicad_pcb`
 //!     boardroom route <board.kicad_pcb> --close grid  the same with the old router's grid search only: nothing already on the board moved, a few nets changed, seconds
+//!     boardroom close <board.kicad_pcb> [--out DIR] [--with old|grid] [--close-seconds S]  the closing alone (and the drawing again), on the `routed.kicad_pcb` an earlier `boardroom route` left in DIR
 //!     boardroom redraw <before.kicad_pcb> <after.kicad_pcb> --out <out.kicad_pcb> [--filled-vias yes|no]  the tracks and vias `after` has that `before` has not, drawn again by the new router: each one's way kept, in 0/45/90 at our widths; what cannot be is left as laid, with why
 //!     boardroom route --mode old <board.kicad_pcb> -o OUT.kicad_pcb [...]  the old router on the same board model, with its own words (`boardroom route --mode old --help`)
 //!     boardroom check <board.kicad_pcb> [--json]    the checker's faults and open connections
@@ -51,6 +52,7 @@ pub fn run(args: Vec<String>) -> i32 {
         "snapshot" => snapshot::write(rest),
         "route" => route_cmd(rest),
         "redraw" => redraw_cmd(rest),
+        "close" => close_cmd(rest),
         "check" => check_cmd(rest),
         "pours" => pours_cmd(rest),
         "blocks" => blocks_cmd(rest),
@@ -695,38 +697,69 @@ fn route_cmd(args: &[String]) -> Result<(), String> {
     eprintln!("{} connections open, {} faults; written to {}", report["open"], report["faults"].as_object().map_or(0, |f| f.values().filter_map(|v| v.as_u64()).sum::<u64>()), out.display());
     // The old router on what is left open, its copper kept as it lays it.
     match flag(args, "close").as_deref() {
-        None => {}
-        Some(word @ ("old" | "grid")) => {
-            let with = if word == "grid" { route::close::With::Grid } else { route::close::With::Old };
-            let seconds = match flag(args, "close-seconds") {
-                None => route::close::SECONDS,
-                Some(s) => s.parse().map_err(|_| USAGE)?,
-            };
-            let threads = std::env::var("RESERVED_CORES").ok().and_then(|c| c.parse().ok()).unwrap_or(4);
-            let closed = route::close::close(&board, &out, with, seconds, threads, filled)?;
-            if closed["ran"] == true {
-                eprintln!(
-                    "closed by the old router{}: {} open to {}, {} of {} nets' copper changed, {} s{}; {}",
-                    if with == route::close::With::Grid { "'s grid search" } else { "" },
-                    closed["open_before"], closed["open_after"], closed["nets_changed"], closed["nets"], closed["seconds"],
-                    if closed["out_of_time"] == true { " (out of time)" } else { "" },
-                    if closed["kept"] == true { "closed.kicad_pcb written: look at it" } else { "not kept: no fewer open, or more faults or pads short of spokes" }
-                );
-                let again = &closed["redrawn"];
-                if again.is_object() {
-                    eprintln!(
-                        "drawn again by the new router: {} of the old router's {} tracks and vias ({} nets wholly, {} in part, {} left as laid), {} s; {}",
-                        again["pieces_redrawn"], again["pieces_new"], again["nets_redrawn_whole"], again["nets_redrawn_in_part"], again["nets_as_laid"], again["seconds"],
-                        if again["kept"] == true { "redrawn.kicad_pcb written: look at it" } else { "not kept: nothing could be drawn again, or it left more open or more faults" }
-                    );
-                }
-            } else {
-                eprintln!("nothing open: the old router was not run");
-            }
+        None => Ok(()),
+        Some(word @ ("old" | "grid")) => closing(args, &board, &out, word, filled, USAGE),
+        Some(_) => Err(USAGE.into()),
+    }
+}
+
+/// The closing of `boardroom route --close WORD`, on `out/routed.kicad_pcb`, and what it did
+/// said on stderr.
+fn closing(args: &[String], board: &std::path::Path, out: &std::path::Path, word: &str, filled: Option<bool>, usage: &str) -> Result<(), String> {
+    let with = if word == "grid" { route::close::With::Grid } else { route::close::With::Old };
+    let seconds = match flag(args, "close-seconds") {
+        None => route::close::SECONDS,
+        Some(s) => s.parse().map_err(|_| usage.to_string())?,
+    };
+    let threads = std::env::var("RESERVED_CORES").ok().and_then(|c| c.parse().ok()).unwrap_or(4);
+    let closed = route::close::close(board, out, with, seconds, threads, filled)?;
+    if closed["ran"] == true {
+        eprintln!(
+            "closed by the old router{}: {} open to {}, {} of {} nets' copper changed{}, {} s{}; {}",
+            if with == route::close::With::Grid { "'s grid search" } else { "" },
+            closed["open_before"], closed["open_after"], closed["nets_changed"], closed["nets"],
+            match closed["put_back"].as_array().map_or(0, |b| b.len()) {
+                0 => String::new(),
+                n => format!(" ({n} more put back as they were: nothing closed on them)"),
+            },
+            closed["seconds"],
+            if closed["out_of_time"] == true { " (out of time)" } else { "" },
+            if closed["kept"] == true { "closed.kicad_pcb written: look at it" } else { "not kept: no fewer open, or more faults or pads short of spokes" }
+        );
+        let again = &closed["redrawn"];
+        if again.is_object() {
+            eprintln!(
+                "drawn again by the new router: {} of the old router's {} tracks and vias ({} nets wholly, {} in part, {} left as laid), {} s; {}",
+                again["pieces_redrawn"], again["pieces_new"], again["nets_redrawn_whole"], again["nets_redrawn_in_part"], again["nets_as_laid"], again["seconds"],
+                if again["kept"] == true { "redrawn.kicad_pcb written: look at it" } else { "not kept: nothing could be drawn again, or it left more open or more faults" }
+            );
         }
-        Some(_) => return Err(USAGE.into()),
+    } else {
+        eprintln!("nothing open: the old router was not run");
     }
     Ok(())
+}
+
+/// `boardroom close`: the closing alone, on a board already routed.
+fn close_cmd(args: &[String]) -> Result<(), String> {
+    const USAGE: &str = "usage: boardroom close <board.kicad_pcb> [--out DIR] [--with old|grid] [--close-seconds S] [--filled-vias yes|no]";
+    let board = args.iter().enumerate().find(|(i, a)| !a.starts_with("--") && (*i == 0 || !["--out", "--with", "--filled-vias", "--close-seconds"].contains(&args[i - 1].as_str()))).map(|(_, a)| a).ok_or(USAGE)?;
+    let board = PathBuf::from(board);
+    let out = flag(args, "out").map(PathBuf::from).unwrap_or_else(|| route_dir(&board));
+    let filled = match flag(args, "filled-vias").as_deref() {
+        None => None,
+        Some("yes") => Some(true),
+        Some("no") => Some(false),
+        Some(_) => return Err(USAGE.into()),
+    };
+    if !out.join("routed.kicad_pcb").exists() {
+        return Err(format!("{}: no routed.kicad_pcb there: route the board first (boardroom route)", out.display()));
+    }
+    match flag(args, "with").as_deref() {
+        None | Some("old") => closing(args, &board, &out, "old", filled, USAGE),
+        Some("grid") => closing(args, &board, &out, "grid", filled, USAGE),
+        Some(_) => Err(USAGE.into()),
+    }
 }
 
 fn redraw_cmd(args: &[String]) -> Result<(), String> {
