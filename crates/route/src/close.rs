@@ -8,6 +8,8 @@
 //! and its own widths: the report says how many nets' copper it changed. On easy2350 that is
 //! a dozen nets round the processor; on rgb-earring it is the back of half the board (lab
 //! `planned/closer-2026-11-26`). `closed.kicad_pcb` keeps that copper as it was laid.
+//! `--close grid` runs only its grid search ([`With::Grid`]): nothing on the board is moved, so
+//! a few nets change and the board keeps the new router's look, and fewer connections close.
 //!
 //! The new router then draws it again ([`redraw`]; owner, 2026-11-26: "have the new router
 //! redraw what the old one closes"): the way each of the old router's tracks takes is kept,
@@ -67,8 +69,30 @@ fn copper(board: &board::Board) -> BTreeMap<u32, BTreeSet<(u64, [i64; 5])>> {
     out
 }
 
+/// How much of the old router closes what the new one leaves open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum With {
+    /// Its grid search and its clean-up only: a way for each open connection through the room
+    /// there is, nothing already on the board moved. Seconds a board, and a handful of nets
+    /// changed (lab `patches/redraw-2026-11-27`, the ladder).
+    Grid,
+    /// Its whole recipe, the plough with it: copper in the way moved and laid again. It closes
+    /// more, takes its whole time on a hard board, and changes many nets.
+    Old,
+}
+
+impl With {
+    /// The word for it on the command line and in the report.
+    pub fn word(self) -> &'static str {
+        match self {
+            With::Grid => "grid",
+            With::Old => "old",
+        }
+    }
+}
+
 /// Hands `out/routed.kicad_pcb`, the new router's board of the board at `path`, to the old
-/// router for `seconds` on `threads` threads, and writes `out/closed.kicad_pcb` where that
+/// router (as much of it as `with` says) for `seconds` on `threads` threads, and writes `out/closed.kicad_pcb` where that
 /// leaves fewer connections open, no more faults and no more pads short of spokes. What happened, which is also put into
 /// `out/report.json` as `closed`.
 ///
@@ -76,7 +100,7 @@ fn copper(board: &board::Board) -> BTreeMap<u32, BTreeSet<(u64, [i64; 5])>> {
 /// it can be: `out/redrawn.kicad_pcb`, where that is no worse than `closed.kicad_pcb`, and
 /// what was drawn again and what left as laid in the report's `closed.redrawn`. `filled_vias`
 /// is as for [`crate::route`].
-pub fn close(path: &Path, out: &Path, seconds: f64, threads: usize, filled_vias: Option<bool>) -> Result<Value, String> {
+pub fn close(path: &Path, out: &Path, with: With, seconds: f64, threads: usize, filled_vias: Option<bool>) -> Result<Value, String> {
     let routed = out.join("routed.kicad_pcb");
     // The board's rules go with it: the project and the custom rules beside each board file.
     for stem in ["routed", "closed", "redrawn"] {
@@ -93,7 +117,7 @@ pub fn close(path: &Path, out: &Path, seconds: f64, threads: usize, filled_vias:
         json!({"ran": false, "open_before": 0, "why": "nothing is open"})
     } else {
         let planes = !before.plane_layers(board::PLANE_SHARE).is_empty();
-        let mut words: Vec<String> = ["route", &routed.to_string_lossy(), "-o", "closed.kicad_pcb", "--recipe", "default", "--pours-join", "--no-retries", "--seed", "0", "--uuid-seed", "0"].map(String::from).to_vec();
+        let mut words: Vec<String> = ["route", &routed.to_string_lossy(), "-o", "closed.kicad_pcb", "--recipe", if with == With::Grid { "minimal" } else { "default" }, "--pours-join", "--no-retries", "--seed", "0", "--uuid-seed", "0"].map(String::from).to_vec();
         if planes {
             words.push("--auto-planes".into());
         }
@@ -118,7 +142,7 @@ pub fn close(path: &Path, out: &Path, seconds: f64, threads: usize, filled_vias:
         std::fs::remove_file(&again).ok();
         let redrawn = if kept { redraw(&routed, &file, &again, filled_vias)? } else { Value::Null };
         json!({
-            "ran": true, "kept": kept, "redrawn": redrawn,
+            "ran": true, "with": with.word(), "kept": kept, "redrawn": redrawn,
             "open_before": open_before, "open_after": open_after,
             "faults_before": faults_before.0, "faults_after": faults_after.0,
             "starved_before": faults_before.1, "starved_after": faults_after.1,
@@ -211,8 +235,12 @@ mod tests {
         // As if the new router had drawn nothing: its board is the bare one.
         std::fs::write(d.join("routed.kicad_pcb"), BOARD).unwrap();
         std::fs::write(d.join("report.json"), "{}").unwrap();
-        let said = super::close(&d.join("t.kicad_pcb"), &d, 60.0, 1, None).unwrap();
-        assert_eq!((said["ran"].as_bool(), said["kept"].as_bool()), (Some(true), Some(true)), "{said}");
+        // By its grid search alone first: this one needs nothing moved.
+        let said = super::close(&d.join("t.kicad_pcb"), &d, super::With::Grid, 60.0, 1, None).unwrap();
+        assert_eq!((said["with"].as_str(), said["kept"].as_bool(), said["open_after"].as_u64()), (Some("grid"), Some(true), Some(0)), "{said}");
+        assert_eq!(said["redrawn"]["pieces_redrawn"], said["redrawn"]["pieces_new"], "{said}");
+        let said = super::close(&d.join("t.kicad_pcb"), &d, super::With::Old, 60.0, 1, None).unwrap();
+        assert_eq!((said["with"].as_str(), said["ran"].as_bool(), said["kept"].as_bool()), (Some("old"), Some(true), Some(true)), "{said}");
         assert_eq!((said["open_before"].as_u64(), said["open_after"].as_u64(), said["nets_changed"].as_u64()), (Some(1), Some(0), Some(1)), "{said}");
         let (closed, _) = board::Board::load(&d.join("closed.kicad_pcb")).unwrap();
         assert!(closed.items().any(|(_, i)| matches!(i.kind, board::Kind::Track)), "the old router's track is in it");
@@ -229,7 +257,7 @@ mod tests {
         // The closed board has nothing open: asked again of it, the old router is not run.
         std::fs::copy(d.join("closed.kicad_pcb"), d.join("routed.kicad_pcb")).unwrap();
         std::fs::remove_file(d.join("closed.kicad_pcb")).unwrap();
-        let said = super::close(&d.join("t.kicad_pcb"), &d, 60.0, 1, None).unwrap();
+        let said = super::close(&d.join("t.kicad_pcb"), &d, super::With::Old, 60.0, 1, None).unwrap();
         assert_eq!(said["ran"].as_bool(), Some(false), "{said}");
         assert!(!d.join("closed.kicad_pcb").exists());
         std::fs::remove_dir_all(&d).ok();

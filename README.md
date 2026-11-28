@@ -312,7 +312,8 @@ tried inside the new one. `boardroom route <board.kicad_pcb> --close old` is the
 those: the new router, then the old one on what is left open, `closed.kicad_pcb` beside
 `routed.kicad_pcb`, and then the old router's copper drawn again by the new one where it can
 be (`redrawn.kicad_pcb`; `boardroom redraw <before> <after> --out <out>` for any two boards
-of one design). Board repos'
+of one design). `--close grid` runs the old router's grid search only: nothing already on
+the board is moved, so few nets change and fewer connections close. Board repos'
 `scripts/route.sh` still runs the old router as a built binary (`$ULTRAROUTE`), and board repos made so far keep
 their `vendor/pcbview` and `vendor/ultraroute` submodules at their pins.
 

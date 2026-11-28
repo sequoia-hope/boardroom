@@ -67,7 +67,9 @@ a board project (`template/CLAUDE.md` is the board-repo version).
   more faults than `closed.kicad_pcb`; the report's `closed.redrawn` says how many of the old
   router's tracks and vias were drawn again and why each of the rest was not.
   `boardroom redraw <before.kicad_pcb> <after.kicad_pcb> --out <out.kicad_pcb>` does the same
-  for any two boards of one design. The closing works to a time limit, so one that runs into
+  for any two boards of one design. `--close grid` hands over to the old router's grid search
+  only (nothing already on the board moved: seconds, a few nets changed, the new router's look
+  kept, fewer closed; the ladder in lab `patches/redraw-2026-11-27`). The closing works to a time limit, so one that runs into
   it is not repeatable byte for byte.
   **The old router is here too, as `boardroom route --mode old <board.kicad_pcb> -o OUT.kicad_pcb [its own words]`**
   (`--help` after it lists them; crates `grid`, `morph`, `topo` and `ultraroute`, its code as it
